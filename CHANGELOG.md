@@ -4,6 +4,19 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Faster Boys function.** The per-call evaluation (a Taylor series plus an
+  incomplete gamma, with both branches computed every call) is replaced by the
+  standard production approach: a precomputed interpolation table plus a short
+  local Taylor expansion, with a large-t asymptotic and a fallback to the exact
+  reference for high orders. The Boys function is the dominant cost of the Coulomb
+  integrals, so this speeds up the density-fitting and nuclear-attraction paths;
+  the function itself is about two orders of magnitude faster in isolation, and
+  energies are unchanged (matching the reference to ~1e-13). The table is built at
+  import through `jax.scipy`, so there is no new runtime dependency.
+
 ## [0.1.0] - 2026-06-30
 
 First public release: a differentiable Kohn-Sham DFT engine in pure JAX/Equinox,

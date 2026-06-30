@@ -9,10 +9,11 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
         with:
           python-version: "3.13"
+          cache-dependency-glob: "pyproject.toml"
       - name: Sync (test deps)
         run: uv sync --extra test
       - name: Ruff
@@ -24,10 +25,11 @@ jobs:
       OMP_NUM_THREADS: "2"
       XLA_PYTHON_CLIENT_PREALLOCATE: "false"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
         with:
           python-version: "3.13"
+          cache-dependency-glob: "pyproject.toml"
       - name: Sync (test deps)
         run: uv sync --extra test
       - name: Unit tests (fast subset)
@@ -42,10 +44,11 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
         with:
           python-version: ${{ matrix.python-version }}
+          cache-dependency-glob: "pyproject.toml"
       - name: Sync (core only)
         run: uv sync --no-dev
       - name: Import + tiny-calc smoke
@@ -59,13 +62,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+        with:
+          cache-dependency-glob: "pyproject.toml"
       - name: Build sdist + wheel
         run: uv build
       - name: Check metadata
         run: uvx twine check dist/*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -73,10 +78,11 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
         with:
           python-version: "3.13"
+          cache-dependency-glob: "pyproject.toml"
       - name: Sync (docs deps)
         run: uv sync --extra docs
       - name: Build docs

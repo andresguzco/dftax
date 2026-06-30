@@ -17,10 +17,11 @@ jobs:
       OMP_NUM_THREADS: "2"
       XLA_PYTHON_CLIENT_PREALLOCATE: "false"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
         with:
           python-version: "3.13"
+          cache-dependency-glob: "pyproject.toml"
       - name: Sync (test deps)
         run: uv sync --extra test
       - name: Full test suite (including slow)

@@ -11,8 +11,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+        with:
+          cache-dependency-glob: "pyproject.toml"
       - name: Sync (test extra)
         run: uv sync --extra test
       - name: Lint
@@ -27,8 +29,10 @@ jobs:
     permissions:
       id-token: write          # required for OIDC trusted publishing
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+        with:
+          cache-dependency-glob: "pyproject.toml"
       - name: Build
         run: uv build
       - name: Publish

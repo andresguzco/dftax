@@ -1,0 +1,33 @@
+name: Deploy docs
+
+# Builds the mkdocs site and publishes it to the gh-pages branch on every push to
+# main. Enable GitHub Pages once (Settings -> Pages -> Source: gh-pages branch) so
+# https://andresguzco.github.io/dftax/ serves it. PRs only build (in ci.yml), they
+# do not deploy.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "dftax/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Sync (docs deps)
+        run: uv sync --extra docs
+      - name: Deploy to gh-pages
+        run: uv run mkdocs gh-deploy --force

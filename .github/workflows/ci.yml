@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Sync (test deps)
+        run: uv sync --extra test
+      - name: Ruff
+        run: uv run ruff check dftax scripts examples tests
+
+  test:
+    runs-on: ubuntu-latest
+    env:
+      OMP_NUM_THREADS: "2"
+      XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Sync (test deps)
+        run: uv sync --extra test
+      - name: Unit tests (fast subset)
+        run: uv run --extra test pytest tests/unit -q -m "not slow"
+
+  # Confirm the package installs and runs on the lower bound of requires-python.
+  # Core deps only (no PySCF), so this is a cheap import + tiny-calc smoke.
+  compat:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Sync (core only)
+        run: uv sync --no-dev
+      - name: Import + tiny-calc smoke
+        run: >
+          uv run --no-dev python -c "import jax; jax.config.update('jax_enable_x64', True);
+          import dftax; from dftax import run_ks; from dftax.system import Molecule;
+          from dftax.energy.xc import LDA;
+          r = run_ks(Molecule.from_xyz('H 0 0 0; H 0 0 0.74', 'sto-3g'), LDA());
+          assert r.converged; print('compat OK', dftax.__version__, r.converged)"
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Build sdist + wheel
+        run: uv build
+      - name: Check metadata
+        run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Sync (docs deps)
+        run: uv sync --extra docs
+      - name: Build docs
+        run: uv run mkdocs build

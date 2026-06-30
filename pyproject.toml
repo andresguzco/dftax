@@ -1,0 +1,91 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dftax"
+version = "0.1.0"
+description = "Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox: Obara-Saika integrals, density fitting, XC functionals, native grids, autodiff Fock/forces; RKS + UKS, jit/vmap/grad-friendly, GPU-validated."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Andres Guzman-Cordero", email = "andres.guzman-cordero@mila.quebec" }]
+maintainers = [{ name = "Andres Guzman-Cordero", email = "andres.guzman-cordero@mila.quebec" }]
+keywords = [
+    "density functional theory", "DFT", "Kohn-Sham", "quantum chemistry",
+    "electronic structure", "JAX", "differentiable", "autodiff", "GPU",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+dependencies = [
+    "basis-set-exchange>=0.12",
+    "equinox>=0.13.2",
+    "jax>=0.10.0",
+    "jaxtyping>=0.2.0",
+    "numpy>=1.26",
+    "optax>=0.2.6",
+    "periodictable>=2.1.0",
+]
+
+[project.optional-dependencies]
+# GPU build: `pip install dftax[cuda12]` pulls the CUDA 12 jaxlib (Linux).
+cuda12 = ["jax[cuda12]>=0.10.0"]
+# PySCF is NOT a runtime dependency: it is used only as a reference oracle in the
+# test suite (and as an optional convenience path for building a system from a
+# PySCF Mole). The compute path is pure JAX.
+test = ["pytest>=8.0", "scipy>=1.11", "pyscf>=2.11.0"]
+docs = ["mkdocs-material>=9.5", "mkdocstrings[python]>=0.25"]
+
+[project.urls]
+Homepage = "https://github.com/andresguzco/dftax"
+Repository = "https://github.com/andresguzco/dftax"
+Issues = "https://github.com/andresguzco/dftax/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dftax"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "pyscf: marks tests requiring PySCF molecule setup",
+    "float64: marks tests requiring float64 precision",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:pyscf",
+    "ignore::FutureWarning:jax",
+]
+addopts = ["-ra", "--strict-markers", "--tb=short"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# F722/F821: jaxtyping shape strings (Float[Array, "nao nao"]) read as syntax/undefined
+# by pyflakes, not real errors. E741: single-letter physics names (l, I). E731: lambdas
+# idiomatic in the JAX code. E402: `jax.config.update("jax_enable_x64", True)` must run
+# before importing jax.numpy. E702: compact `a; b` lines in example/benchmark scripts.
+ignore = ["F722", "F821", "E741", "E731", "E402", "E702"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]   # re-exports for the public API
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "scipy>=1.11",
+    "pyscf>=2.11.0",
+    "ruff>=0.6",
+]

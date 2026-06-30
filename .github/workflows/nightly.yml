@@ -1,0 +1,27 @@
+name: Nightly (full suite)
+
+# The full test suite (including the modules auto-marked `slow`: SCF sweeps,
+# finite-difference properties, CPHF, density fitting and streaming, the d-shell
+# ERI compile) is too heavy for every PR, so it runs once a day and on demand.
+# The conftest per-test JAX cache release keeps memory bounded on the runner.
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC daily
+  workflow_dispatch:
+
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      OMP_NUM_THREADS: "2"
+      XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Sync (test deps)
+        run: uv sync --extra test
+      - name: Full test suite (including slow)
+        run: uv run --extra test pytest tests/unit -q

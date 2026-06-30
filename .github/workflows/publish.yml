@@ -1,0 +1,35 @@
+name: Publish to PyPI
+
+# Fires only on a version tag (e.g. `git tag v0.1.0 && git push --tags`).
+# Uses PyPI Trusted Publishing (OIDC), so no API token is stored in the repo.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  # Gate the release on the suite: a tag must never publish a failing build.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync (test extra)
+        run: uv sync --extra test
+      - name: Lint
+        run: uv run ruff check .
+      - name: Test
+        run: uv run pytest tests/unit -m "not slow" -q
+
+  publish:
+    needs: [test]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write          # required for OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Build
+        run: uv build
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1

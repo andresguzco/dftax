@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dftax"
-version = "0.1.0"
-description = "Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox: Obara-Saika integrals, density fitting, XC functionals, native grids, autodiff Fock/forces; RKS + UKS, jit/vmap/grad-friendly, GPU-validated."
+version = "0.1.1"
+description = "Differentiable Kohn-Sham DFT in pure JAX/Equinox: Obara-Saika integrals, density fitting, XC functionals, native grids, autodiff Fock/forces; RKS + UKS, jit/vmap/grad-friendly, GPU-validated."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

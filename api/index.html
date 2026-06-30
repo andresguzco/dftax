@@ -1,0 +1,3523 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+      
+      
+      
+      
+        <link rel="prev" href="../tutorials/implicit-diff/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>API reference - dftax</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#api-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="dftax" class="md-header__button md-logo" aria-label="dftax" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dftax
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              API reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/andresguzco/dftax" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="dftax" class="md-nav__button md-logo" aria-label="dftax" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dftax
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/andresguzco/dftax" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/drivers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Drivers & functionals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/coulomb-backends/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coulomb backends
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/forces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Forces
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/batched/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Batched evaluation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/properties/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Properties
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/implicit-diff/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Implicit differentiation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#drivers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Drivers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.driver.run_ks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_ks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.driver.run_rks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_rks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.driver.run_uks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_uks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#energy-functionals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Energy functionals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RKS
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS.from_pyscf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        from_pyscf
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS.from_molecule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        from_molecule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS.density" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        density
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS.e_xc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        e_xc
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS.electronic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        electronic
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS.total" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        total
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy_uks.UKS" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UKS
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy_uks.UKS.from_pyscf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        from_pyscf
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy_uks.UKS.from_molecule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        from_molecule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy_uks.UKS.e_xc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        e_xc
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy_uks.UKS.electronic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        electronic
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy_uks.UKS.total" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        total
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#solvers-forces-minimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Solvers, forces, minimization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.scf.rks_scf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rks_scf
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.scf_uks.uks_scf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        uks_scf
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.forces.rks_forces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rks_forces
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.forces_uks.uks_forces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        uks_forces
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.minimize.rks_minimize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rks_minimize
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.minimize_uks.uks_minimize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        uks_minimize
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#batched-vmap-over-geometries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batched (vmap over geometries)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.batched.run_ks_batched" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_ks_batched
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.batched.run_rks_batched" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_rks_batched
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.batched.run_uks_batched" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_uks_batched
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.batched.BatchedResult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BatchedResult
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#response-properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response properties
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.dipole" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dipole
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.polarizability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        polarizability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.hessian" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        hessian
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.vibrations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vibrations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.ir_spectrum" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ir_spectrum
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.raman_spectrum" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        raman_spectrum
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.alchemical_deriv" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        alchemical_deriv
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implicit-differentiation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implicit differentiation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.implicit.implicit_density" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        implicit_density
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#integrals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integrals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.integrals.overlap_matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        overlap_matrix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.integrals.kinetic_matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        kinetic_matrix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.integrals.nuclear_attraction_matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        nuclear_attraction_matrix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.integrals.multipole.dipole_matrices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dipole_matrices
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#system-grid" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        System &amp; grid
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.system.molecule.Molecule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Molecule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.system.molecule.Molecule.nelectron" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        nelectron
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.system.molecule.Molecule.from_xyz" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        from_xyz
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.system.molecule.Molecule.atom_coords" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        atom_coords
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.system.molecule.Molecule.atom_charges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        atom_charges
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.grid.becke_grid" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        becke_grid
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#drivers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Drivers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.driver.run_ks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_ks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.driver.run_rks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_rks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.driver.run_uks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_uks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#energy-functionals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Energy functionals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RKS
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS.from_pyscf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        from_pyscf
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS.from_molecule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        from_molecule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS.density" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        density
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS.e_xc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        e_xc
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS.electronic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        electronic
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy.RKS.total" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        total
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy_uks.UKS" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UKS
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy_uks.UKS.from_pyscf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        from_pyscf
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy_uks.UKS.from_molecule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        from_molecule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy_uks.UKS.e_xc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        e_xc
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy_uks.UKS.electronic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        electronic
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.energy_uks.UKS.total" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        total
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#solvers-forces-minimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Solvers, forces, minimization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.scf.rks_scf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rks_scf
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.scf_uks.uks_scf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        uks_scf
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.forces.rks_forces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rks_forces
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.forces_uks.uks_forces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        uks_forces
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.minimize.rks_minimize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rks_minimize
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.minimize_uks.uks_minimize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        uks_minimize
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#batched-vmap-over-geometries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batched (vmap over geometries)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.batched.run_ks_batched" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_ks_batched
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.batched.run_rks_batched" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_rks_batched
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.batched.run_uks_batched" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_uks_batched
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.batched.BatchedResult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BatchedResult
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#response-properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response properties
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.dipole" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dipole
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.polarizability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        polarizability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.hessian" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        hessian
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.vibrations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vibrations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.ir_spectrum" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ir_spectrum
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.raman_spectrum" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        raman_spectrum
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.properties.alchemical_deriv" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        alchemical_deriv
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implicit-differentiation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implicit differentiation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.implicit.implicit_density" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        implicit_density
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#integrals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integrals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.integrals.overlap_matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        overlap_matrix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.integrals.kinetic_matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        kinetic_matrix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.integrals.nuclear_attraction_matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        nuclear_attraction_matrix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.integrals.multipole.dipole_matrices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dipole_matrices
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#system-grid" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        System &amp; grid
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.system.molecule.Molecule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Molecule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.system.molecule.Molecule.nelectron" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        nelectron
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.system.molecule.Molecule.from_xyz" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        from_xyz
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.system.molecule.Molecule.atom_coords" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        atom_coords
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.system.molecule.Molecule.atom_charges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        atom_charges
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.grid.becke_grid" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        becke_grid
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="api-reference">API reference</h1>
+<h2 id="drivers">Drivers</h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.driver.run_ks"></a>
+    <div class="doc doc-contents first">
+
+        <p>Unified entry point: dispatch to RKS or UKS by spin.</p>
+<p><code>spin</code> (= 2S) defaults to the system's <code>spin</code> (<code>mol.spin</code> for a PySCF
+<code>Mole</code>, <code>Molecule.spin</code> for the native type). By default a closed shell
+(spin 0) runs restricted and anything else runs unrestricted; pass
+<code>restricted=True/False</code> to force one path. Remaining keyword arguments are
+forwarded to the chosen runner.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.driver.run_rks"></a>
+    <div class="doc doc-contents first">
+
+        <p>Run a restricted (closed-shell) RKS-DFT calculation.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>system</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>a native :class:<code>~dftax.system.molecule.Molecule</code> (fully
+PySCF-free path) or a PySCF <code>Mole</code> (uses PySCF for the grid).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>xc</code>
+            </td>
+            <td>
+                  <code><span title="dftax.energy.xc.XCFunctional">XCFunctional</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>an :class:<code>~dftax.energy.xc.XCFunctional</code> (e.g. <code>PBE()</code>, <code>PBE0()</code>).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>auxbasis</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>optional density-fitting auxiliary basis name (e.g.
+<code>"def2-universal-jkfit"</code>). If omitted, the exact 4-center ERI is
+used (small systems only).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>grid</code>
+            </td>
+            <td>
+                  <code><span title="tuple">tuple</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>optional <code>(coords, weights)</code> quadrature grid; overrides the
+built-in grid construction.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>grid_chunk</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>if set, stream the XC grid in chunks of this many points
+(O(chunk·nao) grid memory) instead of materializing the AO grid.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>df_chunk</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>if set (with <code>auxbasis</code>, non-hybrid), stream RI-J over
+auxiliary chunks instead of materializing the nao²×naux tensor.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>eri_screen</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>if set (exact path, no <code>auxbasis</code>), a Cauchy-Schwarz
+threshold for skipping negligible 4-center ERI quartets.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_radial, lebedev</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>native Becke-grid quality (when <code>system</code> is a
+<code>Molecule</code> and <code>grid</code> is not given).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>grid_level</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>PySCF grid level (when <code>system</code> is a PySCF <code>Mole</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>3</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>**scf_kwargs</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>forwarded to :func:<code>~dftax.ks.scf.rks_scf</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>{}</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.driver.run_uks"></a>
+    <div class="doc doc-contents first">
+
+        <p>Run an unrestricted (open-shell) UKS-DFT calculation.</p>
+<p>Mirrors :func:<code>run_rks</code>; <code>spin</code> (= 2S = nα − nβ) defaults to the system's
+own <code>spin</code>. Backends: exact ERI, materialized DF, or streamed DF (<code>df_chunk</code>
++ <code>df_screen</code>: RI-J + per-spin RI-K) and streamed XC grid (<code>grid_chunk</code>).
+<code>**scf_kwargs</code> go to :func:<code>~dftax.ks.scf_uks.uks_scf</code>.</p>
+
+
+    </div>
+
+</div><h2 id="energy-functionals">Energy functionals</h2>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<a id="dftax.ks.energy.RKS"></a>
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="equinox.Module">Module</span></code></p>
+
+
+
+        <p>Closed-shell KS total energy as a differentiable function of <code>P</code>.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.ks.energy.RKS.from_pyscf" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">from_pyscf</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">grid_coords</span><span class="p">,</span> <span class="n">grid_weights</span><span class="p">,</span> <span class="n">auxbasis</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">grid_chunk</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">df_chunk</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">eri_screen</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">exact_stream</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">df_screen</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-classmethod"><code>classmethod</code></small>
+  </span>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build from a PySCF <code>Mole</code> (setup only) and a quadrature grid.</p>
+<p>PySCF is used here solely to parse the orbital basis and supply nuclear
+geometry/charges; nothing PySCF enters the compute path. <code>auxbasis</code>
+(a basis-set name) enables density fitting; <code>grid_chunk</code> streams the XC
+grid and <code>df_chunk</code> streams RI-J (both memory-light for large systems).
+<code>eri_screen</code> (exact path) sets a Cauchy-Schwarz threshold to skip
+negligible ERI quartets.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.ks.energy.RKS.from_molecule" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">from_molecule</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">grid_coords</span><span class="p">,</span> <span class="n">grid_weights</span><span class="p">,</span> <span class="n">auxbasis</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">spherical</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">grid_chunk</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">df_chunk</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">eri_screen</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">exact_stream</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">df_screen</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-classmethod"><code>classmethod</code></small>
+  </span>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build from a native :class:<code>~dftax.system.molecule.Molecule</code> (no PySCF).</p>
+<p><code>auxbasis</code> (a basis-set name, e.g. <code>"def2-universal-jkfit"</code>) enables
+density fitting. <code>spherical=True</code> uses spherical-harmonic orbitals
+(standard for cc-pVXZ/def2; required to match a spherical reference for
+l&gt;=2 bases). <code>grid_chunk</code> streams the XC grid and <code>df_chunk</code> streams
+RI-J (both memory-light). <code>eri_screen</code> (exact path) sets a
+Cauchy-Schwarz threshold to skip negligible ERI quartets.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.ks.energy.RKS.density" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">density</span><span class="p">(</span><span class="n">P</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Electron density and its gradient on the grid from <code>P</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.ks.energy.RKS.e_xc" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">e_xc</span><span class="p">(</span><span class="n">P</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Exchange-correlation energy <code>∫ ε_xc ρ</code> (DFT part only).</p>
+<p>Uses precomputed AO grid values when materialized; otherwise streams the
+grid in chunks (recomputing AO per chunk) for O(chunk·nao) memory.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.ks.energy.RKS.electronic" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">electronic</span><span class="p">(</span><span class="n">P</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Electronic energy <code>Tr(P·Hcore) + E_J + a_x·E_x^exact + E_xc</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.ks.energy.RKS.total" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">total</span><span class="p">(</span><span class="n">P</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Total KS energy (electronic + nuclear repulsion).</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<a id="dftax.ks.energy_uks.UKS"></a>
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="equinox.Module">Module</span></code></p>
+
+
+
+        <p>Open-shell KS total energy as a differentiable function of (Pα, Pβ).</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.ks.energy_uks.UKS.from_pyscf" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">from_pyscf</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">grid_coords</span><span class="p">,</span> <span class="n">grid_weights</span><span class="p">,</span> <span class="n">auxbasis</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">spin</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">eri_screen</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">df_chunk</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">df_screen</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">grid_chunk</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-classmethod"><code>classmethod</code></small>
+  </span>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build from a PySCF <code>Mole</code> (setup only) and a quadrature grid.</p>
+<p><code>spin</code> (= 2S) defaults to <code>mol.spin</code>. PySCF is used solely to parse
+the basis and supply geometry/charges; nothing PySCF enters the compute
+path. <code>auxbasis</code> enables density fitting; <code>eri_screen</code> (exact path)
+sets a Cauchy-Schwarz screening threshold.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.ks.energy_uks.UKS.from_molecule" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">from_molecule</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">grid_coords</span><span class="p">,</span> <span class="n">grid_weights</span><span class="p">,</span> <span class="n">auxbasis</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">spherical</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">spin</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">eri_screen</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">df_chunk</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">df_screen</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">grid_chunk</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-classmethod"><code>classmethod</code></small>
+  </span>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build from a native :class:<code>~dftax.system.molecule.Molecule</code> (no PySCF).</p>
+<p><code>spin</code> (= 2S) defaults to <code>mol.spin</code>. <code>spherical=True</code> uses
+spherical-harmonic orbitals; <code>auxbasis</code> enables density fitting;
+<code>eri_screen</code> (exact path) sets a Cauchy-Schwarz screening threshold.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.ks.energy_uks.UKS.e_xc" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">e_xc</span><span class="p">(</span><span class="n">Pa</span><span class="p">,</span> <span class="n">Pb</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Spin-polarized XC energy <code>∫ ε_xc(ρα,ρβ,∇ρα,∇ρβ) ρ_tot</code>.</p>
+<p>Mirrors the nan-safe double-<code>where</code> of :func:<code>dftax.energy.grid.xc_energy</code>
+but stacks the two spin channels onto the last axis so the spin-aware
+functionals receive <code>(ρα,ρβ)</code> (and <code>(∇ρα,∇ρβ)</code> for GGA) per point.</p>
+<p>With <code>grid_chunk</code> set the AO grid is not materialized; the XC integral is
+streamed instead (O(chunk·nao) memory) via :func:<code>_streamed_e_xc_uks</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.ks.energy_uks.UKS.electronic" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">electronic</span><span class="p">(</span><span class="n">Pa</span><span class="p">,</span> <span class="n">Pb</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Electronic energy <code>Tr(P_tot·Hcore) + E_J + a_x·E_x^exact + E_xc</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.ks.energy_uks.UKS.total" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">total</span><span class="p">(</span><span class="n">Pa</span><span class="p">,</span> <span class="n">Pb</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Total KS energy (electronic + nuclear repulsion).</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="solvers-forces-minimization">Solvers, forces, minimization</h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.scf.rks_scf"></a>
+    <div class="doc doc-contents first">
+
+        <p>Run closed-shell RKS SCF to self-consistency.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>ks</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="dftax.ks.energy.RKS" href="#dftax.ks.energy.RKS">RKS</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the precomputed :class:<code>RKS</code> energy functional.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>max_iter</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>maximum SCF iterations.</p>
+              </div>
+            </td>
+            <td>
+                  <code>128</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>e_tol</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>convergence threshold on the total-energy change (Ha).</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-08</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>d_tol</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>convergence threshold on the DIIS commutator norm.</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-06</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>diis_space</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>DIIS history depth (fixed buffer size).</p>
+              </div>
+            </td>
+            <td>
+                  <code>8</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>lindep_thresh</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>overlap-eigenvalue cutoff for canonical orthonormalization.</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-07</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>verbose</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>print per-iteration energy / error (via jax.debug.print).</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.scf_uks.uks_scf"></a>
+    <div class="doc doc-contents first">
+
+        <p>Run open-shell UKS SCF to self-consistency.</p>
+<p>Args mirror :func:<code>dftax.ks.scf.rks_scf</code>; the result carries per-spin MO
+energies, MO coefficients, and density matrices as <code>(α, β)</code> tuples.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.forces.rks_forces"></a>
+    <div class="doc doc-contents first">
+
+        <p>Nuclear forces <code>F = -dE/dR</code> (Ha/Bohr), shape <code>(n_atom, 3)</code>.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>mol</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>a native :class:<code>~dftax.system.molecule.Molecule</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>xc</code>
+            </td>
+            <td>
+                  <code><span title="dftax.energy.xc.XCFunctional">XCFunctional</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the exchange-correlation functional.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>C_occ</code>
+            </td>
+            <td>
+                  <code><span title="jaxtyping.Float">Float</span>[<span title="jaxtyping.Array">Array</span>, &#39;nao nocc&#39;]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>converged occupied MO coefficients <code>(nao, nocc)</code>, e.g.
+<code>result.mo_coeff[:, : mol.nelectron // 2]</code> from
+:func:<code>~dftax.ks.scf.rks_scf</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>auxbasis</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>optional density-fitting auxiliary basis (forces are then for
+the density-fitted energy surface).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_radial, lebedev</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Becke-grid quality (match the energy calculation).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.forces_uks.uks_forces"></a>
+    <div class="doc doc-contents first">
+
+        <p>Nuclear forces <code>F = -dE/dR</code> (Ha/Bohr), shape <code>(n_atom, 3)</code>.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>mol</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>a native :class:<code>~dftax.system.molecule.Molecule</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>xc</code>
+            </td>
+            <td>
+                  <code><span title="dftax.energy.xc.XCFunctional">XCFunctional</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the exchange-correlation functional.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>Ca_occ, Cb_occ</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>converged occupied α/β MO coefficients (e.g.
+<code>Ca[:, :na]</code> / <code>Cb[:, :nb]</code> from <code>uks_scf</code>).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>auxbasis</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>optional density-fitting auxiliary basis.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>spin</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>2S; defaults to <code>mol.spin</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_radial, lebedev</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Becke-grid quality (match the energy calculation).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.minimize.rks_minimize"></a>
+    <div class="doc doc-contents first">
+
+        <p>Minimize the RKS energy directly over orthonormalized coefficients (Adam).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>ks</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="dftax.ks.energy.RKS" href="#dftax.ks.energy.RKS">RKS</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the :class:<code>RKS</code> energy functional.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>learning_rate</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Adam step size.</p>
+              </div>
+            </td>
+            <td>
+                  <code>0.3</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>max_steps</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>optimizer step budget.</p>
+              </div>
+            </td>
+            <td>
+                  <code>2000</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>g_tol</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>stop when the gradient norm falls below this.</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-06</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>Z0</code>
+            </td>
+            <td>
+                  <code><span title="jaxtyping.Float">Float</span>[<span title="jaxtyping.Array">Array</span>, &#39;nao nocc&#39;] | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>optional initial (nao, nocc) coefficient guess; default is the
+core-Hamiltonian guess.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>verbose</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>print per-step energy and gradient norm.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.minimize_uks.uks_minimize"></a>
+    <div class="doc doc-contents first">
+
+        <p>Minimize the UKS energy directly over per-spin coefficients (Adam).</p>
+<p>Args mirror :func:<code>dftax.ks.minimize.rks_minimize</code>; <code>Z0</code> is an optional
+<code>(Zα, Zβ)</code> initial guess (default: per-spin core-Hamiltonian guess).</p>
+
+
+    </div>
+
+</div><h2 id="batched-vmap-over-geometries">Batched (vmap over geometries)</h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.batched.run_ks_batched"></a>
+    <div class="doc doc-contents first">
+
+        <p>Batched unified entry: dispatch to RKS (closed shell) or UKS (open shell) by spin.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.batched.run_rks_batched"></a>
+    <div class="doc doc-contents first">
+
+        <p>Closed-shell RKS over a batch of geometries <code>coords_batch</code> of shape
+<code>(B, n_atom, 3)</code> (Bohr). <code>mol</code> supplies the (fixed) atoms + basis; only the
+coordinates vary. Exact 4-center ERI path (use small/moderate bases). With
+<code>forces=True</code> also returns analytic nuclear forces <code>(B, n_atom, 3)</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.batched.run_uks_batched"></a>
+    <div class="doc doc-contents first">
+
+        <p>Open-shell UKS over a batch of geometries (see :func:<code>run_rks_batched</code>).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<a id="dftax.ks.batched.BatchedResult"></a>
+    <div class="doc doc-contents first">
+
+
+
+        <p>Per-geometry results of a batched KS run (all leading-axis = batch B).</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="response-properties">Response properties</h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.properties.dipole"></a>
+    <div class="doc doc-contents first">
+
+        <p>Permanent electric dipole moment <code>μ</code> (atomic units, or Debye if <code>debye</code>).</p>
+<p><code>μ = Σ_A Z_A (R_A − origin) − Tr(P · r)</code> from the converged density. For a
+neutral molecule the result is independent of <code>origin</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.properties.polarizability"></a>
+    <div class="doc doc-contents first">
+
+        <p>Static dipole polarizability tensor <code>α_ij = ∂μ_i/∂E_j</code> (atomic units).</p>
+<p><code>method="fd"</code> (default): central finite difference of the dipole under a uniform
+field of strength <code>field</code> (robust; one SCF per ±component). <code>method="analytic"</code>:
+exact coupled-perturbed KS response via implicit differentiation of the SCF fixed
+point (:func:<code>~dftax.ks.implicit.implicit_density</code>), a single <code>jax.jacobian</code>
+through the converged density, no field stepping. Returned symmetrized.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.properties.hessian"></a>
+    <div class="doc doc-contents first">
+
+        <p>Nuclear Hessian <code>∂²E/∂R_A∂R_B</code> (Ha/Bohr², shape <code>(3N, 3N)</code>) by central
+finite difference of the analytic Pulay-free forces.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.properties.vibrations"></a>
+    <div class="doc doc-contents first">
+
+        <p>Harmonic vibrational analysis. Returns a dict with <code>frequencies</code> (cm⁻¹,
+negative = imaginary), mass-weighted <code>modes</code> (columns), and Cartesian
+displacement modes <code>cart_modes</code> (columns, <code>(3N, 3N)</code>).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.properties.ir_spectrum"></a>
+    <div class="doc doc-contents first">
+
+        <p>Harmonic IR spectrum. Returns <code>frequencies</code> (cm⁻¹) and <code>intensities</code>
+(km/mol) from <code>A_k ∝ |dμ/dQ_k|²</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.properties.raman_spectrum"></a>
+    <div class="doc doc-contents first">
+
+        <p>Harmonic Raman activities (Å⁴/amu, up to the usual constant) from the
+polarizability derivatives <code>dα/dQ</code>. Expensive: a polarizability (field FD)
+at every ±Cartesian displacement (<code>O(N)</code> Hessians' worth of work).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.properties.alchemical_deriv"></a>
+    <div class="doc doc-contents first">
+
+        <p>Alchemical gradient <code>∂E/∂Z_A</code> at fixed electron count (Ha per unit charge).</p>
+<p>Hellmann-Feynman: the converged density is held fixed (Löwdin projector) and the
+energy is differentiated w.r.t. the nuclear charges, which enter only the
+nuclear-attraction and nuclear-repulsion terms.</p>
+
+
+    </div>
+
+</div><h2 id="implicit-differentiation">Implicit differentiation</h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.ks.implicit.implicit_density"></a>
+    <div class="doc doc-contents first">
+
+        <p>Converged closed-shell density <code>P*</code> for the assembled functional <code>ks</code>,
+differentiable w.r.t. <code>ks</code> (and hence anything it was assembled from) by implicit
+differentiation of the SCF fixed point.</p>
+
+
+    </div>
+
+</div><h2 id="integrals">Integrals</h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.integrals.overlap_matrix"></a>
+    <div class="doc doc-contents first">
+
+        <p>Compute the overlap matrix S_μν in the AO basis.</p>
+<p>Pure JAX, fully differentiable w.r.t. basis.centers.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>basis</code>
+            </td>
+            <td>
+                  <code><span title="dftax.energy.gto.BasisData">BasisData</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>BasisData from extract_basis_data(mol).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="jaxtyping.Float">Float</span>[<span title="jaxtyping.Array">Array</span>, &#39;nao nao&#39;]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>S matrix, shape (nao, nao) where nao = nao_cart (or nao_sph if cart2sph).</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.integrals.kinetic_matrix"></a>
+    <div class="doc doc-contents first">
+
+        <p>Compute the kinetic energy matrix T_μν in the AO basis.</p>
+<p>Pure JAX, fully differentiable w.r.t. basis.centers.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>basis</code>
+            </td>
+            <td>
+                  <code><span title="dftax.energy.gto.BasisData">BasisData</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>BasisData from extract_basis_data(mol).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="jaxtyping.Float">Float</span>[<span title="jaxtyping.Array">Array</span>, &#39;nao nao&#39;]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>T matrix, shape (nao, nao).</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.integrals.nuclear_attraction_matrix"></a>
+    <div class="doc doc-contents first">
+
+        <p>Compute nuclear attraction matrix V_μν in the AO basis.</p>
+<p>V_μν = -Σ_A Z_A ∫ χ_μ(r) · 1/|r-R_A| · χ_ν(r) dr</p>
+<p>Pure JAX, fully differentiable w.r.t. basis.centers and atom_coords.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>basis</code>
+            </td>
+            <td>
+                  <code><span title="dftax.energy.gto.BasisData">BasisData</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>BasisData from extract_basis_data(mol).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>atom_coords</code>
+            </td>
+            <td>
+                  <code><span title="jaxtyping.Float">Float</span>[<span title="jaxtyping.Array">Array</span>, &#39;n_atoms 3&#39;]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Nuclear positions, shape (n_atoms, 3).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>atom_charges</code>
+            </td>
+            <td>
+                  <code><span title="jaxtyping.Float">Float</span>[<span title="jaxtyping.Array">Array</span>, <span title="n_atoms">n_atoms</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Nuclear charges, shape (n_atoms,).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="jaxtyping.Float">Float</span>[<span title="jaxtyping.Array">Array</span>, &#39;nao nao&#39;]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>V matrix, shape (nao, nao).</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.integrals.multipole.dipole_matrices"></a>
+    <div class="doc doc-contents first">
+
+        <p>Dipole integral matrices <code>⟨μ|(r-origin)|ν⟩</code> for the x, y, z components.</p>
+<p>Differentiable w.r.t. <code>basis.centers</code> and <code>origin</code>. Returns shape
+<code>(3, nao, nao)</code> in the same AO ordering as :func:<code>~dftax.integrals.overlap_matrix</code>
+(spherical if <code>basis.cart2sph</code> is set).</p>
+
+
+    </div>
+
+</div><h2 id="system-grid">System &amp; grid</h2>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<a id="dftax.system.molecule.Molecule"></a>
+    <div class="doc doc-contents first">
+
+
+
+        <p>A molecular system: atoms, geometry, charge/spin, and a basis name.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h2 id="dftax.system.molecule.Molecule.nelectron" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">nelectron</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Total electron count (sum of Z minus the total charge).</p>
+
+    </div>
+
+</div>
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.system.molecule.Molecule.from_xyz" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">from_xyz</span><span class="p">(</span><span class="n">atom</span><span class="p">,</span> <span class="n">basis</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="s1">&#39;angstrom&#39;</span><span class="p">,</span> <span class="n">charge</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">spin</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-classmethod"><code>classmethod</code></small>
+  </span>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build from a PySCF-style atom string (Angstrom by default).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.system.molecule.Molecule.atom_coords" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">atom_coords</span><span class="p">()</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Nuclear coordinates in Bohr, shape (n_atoms, 3).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="dftax.system.molecule.Molecule.atom_charges" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">atom_charges</span><span class="p">()</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Nuclear charges (atomic numbers), shape (n_atoms,).</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+
+<a id="dftax.grid.becke_grid"></a>
+    <div class="doc doc-contents first">
+
+        <p>Build a molecular quadrature grid (points in Bohr, weights).</p>
+<p>Each atom contributes <code>n_radial</code> Becke radial shells times a Lebedev
+angular grid of <code>lebedev</code> points; the per-atom grids are merged with
+Becke's fuzzy-Voronoi partition.</p>
+<p>Returns <code>(coords, weights)</code> as JAX arrays of shape <code>(n_grid, 3)</code> and
+<code>(n_grid,)</code>, differentiable w.r.t. <code>coords_bohr</code>.</p>
+
+
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": [], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

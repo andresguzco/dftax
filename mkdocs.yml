@@ -1,0 +1,24 @@
+site_name: dftax
+site_description: Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox
+repo_url: https://github.com/andresguzco/dftax
+theme:
+  name: material
+nav:
+  - Home: index.md
+  - Tutorials:
+      - Getting started: tutorials/getting-started.md
+      - Drivers & functionals: tutorials/drivers.md
+      - Coulomb backends: tutorials/coulomb-backends.md
+      - Forces: tutorials/forces.md
+      - Batched evaluation: tutorials/batched.md
+      - Properties: tutorials/properties.md
+      - Implicit differentiation: tutorials/implicit-diff.md
+  - API reference: api.md
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            members_order: source

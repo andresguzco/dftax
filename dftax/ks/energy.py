@@ -43,7 +43,7 @@ from dftax.integrals.eri4c import (
     exchange_k_4c,
     significant_pairs,
 )
-from dftax.integrals.eri3c import _contracted_eri3c
+from dftax.integrals.eri3c import _contracted_eri3c, _eri3c_sizes
 
 
 def _screen_eri(basis, aux_basis, eri_screen):
@@ -147,11 +147,13 @@ def _streamed_e_xc(xc, basis, coords, weights, P, chunk):
 
 
 def _eri3c_elem(basis, aux_basis, i, j, k):
+    ml, mt, mm = _eri3c_sizes(basis, aux_basis)   # per-molecule recursion sizes
     return _contracted_eri3c(
         basis.exponents[i], basis.coefficients[i], basis.centers[i], basis.angular[i],
         basis.exponents[j], basis.coefficients[j], basis.centers[j], basis.angular[j],
         aux_basis.exponents[k], aux_basis.coefficients[k],
         aux_basis.centers[k], aux_basis.angular[k],
+        ml, mt, mm,
     )
 
 

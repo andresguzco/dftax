@@ -108,6 +108,7 @@ def _scf_solve(ks, X, nocc, max_iter, e_tol, d_tol, m, verbose, level_shift):
     """
     S = ks.S
     nao = S.shape[0]
+    nmo = X.shape[1]
 
     def make_density(F):
         eps, Cp = jnp.linalg.eigh(X.T @ F @ X)
@@ -117,9 +118,15 @@ def _scf_solve(ks, X, nocc, max_iter, e_tol, d_tol, m, verbose, level_shift):
 
     P0, C0, eps0 = make_density(ks.hcore)              # core-Hamiltonian guess
     e0 = ks.total(P0)
-    z = jnp.zeros((m, nao, nao))
+    # Separate DIIS buffers: the Fock is nao×nao, but the commutator error
+    # err = Xᵀ(FPS−SPF)X is nmo×nmo, and nmo = X.shape[1] < nao whenever the
+    # canonical orthonormalizer drops linearly-dependent columns. A single shared
+    # buffer shape-mismatches on such bases (mirrors the α⊕β split in
+    # scf_uks._scf_solve_u).
+    dF0 = jnp.zeros((m, nao, nao))
+    dErr0 = jnp.zeros((m, nmo, nmo))
     # state: (it, P, C, eps, e_prev, derr, converged, dF, dErr)
-    state0 = (0, P0, C0, eps0, e0, jnp.inf, jnp.array(False), z, z)
+    state0 = (0, P0, C0, eps0, e0, jnp.inf, jnp.array(False), dF0, dErr0)
 
     def cond(st):
         return (st[0] < max_iter) & jnp.logical_not(st[6])

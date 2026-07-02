@@ -43,7 +43,7 @@ from dftax.integrals.eri4c import (
     exchange_k_4c,
     significant_pairs,
 )
-from dftax.integrals.eri3c import _contracted_eri3c, _eri3c_sizes
+from dftax.integrals.eri3c import _contracted_eri3c, _eri3c_sizes, _DF_BRA_BUDGET
 
 
 def _screen_eri(basis, aux_basis, eri_screen):
@@ -157,6 +157,20 @@ def _eri3c_elem(basis, aux_basis, i, j, k):
     )
 
 
+def _eri3c_bra_chunk(basis, aux_basis, inflight):
+    """Static bra-pair chunk for the streamed 3-center contraction (see #7).
+
+    Sized from the per-molecule recursion (mt, ml) and primitive count so the mt³
+    Hermite tensor is built a slab at a time: large for small bases (mt<=9, so no
+    slowdown), small for f/g. ``inflight`` is the number of elements vmapped
+    concurrently with the bra slab (the aux chunk for RI-J; naux·nao for RI-K).
+    """
+    ml, mt, _ = _eri3c_sizes(basis, aux_basis)
+    nprim = int(basis.exponents.shape[1])
+    per = mt * mt * mt * nprim * nprim * ml * max(int(inflight), 1)
+    return max(1, int(_DF_BRA_BUDGET // per))
+
+
 def _streamed_df_rij(basis, aux_basis, int2c_inv, P, chunk, pairs=None):
     """RI-J Coulomb energy ``½ γᵀ V⁻¹ γ`` streamed over auxiliary chunks.
 
@@ -172,24 +186,30 @@ def _streamed_df_rij(basis, aux_basis, int2c_inv, P, chunk, pairs=None):
     """
     Ptil = basis.cart2sph @ P @ basis.cart2sph.T if basis.cart2sph is not None else P
     naux = aux_basis.centers.shape[0]
+    # Chunk the bra pairs so the mt³ Hermite tensor is materialized a slab at a time
+    # (× the `chunk` aux vmapped concurrently) instead of across the whole nao² batch,
+    # which OOMs for f/g. bra_chunk is large for small bases, so no slowdown there.
+    bra_chunk = _eri3c_bra_chunk(basis, aux_basis, inflight=chunk)
 
     if pairs is None:
         n = basis.centers.shape[0]
-        idx = jnp.arange(n)
+        ii, jj = jnp.meshgrid(jnp.arange(n), jnp.arange(n), indexing="ij")
+        ii, jj, Pflat = ii.reshape(-1), jj.reshape(-1), Ptil.reshape(-1)
+        pidx = jnp.arange(n * n)
 
         def gamma_k(k):
-            block = jax.vmap(
-                lambda i: jax.vmap(lambda j: _eri3c_elem(basis, aux_basis, i, j, k))(idx)
-            )(idx)                                              # (n, n)
-            return jnp.sum(block * Ptil)
+            def pair(p):
+                return _eri3c_elem(basis, aux_basis, ii[p], jj[p], k) * Pflat[p]
+            return jnp.sum(_chunked_vmap(pair, chunk_size=bra_chunk)(pidx))
     else:
         pi, pj, w = pairs
         Pw = Ptil[pi, pj] * w                                  # (n_sig,) folded i<->j
         pidx = jnp.arange(pi.shape[0])
 
         def gamma_k(k):
-            vals = jax.vmap(lambda p: _eri3c_elem(basis, aux_basis, pi[p], pj[p], k))(pidx)
-            return jnp.sum(vals * Pw)                          # (n_sig,) -> scalar
+            def pair(p):
+                return _eri3c_elem(basis, aux_basis, pi[p], pj[p], k) * Pw[p]
+            return jnp.sum(_chunked_vmap(pair, chunk_size=bra_chunk)(pidx))
 
     gamma = _chunked_vmap(gamma_k, chunk_size=chunk, checkpoint=True)(jnp.arange(naux))
     return 0.5 * jnp.dot(gamma, int2c_inv @ gamma)
@@ -235,11 +255,17 @@ def _rik_bmj(basis, aux_basis, Lf, cj, n, naux):
     """
     idx = jnp.arange(n)
     aux_idx = jnp.arange(naux)
+    # Chunk the outer m loop so the mt³ Hermite tensor is materialized m_chunk rows
+    # at a time (× the naux·n vmapped inside) rather than across the full n×naux×n
+    # batch, which OOMs for f/g (#7).
+    m_chunk = _eri3c_bra_chunk(basis, aux_basis, inflight=naux * n)
 
     def entry(m, k):
         col = jax.vmap(lambda l: _eri3c_elem(basis, aux_basis, m, l, k))(idx)
         return col @ cj
-    M = jax.vmap(lambda m: jax.vmap(lambda k: entry(m, k))(aux_idx))(idx)   # (n, naux)
+    def row_m(m):
+        return jax.vmap(lambda k: entry(m, k))(aux_idx)                     # (naux,)
+    M = _chunked_vmap(row_m, chunk_size=m_chunk)(idx)                       # (n, naux)
     return M @ Lf                                                            # (n, naux)
 
 

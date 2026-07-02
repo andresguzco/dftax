@@ -215,6 +215,29 @@ def _eri3c_sizes(basis, aux_basis):
     return L + 1, mt, mt
 
 
+# Target element count for a fused 3-center intermediate. One contracted (bra, aux)
+# element builds a ~mt³·nprim²·ml McMurchie-Davidson tensor; the whole vmapped chunk
+# is materialized at once, so the chunk sizes below (and the streamed bra chunk in
+# dftax.ks.energy) are sized to keep that product bounded. Kept conservative because
+# XLA's transpose autotuner probes configs several× the tensor size; a full nao² batch
+# OOMs for f/g (mt >= 11) (#7). For small bases the chunk comes out >= the dimension,
+# i.e. no chunking and no slowdown.
+_DF_BRA_BUDGET = 2.5e8
+
+
+def _eri3c_build_chunk(basis, aux_basis) -> int:
+    """Cube-root chunk size for the materialized :func:`eri3c_matrix` build (#7).
+
+    The build chunks all three of (i, j, aux); using ``c`` per axis keeps the fused
+    ``c³·mt³·nprim²·ml`` intermediate near :data:`_DF_BRA_BUDGET`. Large for small
+    bases (so no slowdown), small for f/g where the Hermite tensor is big.
+    """
+    ml, mt, _ = _eri3c_sizes(basis, aux_basis)
+    nprim = int(basis.exponents.shape[1])
+    per = mt * mt * mt * nprim * nprim * ml
+    return max(1, int((_DF_BRA_BUDGET / per) ** (1.0 / 3.0)))
+
+
 def _eri3c_primitive(alpha, A, ang_a, beta, B, ang_b, gamma_c, C, ang_c,
                      max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M):
     """3-center ERI (ab|c) for a single set of primitive GTOs.
@@ -327,22 +350,26 @@ def eri3c_matrix(
     idx_p = jnp.arange(n_prim)
     idx_a = jnp.arange(n_aux)
 
-    # Fully chunked to avoid OOM on large molecules (e.g. benzene/def2-svp).
-    # For nao_cart=120, n_aux_cart=438, each element computes Hermite Coulomb
-    # recurrence with large intermediates. Chunk all three dimensions.
+    # Fully chunked to avoid OOM on large molecules (e.g. benzene/def2-svp) and for
+    # high angular momentum, where each element's Hermite intermediate (mt³) is large.
+    # The chunk is sized to the molecule (#7): ~9 at d/g, small for f/g, big for
+    # small bases (so no slowdown). The stored (nao²×naux) tensor itself stays small;
+    # only the build is chunked.
+    c = _eri3c_build_chunk(basis, aux_basis)
+
     def _row_k(i, j):
         """Compute one (i, j, :) slice, chunked over aux index k."""
         def _single_k(k):
             return _element(i, j, k)
-        return chunked_vmap(_single_k, chunk_size=32)(idx_a)
+        return chunked_vmap(_single_k, chunk_size=c)(idx_a)
 
     def _row_j(i):
         """Compute one (i, :, :) slice, chunked over j."""
         def _single_j(j):
             return _row_k(i, j)
-        return chunked_vmap(_single_j, chunk_size=8)(idx_p)
+        return chunked_vmap(_single_j, chunk_size=c)(idx_p)
 
-    result = chunked_vmap(_row_j, chunk_size=8)(idx_p)
+    result = chunked_vmap(_row_j, chunk_size=c)(idx_p)
     # shape: (nao_cart_prim, nao_cart_prim, nao_cart_aux)
 
     # Transform Cartesian → spherical for primary basis

@@ -60,6 +60,34 @@ def _screen_eri(basis, aux_basis, eri_screen):
     return jnp.asarray(quartets), jnp.asarray(qof)
 
 
+@jax.custom_jvp
+def _metric_pinv(V: Float[Array, "naux naux"]) -> Float[Array, "naux naux"]:
+    """Symmetric pseudo-inverse of the RI Coulomb metric, dropping directions below a
+    1e-7 relative eigenvalue cutoff (see the caller in ``_build_integrals``).
+
+    Wrapped in a ``custom_jvp`` so its derivative uses the matrix identity
+    ``d(V⁺) = -V⁺ (dV) V⁺`` rather than differentiating the eigendecomposition. eigh's
+    backward carries ``1/(wᵢ-wⱼ)`` terms that are ill-defined at the *degenerate* metric
+    eigenvalues of symmetric molecules (Td/Oh) — they NaN the density-fitted forces on
+    GPU (cuSolver). The forward value is identical to the eigh pseudo-inverse.
+    """
+    w, U = jnp.linalg.eigh(V)
+    inv_w = jnp.where(w > 1e-7 * w[-1], 1.0 / w, 0.0)
+    return (U * inv_w) @ U.T
+
+
+@_metric_pinv.defjvp
+def _metric_pinv_jvp(primals, tangents):
+    (V,), (dV,) = primals, tangents
+    Vp = _metric_pinv(V)
+    # d(V⁺) = -V⁺ (dV) V⁺: exact for a full-rank metric, and since the fitted density γ
+    # carries no weight on the dropped near-null aux directions, an excellent
+    # approximation for the overcomplete case (RI error stays sub-mHa). Has no
+    # eigenvalue differences, so it stays finite when metric eigenvalues coincide.
+    dVs = 0.5 * (dV + dV.T)
+    return Vp, -Vp @ dVs @ Vp
+
+
 def ao_on_grid(
     basis: BasisData,
     coords: Float[Array, "ng 3"],
@@ -109,9 +137,7 @@ def _build_integrals(
         # the Fock and makes the SCF limit-cycle. A 1e-7 relative cutoff keeps
         # the metric well-conditioned; the dropped directions are redundant so
         # the RI error stays sub-mHa.
-        w, U = jnp.linalg.eigh(int2c)
-        inv_w = jnp.where(w > 1e-7 * w[-1], 1.0 / w, 0.0)
-        int2c_inv = (U * inv_w) @ U.T
+        int2c_inv = _metric_pinv(int2c)
         eri = None
 
     return S, T + V, ao, dao, e_nn, eri, int3c, int2c_inv

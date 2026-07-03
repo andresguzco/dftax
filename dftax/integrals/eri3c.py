@@ -192,13 +192,62 @@ def _hermite_coulomb(rho, RPC, max_t=_MAX_T, max_m=_MAX_M):
 _SIGN = jnp.array([(-1.0) ** i for i in range(_MAX_T)])
 
 
-def _eri3c_primitive(alpha, A, ang_a, beta, B, ang_b, gamma_c, C, ang_c):
+def _eri3c_sizes(basis, aux_basis):
+    """Per-molecule McMurchie-Davidson recursion sizes ``(max_l, max_t, max_m)``.
+
+    The 3-center Hermite index per axis reaches ``(l_a + l_b) + l_c``, and the Boys
+    order reaches the total angular momentum ``(l_a + l_b + l_c) ≤ 2·L_orb + L_aux``.
+    Sizing to the molecule (like :mod:`eri4c`) is both correct and, for small bases,
+    cheaper than the old hardcoded ``_MAX_T=_MAX_M=9`` — which covered only total
+    order ≤ 8 (i.e. up to d-primary) and *silently truncated* f-primary DF integrals.
+    ``mt`` here equals 9 exactly at the old design point ``(d,d,g)``.
+    """
+    L_orb = int(basis.max_l)
+    L_aux = int(aux_basis.max_l)
+    L = max(L_orb, L_aux)
+    if L > 4:
+        raise ValueError(
+            f"eri3c supports angular momentum up to g (l=4); got max l={L} "
+            f"(orbital l={L_orb}, auxiliary l={L_aux}). Auxiliary h functions "
+            f"(e.g. def2-universal-jkfit on heavier elements) are not yet supported."
+        )
+    mt = 2 * L_orb + L_aux + 1
+    return L + 1, mt, mt
+
+
+# Target element count for a fused 3-center intermediate. One contracted (bra, aux)
+# element builds a ~mt³·nprim²·ml McMurchie-Davidson tensor; the whole vmapped chunk
+# is materialized at once, so the chunk sizes below (and the streamed bra chunk in
+# dftax.ks.energy) are sized to keep that product bounded. Kept conservative because
+# XLA's transpose autotuner probes configs several× the tensor size; a full nao² batch
+# OOMs for f/g (mt >= 11) (#7). For small bases the chunk comes out >= the dimension,
+# i.e. no chunking and no slowdown.
+_DF_BRA_BUDGET = 2.5e8
+
+
+def _eri3c_build_chunk(basis, aux_basis) -> int:
+    """Cube-root chunk size for the materialized :func:`eri3c_matrix` build (#7).
+
+    The build chunks all three of (i, j, aux); using ``c`` per axis keeps the fused
+    ``c³·mt³·nprim²·ml`` intermediate near :data:`_DF_BRA_BUDGET`. Large for small
+    bases (so no slowdown), small for f/g where the Hermite tensor is big.
+    """
+    ml, mt, _ = _eri3c_sizes(basis, aux_basis)
+    nprim = int(basis.exponents.shape[1])
+    per = mt * mt * mt * nprim * nprim * ml
+    return max(1, int((_DF_BRA_BUDGET / per) ** (1.0 / 3.0)))
+
+
+def _eri3c_primitive(alpha, A, ang_a, beta, B, ang_b, gamma_c, C, ang_c,
+                     max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M):
     """3-center ERI (ab|c) for a single set of primitive GTOs.
 
     Args:
         alpha, A, ang_a: exponent, center (3,), angular (3,) for bra function a
         beta, B, ang_b: exponent, center (3,), angular (3,) for bra function b
         gamma_c, C, ang_c: exponent, center (3,), angular (3,) for auxiliary c
+        max_l, max_t, max_m: recursion sizes (per-molecule; default = g cap).
+            See :func:`_eri3c_sizes`.
     """
     gamma_ab = alpha + beta
     safe_gab = jnp.where(gamma_ab == 0.0, 1.0, gamma_ab)
@@ -214,23 +263,24 @@ def _eri3c_primitive(alpha, A, ang_a, beta, B, ang_b, gamma_c, C, ang_c):
                  / (safe_gab * safe_gc * jnp.sqrt(safe_gab + safe_gc)))
 
     # E-coefficients for bra pair (μν)
-    Ex_ab = _md_E_coefficients_1d(ang_a[0], ang_b[0], alpha, beta, AB[0])
-    Ey_ab = _md_E_coefficients_1d(ang_a[1], ang_b[1], alpha, beta, AB[1])
-    Ez_ab = _md_E_coefficients_1d(ang_a[2], ang_b[2], alpha, beta, AB[2])
+    Ex_ab = _md_E_coefficients_1d(ang_a[0], ang_b[0], alpha, beta, AB[0], max_l, max_t)
+    Ey_ab = _md_E_coefficients_1d(ang_a[1], ang_b[1], alpha, beta, AB[1], max_l, max_t)
+    Ez_ab = _md_E_coefficients_1d(ang_a[2], ang_b[2], alpha, beta, AB[2], max_l, max_t)
 
     # E-coefficients for auxiliary (single center)
-    Ex_c = _single_center_E_1d(ang_c[0], gamma_c)
-    Ey_c = _single_center_E_1d(ang_c[1], gamma_c)
-    Ez_c = _single_center_E_1d(ang_c[2], gamma_c)
+    Ex_c = _single_center_E_1d(ang_c[0], gamma_c, max_l, max_t)
+    Ey_c = _single_center_E_1d(ang_c[1], gamma_c, max_l, max_t)
+    Ez_c = _single_center_E_1d(ang_c[2], gamma_c, max_l, max_t)
 
     # Hermite Coulomb integrals with reduced exponent
-    R = _hermite_coulomb(rho, PC)
+    R = _hermite_coulomb(rho, PC, max_t, max_m)
 
     # Combined E-coefficients via convolution with sign factor (-1)^τ
     # F_x[s] = Σ_{t+τ=s} E^{ab}_t · E^c_τ · (-1)^τ
-    F_x = jnp.convolve(Ex_ab, Ex_c * _SIGN, mode='full')[:_MAX_T]
-    F_y = jnp.convolve(Ey_ab, Ey_c * _SIGN, mode='full')[:_MAX_T]
-    F_z = jnp.convolve(Ez_ab, Ez_c * _SIGN, mode='full')[:_MAX_T]
+    sign = (-1.0) ** jnp.arange(max_t)
+    F_x = jnp.convolve(Ex_ab, Ex_c * sign, mode='full')[:max_t]
+    F_y = jnp.convolve(Ey_ab, Ey_c * sign, mode='full')[:max_t]
+    F_z = jnp.convolve(Ez_ab, Ez_c * sign, mode='full')[:max_t]
 
     # Contract with Hermite Coulomb integrals
     result = jnp.einsum("s,r,q,srq->", F_x, F_y, F_z, R)
@@ -243,15 +293,21 @@ def _eri3c_primitive(alpha, A, ang_a, beta, B, ang_b, gamma_c, C, ang_c):
 
 def _contracted_eri3c(alpha_a, coeff_a, center_a, ang_a,
                       alpha_b, coeff_b, center_b, ang_b,
-                      alpha_c, coeff_c, center_c, ang_c):
-    """Contracted 3-center ERI summed over all primitive triples."""
+                      alpha_c, coeff_c, center_c, ang_c,
+                      max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M):
+    """Contracted 3-center ERI summed over all primitive triples.
+
+    ``max_l``/``max_t``/``max_m`` are the per-molecule recursion sizes from
+    :func:`_eri3c_sizes`; the defaults reproduce the old g-cap behaviour.
+    """
     def _prim_a(a_exp, a_coeff):
         def _prim_b(b_exp, b_coeff):
             def _prim_c(c_exp, c_coeff):
                 return (a_coeff * b_coeff * c_coeff
                         * _eri3c_primitive(a_exp, center_a, ang_a,
                                            b_exp, center_b, ang_b,
-                                           c_exp, center_c, ang_c))
+                                           c_exp, center_c, ang_c,
+                                           max_l, max_t, max_m))
             return jnp.sum(jax.vmap(_prim_c)(alpha_c, coeff_c))
         return jnp.sum(jax.vmap(_prim_b)(alpha_b, coeff_b))
     return jnp.sum(jax.vmap(_prim_a)(alpha_a, coeff_a))
@@ -276,6 +332,8 @@ def eri3c_matrix(
     Returns:
         (μν|P) tensor, shape (nao, nao, n_aux) in spherical harmonics.
     """
+    ml, mt, mm = _eri3c_sizes(basis, aux_basis)   # size recursion to the molecule
+
     def _element(i, j, k):
         return _contracted_eri3c(
             basis.exponents[i], basis.coefficients[i],
@@ -284,6 +342,7 @@ def eri3c_matrix(
             basis.centers[j], basis.angular[j],
             aux_basis.exponents[k], aux_basis.coefficients[k],
             aux_basis.centers[k], aux_basis.angular[k],
+            ml, mt, mm,
         )
 
     n_prim = basis.centers.shape[0]
@@ -291,22 +350,26 @@ def eri3c_matrix(
     idx_p = jnp.arange(n_prim)
     idx_a = jnp.arange(n_aux)
 
-    # Fully chunked to avoid OOM on large molecules (e.g. benzene/def2-svp).
-    # For nao_cart=120, n_aux_cart=438, each element computes Hermite Coulomb
-    # recurrence with large intermediates. Chunk all three dimensions.
+    # Fully chunked to avoid OOM on large molecules (e.g. benzene/def2-svp) and for
+    # high angular momentum, where each element's Hermite intermediate (mt³) is large.
+    # The chunk is sized to the molecule (#7): ~9 at d/g, small for f/g, big for
+    # small bases (so no slowdown). The stored (nao²×naux) tensor itself stays small;
+    # only the build is chunked.
+    c = _eri3c_build_chunk(basis, aux_basis)
+
     def _row_k(i, j):
         """Compute one (i, j, :) slice, chunked over aux index k."""
         def _single_k(k):
             return _element(i, j, k)
-        return chunked_vmap(_single_k, chunk_size=32)(idx_a)
+        return chunked_vmap(_single_k, chunk_size=c)(idx_a)
 
     def _row_j(i):
         """Compute one (i, :, :) slice, chunked over j."""
         def _single_j(j):
             return _row_k(i, j)
-        return chunked_vmap(_single_j, chunk_size=8)(idx_p)
+        return chunked_vmap(_single_j, chunk_size=c)(idx_p)
 
-    result = chunked_vmap(_row_j, chunk_size=8)(idx_p)
+    result = chunked_vmap(_row_j, chunk_size=c)(idx_p)
     # shape: (nao_cart_prim, nao_cart_prim, nao_cart_aux)
 
     # Transform Cartesian → spherical for primary basis

@@ -43,7 +43,7 @@ from dftax.integrals.eri4c import (
     exchange_k_4c,
     significant_pairs,
 )
-from dftax.integrals.eri3c import _contracted_eri3c
+from dftax.integrals.eri3c import _contracted_eri3c, _eri3c_sizes, _DF_BRA_BUDGET
 
 
 def _screen_eri(basis, aux_basis, eri_screen):
@@ -58,6 +58,34 @@ def _screen_eri(basis, aux_basis, eri_screen):
         return None, None
     quartets, qof = screened_quartets(basis, float(eri_screen))
     return jnp.asarray(quartets), jnp.asarray(qof)
+
+
+@jax.custom_jvp
+def _metric_pinv(V: Float[Array, "naux naux"]) -> Float[Array, "naux naux"]:
+    """Symmetric pseudo-inverse of the RI Coulomb metric, dropping directions below a
+    1e-7 relative eigenvalue cutoff (see the caller in ``_build_integrals``).
+
+    Wrapped in a ``custom_jvp`` so its derivative uses the matrix identity
+    ``d(V⁺) = -V⁺ (dV) V⁺`` rather than differentiating the eigendecomposition. eigh's
+    backward carries ``1/(wᵢ-wⱼ)`` terms that are ill-defined at the *degenerate* metric
+    eigenvalues of symmetric molecules (Td/Oh) — they NaN the density-fitted forces on
+    GPU (cuSolver). The forward value is identical to the eigh pseudo-inverse.
+    """
+    w, U = jnp.linalg.eigh(V)
+    inv_w = jnp.where(w > 1e-7 * w[-1], 1.0 / w, 0.0)
+    return (U * inv_w) @ U.T
+
+
+@_metric_pinv.defjvp
+def _metric_pinv_jvp(primals, tangents):
+    (V,), (dV,) = primals, tangents
+    Vp = _metric_pinv(V)
+    # d(V⁺) = -V⁺ (dV) V⁺: exact for a full-rank metric, and since the fitted density γ
+    # carries no weight on the dropped near-null aux directions, an excellent
+    # approximation for the overcomplete case (RI error stays sub-mHa). Has no
+    # eigenvalue differences, so it stays finite when metric eigenvalues coincide.
+    dVs = 0.5 * (dV + dV.T)
+    return Vp, -Vp @ dVs @ Vp
 
 
 def ao_on_grid(
@@ -109,9 +137,7 @@ def _build_integrals(
         # the Fock and makes the SCF limit-cycle. A 1e-7 relative cutoff keeps
         # the metric well-conditioned; the dropped directions are redundant so
         # the RI error stays sub-mHa.
-        w, U = jnp.linalg.eigh(int2c)
-        inv_w = jnp.where(w > 1e-7 * w[-1], 1.0 / w, 0.0)
-        int2c_inv = (U * inv_w) @ U.T
+        int2c_inv = _metric_pinv(int2c)
         eri = None
 
     return S, T + V, ao, dao, e_nn, eri, int3c, int2c_inv
@@ -147,12 +173,28 @@ def _streamed_e_xc(xc, basis, coords, weights, P, chunk):
 
 
 def _eri3c_elem(basis, aux_basis, i, j, k):
+    ml, mt, mm = _eri3c_sizes(basis, aux_basis)   # per-molecule recursion sizes
     return _contracted_eri3c(
         basis.exponents[i], basis.coefficients[i], basis.centers[i], basis.angular[i],
         basis.exponents[j], basis.coefficients[j], basis.centers[j], basis.angular[j],
         aux_basis.exponents[k], aux_basis.coefficients[k],
         aux_basis.centers[k], aux_basis.angular[k],
+        ml, mt, mm,
     )
+
+
+def _eri3c_bra_chunk(basis, aux_basis, inflight):
+    """Static bra-pair chunk for the streamed 3-center contraction (see #7).
+
+    Sized from the per-molecule recursion (mt, ml) and primitive count so the mt³
+    Hermite tensor is built a slab at a time: large for small bases (mt<=9, so no
+    slowdown), small for f/g. ``inflight`` is the number of elements vmapped
+    concurrently with the bra slab (the aux chunk for RI-J; naux·nao for RI-K).
+    """
+    ml, mt, _ = _eri3c_sizes(basis, aux_basis)
+    nprim = int(basis.exponents.shape[1])
+    per = mt * mt * mt * nprim * nprim * ml * max(int(inflight), 1)
+    return max(1, int(_DF_BRA_BUDGET // per))
 
 
 def _streamed_df_rij(basis, aux_basis, int2c_inv, P, chunk, pairs=None):
@@ -170,24 +212,30 @@ def _streamed_df_rij(basis, aux_basis, int2c_inv, P, chunk, pairs=None):
     """
     Ptil = basis.cart2sph @ P @ basis.cart2sph.T if basis.cart2sph is not None else P
     naux = aux_basis.centers.shape[0]
+    # Chunk the bra pairs so the mt³ Hermite tensor is materialized a slab at a time
+    # (× the `chunk` aux vmapped concurrently) instead of across the whole nao² batch,
+    # which OOMs for f/g. bra_chunk is large for small bases, so no slowdown there.
+    bra_chunk = _eri3c_bra_chunk(basis, aux_basis, inflight=chunk)
 
     if pairs is None:
         n = basis.centers.shape[0]
-        idx = jnp.arange(n)
+        ii, jj = jnp.meshgrid(jnp.arange(n), jnp.arange(n), indexing="ij")
+        ii, jj, Pflat = ii.reshape(-1), jj.reshape(-1), Ptil.reshape(-1)
+        pidx = jnp.arange(n * n)
 
         def gamma_k(k):
-            block = jax.vmap(
-                lambda i: jax.vmap(lambda j: _eri3c_elem(basis, aux_basis, i, j, k))(idx)
-            )(idx)                                              # (n, n)
-            return jnp.sum(block * Ptil)
+            def pair(p):
+                return _eri3c_elem(basis, aux_basis, ii[p], jj[p], k) * Pflat[p]
+            return jnp.sum(_chunked_vmap(pair, chunk_size=bra_chunk)(pidx))
     else:
         pi, pj, w = pairs
         Pw = Ptil[pi, pj] * w                                  # (n_sig,) folded i<->j
         pidx = jnp.arange(pi.shape[0])
 
         def gamma_k(k):
-            vals = jax.vmap(lambda p: _eri3c_elem(basis, aux_basis, pi[p], pj[p], k))(pidx)
-            return jnp.sum(vals * Pw)                          # (n_sig,) -> scalar
+            def pair(p):
+                return _eri3c_elem(basis, aux_basis, pi[p], pj[p], k) * Pw[p]
+            return jnp.sum(_chunked_vmap(pair, chunk_size=bra_chunk)(pidx))
 
     gamma = _chunked_vmap(gamma_k, chunk_size=chunk, checkpoint=True)(jnp.arange(naux))
     return 0.5 * jnp.dot(gamma, int2c_inv @ gamma)
@@ -233,11 +281,17 @@ def _rik_bmj(basis, aux_basis, Lf, cj, n, naux):
     """
     idx = jnp.arange(n)
     aux_idx = jnp.arange(naux)
+    # Chunk the outer m loop so the mt³ Hermite tensor is materialized m_chunk rows
+    # at a time (× the naux·n vmapped inside) rather than across the full n×naux×n
+    # batch, which OOMs for f/g (#7).
+    m_chunk = _eri3c_bra_chunk(basis, aux_basis, inflight=naux * n)
 
     def entry(m, k):
         col = jax.vmap(lambda l: _eri3c_elem(basis, aux_basis, m, l, k))(idx)
         return col @ cj
-    M = jax.vmap(lambda m: jax.vmap(lambda k: entry(m, k))(aux_idx))(idx)   # (n, naux)
+    def row_m(m):
+        return jax.vmap(lambda k: entry(m, k))(aux_idx)                     # (naux,)
+    M = _chunked_vmap(row_m, chunk_size=m_chunk)(idx)                       # (n, naux)
     return M @ Lf                                                            # (n, naux)
 
 

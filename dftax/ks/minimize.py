@@ -40,9 +40,16 @@ def _orthonormalize(
     return Z @ M_inv_sqrt
 
 
-def _density(Z: Float[Array, "nao nocc"], S: Float[Array, "nao nao"]):
-    C = _orthonormalize(Z, S)
-    return 2.0 * C @ C.T, C
+def _density_matrix(Z: Float[Array, "nao nocc"], S: Float[Array, "nao nao"]):
+    """Closed-shell density ``P = 2 Z (ZᵀSZ)⁻¹ Zᵀ``: the gauge-independent projector
+    onto ``span(Z)`` via ``solve`` (no eigendecomposition). Same value as the Löwdin
+    form ``2 C Cᵀ`` with ``C = Z(ZᵀSZ)^{-1/2}``, but its *gradient* is clean at the
+    (near-)orthonormal optimum, where ``ZᵀSZ ≈ I`` is degenerate and ``eigh``'s
+    derivative is ill-defined — there the eigh path yields a gauge-dependent gradient
+    that on GPU (cuSolver) non-deterministically NaNs the direct minimization.
+    Mirrors :func:`dftax.ks.forces._density_from_Z`."""
+    M = Z.T @ S @ Z
+    return 2.0 * Z @ jnp.linalg.solve(M, Z.T)
 
 
 def _core_guess_Z(ks: RKS) -> Float[Array, "nao nocc"]:
@@ -56,11 +63,12 @@ def _core_guess_Z(ks: RKS) -> Float[Array, "nao nocc"]:
 @eqx.filter_jit
 def _value_and_grad(ks: RKS, Z: Float[Array, "nao nocc"]):
     """Energy and dE/dZ (ks arrays traced, not baked as constants)."""
-    return jax.value_and_grad(lambda Y: ks.total(_density(Y, ks.S)[0]))(Z)
+    return jax.value_and_grad(lambda Y: ks.total(_density_matrix(Y, ks.S)))(Z)
 
 
 def _result(ks: RKS, Z: Array, converged: bool, n_iter: int) -> SCFResult:
-    P, C = _density(Z, ks.S)
+    P = _density_matrix(Z, ks.S)
+    C = _orthonormalize(Z, ks.S)          # coefficients for the result (not differentiated)
     e_tot = float(_total_energy(ks, P))
     # Canonical orbital energies from the converged Fock, for parity with SCF.
     X = canonical_orthonormalizer(ks.S)

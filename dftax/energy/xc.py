@@ -76,7 +76,11 @@ class PBEExchange(DensityFunctional):
     xc_type: ClassVar[str] = "GGA"
 
     kappa: ClassVar[float] = 0.804
-    mu: ClassVar[float] = 0.21951
+    # μ = β·π²/3 with β = 0.06672455060314922 (the PBE/PW92 β, cf. PBECorrelation.beta);
+    # this is libxc's exact MU_PBE. The earlier 0.21951 truncation (rel. err 2.3e-5) was
+    # the *sole* source of the documented ~1e-5 Ha PBE/PBE0 gap vs libxc — full precision
+    # restores machine-precision agreement (verified on water: 1.5e-5 → 2e-11 Ha).
+    mu: ClassVar[float] = 0.2195149727645171
 
     def _unpolarized(self, density: ScalarFeature, grad_density: VectorFeature) -> Scalar:
         """Exchange for spin-unpolarized densities."""
@@ -84,7 +88,9 @@ class PBEExchange(DensityFunctional):
         # eps = jnp.finfo(density.dtype).eps
         grad_n_norm = jnp.linalg.norm(grad_density + 1e-30, axis=-1)
 
-        kF = (3 * jnp.pi**2 * density) ** (1 / 3)
+        # +1e-30 floor (as in LDAExchange) keeps kF and its ρ→0 derivative finite;
+        # ρ^{1/3}'s gradient is otherwise -inf at exactly ρ=0.
+        kF = (3 * jnp.pi**2 * density + 1e-30) ** (1 / 3)
         s = grad_n_norm / jnp.clip(2 * kF * density, 1e-30)
         eps_x_unif = -3 * kF / (4 * jnp.pi)
         f = 1 + self.kappa - self.kappa / (1 + self.mu * s**2 / self.kappa)

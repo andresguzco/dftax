@@ -23,11 +23,14 @@ from dftax.ks.scf import canonical_orthonormalizer
 from dftax.ks.scf_uks import UKSResult, _fock_uks
 
 
-def _spin_densities(Za, Zb, S):
-    """Per-spin densities P_σ = C_σ C_σᵀ (unit occupation) from (Zα, Zβ)."""
-    Ca = _orthonormalize(Za, S)
-    Cb = _orthonormalize(Zb, S)
-    return Ca @ Ca.T, Cb @ Cb.T, Ca, Cb
+def _spin_density_matrices(Za, Zb, S):
+    """Per-spin densities ``P_σ = Z_σ (Z_σᵀ S Z_σ)⁻¹ Z_σᵀ`` (unit occupation) via
+    ``solve`` — the gauge-independent span(Z_σ) projector with an eigh-free, GPU-safe
+    gradient (see :func:`dftax.ks.minimize._density_matrix`). Mirrors
+    :func:`dftax.ks.forces_uks._spin_density_from_Z`."""
+    Ma = Za.T @ S @ Za
+    Mb = Zb.T @ S @ Zb
+    return Za @ jnp.linalg.solve(Ma, Za.T), Zb @ jnp.linalg.solve(Mb, Zb.T)
 
 
 def _core_guess_Z(ks: UKS):
@@ -42,13 +45,15 @@ def _core_guess_Z(ks: UKS):
 def _value_and_grad(ks: UKS, Za, Zb):
     """Energy and (dE/dZα, dE/dZβ)."""
     def e(A, B):
-        Pa, Pb, _, _ = _spin_densities(A, B, ks.S)
+        Pa, Pb = _spin_density_matrices(A, B, ks.S)
         return ks.total(Pa, Pb)
     return jax.value_and_grad(e, argnums=(0, 1))(Za, Zb)
 
 
 def _result(ks: UKS, Za, Zb, converged: bool, n_iter: int) -> UKSResult:
-    Pa, Pb, Ca, Cb = _spin_densities(Za, Zb, ks.S)
+    Pa, Pb = _spin_density_matrices(Za, Zb, ks.S)
+    Ca = _orthonormalize(Za, ks.S)        # coefficients for the result (not differentiated)
+    Cb = _orthonormalize(Zb, ks.S)
     e_tot = float(ks.total(Pa, Pb))
     X = canonical_orthonormalizer(ks.S)
     Fa, Fb = _fock_uks(ks, Pa, Pb)

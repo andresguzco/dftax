@@ -10,8 +10,7 @@ import pytest
 from pyscf import gto, dft
 
 from dftax.energy.xc import LDA, PBE0
-from dftax.ks.energy import RKS
-from dftax.ks.scf import rks_scf
+from dftax import KS, df, scf
 
 H2O = "O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043"
 AUX = "def2-universal-jkfit"
@@ -31,9 +30,9 @@ class TestDensityFitting:
         mf.kernel()
         grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
 
-        e_full = rks_scf(RKS.from_pyscf(mol, xc_cls(), grid[0], grid[1])).e_tot
-        res_df = rks_scf(
-            RKS.from_pyscf(mol, xc_cls(), grid[0], grid[1], auxbasis=AUX)
+        e_full = scf(KS(mol, xc_cls(), grid=(grid[0], grid[1]))).e_tot
+        res_df = scf(
+            KS(mol, xc_cls(), grid=(grid[0], grid[1]), coulomb=df(AUX))
         )
         assert res_df.converged
         assert res_df.P is not None

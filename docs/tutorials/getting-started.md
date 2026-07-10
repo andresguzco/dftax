@@ -31,23 +31,27 @@ jax.config.update("jax_enable_x64", True)
 ## A first calculation
 
 ```python
-from dftax import run_ks
-from dftax.system import Molecule
+from dftax import KS, Molecule, scf
 from dftax.energy.xc import PBE
 
 water = Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043", "sto-3g")
-result = run_ks(water, PBE())
+ks = KS(water, PBE())        # exact ERI + default becke() grid (75, 302)
+result = scf(ks)             # DIIS SCF -> KSResult
 print(result.e_tot)          # -75.146751...
 ```
 
 `Molecule.from_xyz` takes a PySCF-style atom string (Ångström) and a basis-set name;
-coordinates are stored internally in Bohr. `run_ks` dispatches to restricted (RKS) or
-unrestricted (UKS) by the molecule's spin. The result carries `e_tot`, `e_elec`,
-`converged`, `n_iter`, `mo_energy`, `mo_coeff`, and the density matrix `P`.
+coordinates are stored internally in Bohr. `KS(system, xc)` builds the differentiable
+energy functional (a closed shell runs restricted; a molecule with nonzero spin, or an
+explicit `spin=` argument, runs spin-polarized α/β channels), and `scf` solves it. The
+`KSResult` carries `e_tot`, `e_elec`, `converged`, `n_iter`, `nocc`, `mo_energy`,
+`mo_coeff`, and the density matrix `P`. Orbital and density fields are spin-stacked
+with a leading `nspin` axis: `result.P[0]` is the closed-shell density, and a
+spin-polarized run has `nspin = 2` (α = index 0, β = 1).
 
 ## Where to next
 
-- [Drivers & functionals](drivers.md): RKS/UKS, LDA/PBE/PBE0/B3LYP, DIIS vs direct min.
+- [Build & solve](drivers.md): the `KS` builder, LDA/PBE/PBE0/B3LYP, `scf` vs `minimize`.
 - [Coulomb backends](coulomb-backends.md): exact ERIs, density fitting, streaming, screening.
 - [Forces](forces.md): analytic Pulay-free nuclear gradients.
 - [Batched evaluation](batched.md): `vmap` over many geometries.

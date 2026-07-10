@@ -9,8 +9,7 @@ validated against PySCF and/or finite difference.
 ```python
 import jax; jax.config.update("jax_enable_x64", True)
 import numpy as np
-from dftax import dipole, polarizability, ir_spectrum, alchemical_deriv
-from dftax.system import Molecule
+from dftax import Molecule, becke, dipole, polarizability, ir_spectrum, alchemical_deriv
 from dftax.energy.xc import PBE
 
 mol = Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043", "sto-3g")
@@ -21,13 +20,19 @@ print("dipole:", np.linalg.norm(mu), "Debye")            # ~1.92 (vs PySCF to 6e
 alpha = np.asarray(polarizability(mol, PBE()))           # field finite difference
 print("isotropic α:", np.trace(alpha) / 3, "a.u.")
 
-ir = ir_spectrum(mol, PBE(), n_radial=60, lebedev=194)
-for f, a in sorted(zip(np.asarray(ir["frequencies"]), np.asarray(ir["intensities"]))):
+ir = ir_spectrum(mol, PBE(), grid=becke(60, 194))
+for f, a in sorted(zip(np.asarray(ir.frequencies), np.asarray(ir.intensities))):
     if f > 100:                                          # skip ~0 translations/rotations
         print(f"{f:8.1f} cm^-1   {a:6.2f} km/mol")       # freqs match PySCF to ~1 cm^-1
 
 print("dE/dZ:", np.asarray(alchemical_deriv(mol, PBE())))  # Hellmann-Feynman alchemy
 ```
+
+Every property takes `(mol, xc)` and runs its own SCF internally; grid quality is a
+`grid=becke(...)` spec (the properties rebuild the grid at displaced geometries), and
+extra keyword arguments are forwarded to `scf`. `vibrations`, `ir_spectrum`, and
+`raman_spectrum` return NamedTuples (`.frequencies`, `.modes`/`.cart_modes`,
+`.intensities`, `.activities`).
 
 ## What's available
 

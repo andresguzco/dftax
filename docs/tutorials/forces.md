@@ -12,24 +12,24 @@ the SCF loop is unnecessary for forces.)
 ```python
 import jax; jax.config.update("jax_enable_x64", True)
 import numpy as np
-from dftax import RKS, rks_scf, rks_forces
-from dftax.system import Molecule
+from dftax import KS, Molecule, becke, forces, scf
 from dftax.energy.xc import PBE
-from dftax.grid import becke_grid
 
 mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.74", "sto-3g")
-NR, LEB = 50, 110
-gc, gw = becke_grid(mol.symbols, mol.atom_coords(), NR, LEB)
-res = rks_scf(RKS.from_molecule(mol, PBE(), gc, gw))
-F = np.asarray(rks_forces(mol, PBE(), res.mo_coeff[:, : mol.nelectron // 2],
-                          n_radial=NR, lebedev=LEB))
+grid = becke(n_radial=50, lebedev=110)
+res = scf(KS(mol, PBE(), grid=grid))
+F = np.asarray(forces(mol, PBE(), res, grid=grid))
 print(F)                       # (n_atom, 3) Ha/Bohr
 print("net |Σ F| =", np.abs(F.sum(0)).max())   # ~0 (translational invariance)
 ```
 
-`rks_forces` takes the converged occupied orbitals `mo_coeff[:, :nocc]`; pass the same
-grid as the energy. `uks_forces` is the open-shell counterpart (α/β occupied orbitals).
-With `auxbasis=...` the forces are for the density-fitted energy surface.
+`forces(mol, xc, res, *, grid=..., coulomb=None)` takes the converged `KSResult`
+(from `scf` or `minimize`) and slices the per-channel occupied orbitals itself —
+open shells work through the same call (you can also pass the occupied coefficients
+directly). Pass the same `becke(...)` grid spec as the energy calculation; explicit
+point grids cannot follow the nuclei, so only Becke specs are accepted. With
+`coulomb=df("...")` the forces are for the density-fitted energy surface
+(materialized DF only — the streamed backends do not propagate geometry gradients).
 
 A finite-difference check (central difference of the energy) agrees with the analytic
 force to ~1e-9; see `examples/03_forces_h2.py`.

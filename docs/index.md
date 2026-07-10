@@ -17,9 +17,10 @@ runtime (PySCF is only a test-time reference oracle).
 
 ## Highlights
 
-- **RKS + UKS** closed- and open-shell DFT; **LDA, PBE, PBE0, B3LYP**.
-- **Solvers**: on-device DIIS SCF (optional level-shifting) and differentiable Adam
-  direct minimization.
+- **Closed- and open-shell** (spin-polarized) DFT through one spin-stacked `KS`
+  functional; **LDA, PBE, PBE0, B3LYP**.
+- **Solvers**: on-device DIIS SCF (optional level-shifting) and differentiable
+  direct minimization with any [optax](https://optax.readthedocs.io/) optimizer.
 - **Coulomb/exchange**: exact 4-center ERI, RI density fitting (RI-J / RI-K), and
   memory-light **streamed, Schwarz-screened** paths for larger systems.
 - **Gradients and properties**: analytic forces (Pulay-free), implicit-diff SCF
@@ -41,20 +42,23 @@ pip install dftax[cuda12]    # + CUDA 12 jaxlib (Linux GPU)
 import jax
 jax.config.update("jax_enable_x64", True)   # DFT energies want float64
 
-from dftax import run_ks
-from dftax.system import Molecule
+from dftax import KS, Molecule, scf
 from dftax.energy.xc import PBE
 
 water = Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043", "sto-3g")
-print(run_ks(water, PBE()).e_tot)           # -75.146751...
+ks  = KS(water, PBE())                      # exact ERI + default becke() grid (75, 302)
+print(scf(ks).e_tot)                        # -75.146751...
 ```
 
-`run_ks` dispatches to RKS or UKS by the molecule's spin.
+`KS(system, xc, *, grid=None, coulomb=None, spin=None)` builds the energy
+functional (every choice is a value, not a flag); `scf` / `minimize` solve it.
+Spin is inferred from the system: spin 0 runs closed-shell restricted, nonzero
+spin (or an explicit `spin=`) runs spin-polarized α/β channels.
 
 ## Where to next
 
 - [Getting started](tutorials/getting-started.md): install, precision, a first calculation.
-- [Drivers and functionals](tutorials/drivers.md): RKS/UKS, LDA/PBE/PBE0/B3LYP, DIIS vs direct min.
+- [Build & solve](tutorials/drivers.md): the `KS` builder, LDA/PBE/PBE0/B3LYP, `scf` vs `minimize`.
 - [Coulomb backends](tutorials/coulomb-backends.md): exact ERIs, density fitting, streaming, screening.
 - [Forces](tutorials/forces.md): analytic Pulay-free nuclear gradients.
 - [Batched evaluation](tutorials/batched.md): `vmap` over many geometries.

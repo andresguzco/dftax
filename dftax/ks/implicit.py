@@ -7,7 +7,7 @@ derivative of the *converged density* w.r.t. a parameter, hence first-order resp
 properties such as the polarizability ``α = dμ/dE``.
 
 :func:`implicit_density` is the converged density ``P*`` as a ``custom_vjp`` function of
-the assembled :class:`~dftax.ks.energy.RKS`. The forward runs the ordinary SCF under
+the assembled :class:`~dftax.ks.energy.KS`. The forward runs the ordinary SCF under
 ``stop_gradient``; the backward solves the response (CPHF) equation
 ``(I − ∂g/∂P)ᵀ w = P̄`` matrix-free; the single-SCF-step Jacobian ``∂g/∂P`` comes from
 ``jax.vjp`` of one step, reusing the autodiff Fock, with the eigendecomposition's
@@ -52,7 +52,7 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.sparse.linalg import gmres
 
-from dftax.ks.energy import RKS
+from dftax.ks.energy import KS
 
 
 def _sym(A):
@@ -112,18 +112,21 @@ def _proj_jvp(primals, tangents):
 
 def _scf_step(P, ks, X, nocc):
     """One SCF step ``P → 2·(occupied projector of F(P))`` in the AO basis, with the
-    stable projector derivative. ``X`` is the (fixed) Löwdin orthonormalizer."""
-    F = _sym(jax.grad(lambda Q: ks.electronic(Q))(P))
+    stable projector derivative. ``X`` is the (fixed) Löwdin orthonormalizer.
+    ``P`` is the single closed-shell density (implicit diff is restricted-only)."""
+    F = _sym(jax.grad(lambda Q: ks.electronic(Q[None]))(P))
     Pt = _proj_from_fock(X.T @ F @ X, nocc)
     return X @ Pt @ X.T
 
 
 @jax.custom_vjp
-def implicit_density(ks: RKS):
+def implicit_density(ks: KS):
     """Converged closed-shell density ``P*`` for the assembled functional ``ks``,
     differentiable w.r.t. ``ks`` (and hence anything it was assembled from) by implicit
-    differentiation of the SCF fixed point."""
+    differentiation of the SCF fixed point. Restricted (closed-shell) only."""
     from dftax.ks.scf import _scf_solve, canonical_orthonormalizer
+    if len(ks.nocc) != 1:
+        raise NotImplementedError("implicit_density supports closed shells only.")
     X = canonical_orthonormalizer(ks.S)
     _, P, _, _, _, _ = _scf_solve(ks, X, 128, 1e-10, 1e-8, 8, False, 0.0)
     return P[0]
@@ -136,7 +139,7 @@ def _impl_fwd(ks):
 
 def _impl_bwd(res, Pbar):
     ks, P = res
-    nocc = ks.nelec // 2
+    nocc = ks.nocc[0]
     X = _lowdin(ks.S)
     P = jax.lax.stop_gradient(P)
 

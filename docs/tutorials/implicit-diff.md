@@ -5,8 +5,9 @@ minimum `∂E/∂C = 0`, so the [forces](forces.md) come straight from the expli
 derivative. What *does* need the orbital response is the derivative of the **converged
 density** with respect to a parameter, and hence first-order response properties.
 
-`implicit_density(ks)` is the converged closed-shell density `P*` as a function of the
-assembled `RKS`, made differentiable by implicit differentiation of the SCF fixed point:
+`implicit_density(ks)` is the converged density `P*` as a function of the assembled
+`KS` (restricted / closed-shell only), made differentiable by implicit differentiation
+of the SCF fixed point:
 
 - the **forward** runs the ordinary SCF under `stop_gradient`;
 - the **backward** solves the response (CPHF) equation `(I − ∂g/∂P)ᵀ w = P̄` matrix-free
@@ -26,8 +27,7 @@ The headline use is the exact coupled-perturbed-KS polarizability, a single
 ```python
 import jax; jax.config.update("jax_enable_x64", True)
 import numpy as np
-from dftax import polarizability
-from dftax.system import Molecule
+from dftax import Molecule, polarizability
 from dftax.energy.xc import PBE
 
 mol = Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043", "sto-3g")

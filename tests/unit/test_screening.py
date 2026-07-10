@@ -2,7 +2,7 @@
 
 |(μν|λσ)| ≤ √(μν|μν)·√(λσ|λσ): quartets below a threshold are skipped entirely.
 Screening must (a) actually drop negligible quartets, (b) leave the retained
-integrals exact, and (c) be exact-path only (ignored under density fitting).
+integrals exact, and (c) be exact-path only (rejected under density fitting).
 """
 
 import jax.numpy as jnp
@@ -14,8 +14,7 @@ from pyscf import gto, dft
 from dftax.energy.gto import extract_basis_data
 from dftax.energy.xc import LDA
 from dftax.integrals.eri4c import eri4c_matrix, screened_quartets, _unique_quartets
-from dftax.ks.energy import RKS
-from dftax.ks.scf import rks_scf
+from dftax import KS, df, exact, scf
 from dftax.ks.terms import DFCoulomb
 
 AUX = "def2-universal-jkfit"
@@ -52,24 +51,26 @@ def test_screened_scf_matches_unscreened(water_mol):
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
 
-    e_unscr = float(rks_scf(RKS.from_pyscf(water_mol, LDA(), grid[0], grid[1])).e_tot)
-    res = rks_scf(
-        RKS.from_pyscf(water_mol, LDA(), grid[0], grid[1], eri_screen=1e-10)
+    e_unscr = float(scf(KS(water_mol, LDA(), grid=(grid[0], grid[1]))).e_tot)
+    res = scf(
+        KS(water_mol, LDA(), grid=(grid[0], grid[1]), coulomb=exact(screen=1e-10))
     )
     assert res.converged
     assert abs(res.e_tot - e_unscr) < 1e-8, f"screened {res.e_tot} vs {e_unscr}"
 
 
 @pytest.mark.pyscf
-def test_eri_screen_ignored_under_density_fitting(water_mol):
-    # Density fitting has no 4-center tensor to screen; eri_screen is a no-op.
+def test_eri_screen_is_exact_path_only(water_mol):
+    # Materialized density fitting has no 4-center tensor to screen: df()
+    # rejects a bare Schwarz threshold (it applies only to the streamed RI-J
+    # path), so an ERI screen can never leak into the DF backend.
+    with pytest.raises(ValueError):
+        df(AUX, screen=1e-10)
     mf = dft.RKS(water_mol)
     mf.xc = "slater,vwn5"
     mf.grids.level = 1
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks = RKS.from_pyscf(
-        water_mol, LDA(), grid[0], grid[1], auxbasis=AUX, eri_screen=1e-10
-    )
+    ks = KS(water_mol, LDA(), grid=(grid[0], grid[1]), coulomb=df(AUX))
     assert isinstance(ks.coulomb, DFCoulomb)

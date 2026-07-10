@@ -7,7 +7,7 @@ nav:
   - Home: index.md
   - Tutorials:
       - Getting started: tutorials/getting-started.md
-      - Drivers & functionals: tutorials/drivers.md
+      - Build & solve: tutorials/drivers.md
       - Coulomb backends: tutorials/coulomb-backends.md
       - Forces: tutorials/forces.md
       - Batched evaluation: tutorials/batched.md

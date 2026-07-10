@@ -14,9 +14,9 @@ from pyscf import dft, gto
 
 from dftax.energy.xc import LDA
 from dftax.ks.energy import RKS
-from dftax.ks.energy_uks import UKS
+from dftax.ks.energy import UKS
 from dftax.ks.scf import rks_scf
-from dftax.ks.scf_uks import uks_scf
+from dftax.ks.scf import uks_scf
 
 
 @pytest.mark.pyscf

@@ -6,9 +6,9 @@ import jax.numpy as jnp
 
 from dftax.energy.xc import XCFunctional
 from dftax.ks.energy import RKS
-from dftax.ks.energy_uks import UKS
+from dftax.ks.energy import UKS
 from dftax.ks.scf import SCFResult, rks_scf
-from dftax.ks.scf_uks import UKSResult, uks_scf
+from dftax.ks.scf import UKSResult, uks_scf
 from dftax.system.molecule import Molecule
 
 
@@ -107,7 +107,7 @@ def run_uks(
     Mirrors :func:`run_rks`; ``spin`` (= 2S = nα − nβ) defaults to the system's
     own ``spin``. Backends: exact ERI, materialized DF, or streamed DF (``df_chunk``
     + ``df_screen``: RI-J + per-spin RI-K) and streamed XC grid (``grid_chunk``).
-    ``**scf_kwargs`` go to :func:`~dftax.ks.scf_uks.uks_scf`.
+    ``**scf_kwargs`` go to :func:`~dftax.ks.scf.uks_scf`.
     """
     coords, weights = _build_grid(system, grid, n_radial, lebedev, grid_level)
     if isinstance(system, Molecule):

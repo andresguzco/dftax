@@ -16,9 +16,9 @@ from pyscf import dft, gto
 from dftax.energy.xc import LDA
 from dftax.system.molecule import Molecule
 from dftax.ks.energy import RKS
-from dftax.ks.energy_uks import UKS
+from dftax.ks.energy import UKS
 from dftax.ks.scf import rks_scf
-from dftax.ks.scf_uks import uks_scf, UKSResult
+from dftax.ks.scf import uks_scf, UKSResult
 from dftax.ks.driver import run_ks
 from dftax.ks.forces import rks_forces
 from dftax.grid import becke_grid

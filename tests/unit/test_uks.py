@@ -21,11 +21,11 @@ from pyscf import dft, gto
 from dftax.energy.xc import LDA, PBE, PBE0, B3LYP
 from dftax.system.molecule import Molecule
 from dftax.ks.energy import RKS
-from dftax.ks.energy_uks import UKS
+from dftax.ks.energy import UKS
 from dftax.ks.scf import rks_scf
-from dftax.ks.scf_uks import uks_scf, UKSResult
-from dftax.ks.minimize_uks import uks_minimize
-from dftax.ks.forces_uks import uks_forces
+from dftax.ks.scf import uks_scf, UKSResult
+from dftax.ks.minimize import uks_minimize
+from dftax.ks.forces import uks_forces
 from dftax.ks.driver import run_ks, run_uks
 from dftax.grid import becke_grid
 

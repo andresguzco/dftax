@@ -123,6 +123,33 @@ class TestResponse:
                        for a in range(len(ch0))])
         assert np.max(np.abs(dEdZ - fd)) < 1e-5
 
+    def test_alchemical_open_shell_vs_finite_difference(self):
+        """Regression: a spin-polarized solve must hold BOTH converged channel
+        densities fixed — the old code sliced the α coefficients to nelec//2
+        columns and doubled them, a density that is neither the converged
+        polarized one nor any valid closed-shell one. Li doublet: Hellmann-
+        Feynman needs a stationary SCF, and OH's coarse-grid limit cycle would
+        contaminate the FD reference."""
+        mol = Molecule.from_xyz("Li 0 0 0", "sto-3g", spin=1)
+        coords = mol.atom_coords()
+        dEdZ = np.asarray(alchemical_deriv(mol, PBE(), grid=becke(35, 50), **TOL))
+        (gc, gw), _ = _grid(mol, becke(35, 50))
+        basis = KS(mol, PBE(), grid=(gc, gw)).basis
+
+        def E_at(charges):
+            k = KS(
+                System(basis=basis, coords=jnp.asarray(coords),
+                       charges=jnp.asarray(charges), nelec=mol.nelectron, spin=1),
+                PBE(), grid=(gc, gw),
+            )
+            return float(scf(k, **TOL).e_tot)
+
+        ch0 = np.asarray(mol.atom_charges(), float); h = 1e-3
+        fd = np.array([(E_at(ch0 + h * (np.arange(len(ch0)) == a))
+                        - E_at(ch0 - h * (np.arange(len(ch0)) == a))) / (2 * h)
+                       for a in range(len(ch0))])
+        assert np.max(np.abs(dEdZ - fd)) < 1e-5
+
 
 @pytest.mark.float64
 class TestVibrationalSpectra:

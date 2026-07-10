@@ -31,7 +31,7 @@ from dftax.grid import Becke, becke, becke_grid
 from dftax.integrals.multipole import dipole_matrices
 from dftax.ks.energy import KS, System
 from dftax.ks.scf import scf
-from dftax.ks.forces import forces, _density_from_Z
+from dftax.ks.forces import forces
 from dftax.system.molecule import Molecule
 
 # atomic-unit dipole (e·a0) to Debye
@@ -325,20 +325,34 @@ def alchemical_deriv(
 ) -> Float[Array, "n_atom"]:
     """Alchemical gradient ``∂E/∂Z_A`` at fixed electron count (Ha per unit charge).
 
-    Hellmann-Feynman: the converged density is held fixed (Löwdin projector) and the
-    energy is differentiated w.r.t. the nuclear charges, which enter only the
-    nuclear-attraction and nuclear-repulsion terms."""
+    Hellmann-Feynman: the converged density (every spin channel, held fixed via
+    its solve-based projector) and the energy is differentiated w.r.t. the
+    nuclear charges, which enter only the nuclear-attraction and
+    nuclear-repulsion terms."""
     (gc, gw), _ = _grid(mol, grid)
     ks = KS(mol, xc, grid=(gc, gw))
     res = scf(ks, **scf_kw)
-    Z = jax.lax.stop_gradient(res.mo_coeff[0][:, : mol.nelectron // 2])
+    # Per-channel occupied coefficients spanning the converged density
+    # (closed shell: one doubly-occupied channel, w=2; polarized: unit w) —
+    # slicing only the α channel to nelec//2 columns would evaluate the
+    # gradient at a density that is neither the converged one nor any valid
+    # closed-shell one.
+    Zs = tuple(
+        jax.lax.stop_gradient(res.mo_coeff[s][:, :n])
+        for s, n in enumerate(res.nocc)
+    )
+    w = 2.0 if len(res.nocc) == 1 else 1.0
     basis = ks.basis
     coords = jnp.asarray(mol.atom_coords())
     charges0 = jnp.asarray(mol.atom_charges(), dtype=jnp.float64)
+    spin = int(getattr(mol, "spin", 0))
 
     def energy(charges):
         k = KS(System(basis=basis, coords=coords, charges=charges,
-                      nelec=mol.nelectron), xc, grid=(gc, gw))
-        return k.total(_density_from_Z(Z, k.S)[None])
+                      nelec=mol.nelectron, spin=spin), xc, grid=(gc, gw))
+        P = jnp.stack(
+            [w * (Z @ jnp.linalg.solve(Z.T @ k.S @ Z, Z.T)) for Z in Zs]
+        )
+        return k.total(P)
 
     return jax.grad(energy)(charges0)

@@ -121,8 +121,10 @@ def minimize(
             break
 
     # Pack the result with the full canonical orbital set from the converged
-    # Fock (forward-only eigh — not differentiated), for parity with SCF: the
-    # occupied columns span the converged density at the optimum.
+    # Fock (forward-only eigh — not differentiated), for parity with SCF. The
+    # occupied columns span the converged density only at an exactly-converged
+    # aufbau minimum; P is the authoritative density (consumers that freeze
+    # the density, e.g. forces, extract the occupied space from P).
     w = 2.0 if len(ks.nocc) == 1 else 1.0
     P = _density_stack(Zs, ks.S, w)
     e_tot = float(_total_energy(ks, P))

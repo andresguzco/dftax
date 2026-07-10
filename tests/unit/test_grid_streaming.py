@@ -1,7 +1,8 @@
 """Chunked/streamed XC grid matches the materialized path.
 
-With ``grid_chunk`` set, the AO grid is recomputed per chunk (O(chunk·nao)
-memory) instead of materialized; the resulting energy must be identical.
+With ``points(..., chunk=)`` set, the AO grid is recomputed per chunk
+(O(chunk·nao) memory) instead of materialized; the resulting energy must be
+identical.
 """
 
 import jax.numpy as jnp
@@ -10,8 +11,7 @@ import pytest
 from pyscf import dft
 
 from dftax.energy.xc import LDA, PBE
-from dftax.ks.energy import RKS
-from dftax.ks.scf import rks_scf
+from dftax import KS, points, scf
 
 
 @pytest.mark.pyscf
@@ -25,9 +25,9 @@ def test_streamed_matches_materialized(xc_cls, pyscf_xc, water_mol):
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
 
-    e_mat = rks_scf(RKS.from_pyscf(water_mol, xc_cls(), grid[0], grid[1])).e_tot
-    res = rks_scf(
-        RKS.from_pyscf(water_mol, xc_cls(), grid[0], grid[1], grid_chunk=2000)
+    e_mat = scf(KS(water_mol, xc_cls(), grid=(grid[0], grid[1]))).e_tot
+    res = scf(
+        KS(water_mol, xc_cls(), grid=points(grid[0], grid[1], chunk=2000))
     )
     assert res.converged
     assert abs(res.e_tot - e_mat) < 1e-9, f"streamed {res.e_tot} vs mat {e_mat}"

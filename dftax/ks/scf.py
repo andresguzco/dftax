@@ -14,8 +14,8 @@ the unrestricted one. The whole self-consistency loop runs on device in a
 single ``lax.while_loop`` (DIIS history kept in a fixed-size circular buffer),
 so there are no per-iter host round-trips and the entire solve compiles once.
 
-:func:`rks_scf` / :func:`uks_scf` wrap the solver for the two facades and
-unpack the stacked results into their historical result types.
+:func:`scf` wraps the solver and packs the stacked outputs into a
+:class:`KSResult`.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import jax.numpy as jnp
 from jax import lax
 from jaxtyping import Array, Float
 
-from dftax.ks.energy import KS, RKS, UKS, _spin_counts
+from dftax.ks.energy import KS
 
 
 def _sym(m: Float[Array, "n n"]) -> Float[Array, "n n"]:
@@ -37,50 +37,38 @@ def _sym(m: Float[Array, "n n"]) -> Float[Array, "n n"]:
 
 
 @eqx.filter_jit
-def _total_energy(ks, P) -> Array:
-    """Total KS energy E(P) (filter-jit so ks arrays are traced, not baked).
-
-    Facade-dispatched: ``P`` is a single density for :class:`RKS`."""
+def _total_energy(ks: KS, P: Float[Array, "nspin nao nao"]) -> Array:
+    """Total KS energy E(P) (filter-jit so ks arrays are traced, not baked)."""
     return ks.total(P)
-
-
-@eqx.filter_jit
-def _fock(ks: RKS, P: Float[Array, "nao nao"]) -> Array:
-    """Closed-shell KS Fock matrix F = sym(dE/dP) by automatic differentiation."""
-    return _sym(jax.grad(lambda Q: ks.electronic(Q))(P))
 
 
 @eqx.filter_jit
 def _fock_stacked(ks: KS, P: Float[Array, "nspin nao nao"]) -> Array:
     """Per-channel KS Fock matrices ``F_σ = sym(∂E/∂P_σ)`` by autodiff."""
-    g = jax.grad(lambda Q: KS.electronic(ks, Q))(P)
+    g = jax.grad(lambda Q: ks.electronic(Q))(P)
     return 0.5 * (g + g.transpose(0, 2, 1))
 
 
 @dataclass
-class SCFResult:
-    """Outcome of an RKS SCF run."""
+class KSResult:
+    """Outcome of a KS solve (SCF or direct minimization), spin-stacked.
+
+    All orbital/density fields carry a leading ``nspin`` axis (``nspin =
+    len(nocc)``): a closed shell is ``nspin = 1`` (``P[0]`` doubly occupied),
+    a spin-polarized system is ``nspin = 2`` (α, β). From
+    :func:`~dftax.ks.batched.scf_batched` the scalar fields are per-geometry
+    arrays and every stacked field gains a leading batch axis.
+    """
 
     e_tot: float
     e_elec: float
     converged: bool
     n_iter: int
-    mo_energy: Float[Array, "nmo"]
-    mo_coeff: Float[Array, "nao nmo"]
-    P: Float[Array, "nao nao"]
-
-
-@dataclass
-class UKSResult:
-    """Outcome of a UKS SCF run (per-spin MOs and densities)."""
-
-    e_tot: float
-    e_elec: float
-    converged: bool
-    n_iter: int
-    mo_energy: tuple[Float[Array, "nmo"], Float[Array, "nmo"]]
-    mo_coeff: tuple[Float[Array, "nao nmo"], Float[Array, "nao nmo"]]
-    P: tuple[Float[Array, "nao nao"], Float[Array, "nao nao"]]
+    nocc: tuple[int, ...]
+    mo_energy: Float[Array, "nspin nmo"]
+    mo_coeff: Float[Array, "nspin nao nmo"]
+    P: Float[Array, "nspin nao nao"]
+    forces: Float[Array, "n_atom 3"] | None = None
 
 
 def canonical_orthonormalizer(
@@ -163,7 +151,7 @@ def _scf_solve(ks: KS, X, max_iter, e_tol, d_tol, m, verbose, level_shift):
 
     F0 = jnp.broadcast_to(ks.hcore, (nspin, nao, nao))
     P0, C0, eps0 = make_density(F0)                      # core-Hamiltonian guess
-    e0 = KS.total(ks, P0)
+    e0 = ks.total(P0)
     # Channel-stacked DIIS buffers. The Fock is nao×nao per channel, but the
     # commutator error err = Xᵀ(FPS−SPF)X is nmo×nmo, and nmo = X.shape[1] < nao
     # whenever the canonical orthonormalizer drops linearly-dependent columns, so
@@ -178,7 +166,7 @@ def _scf_solve(ks: KS, X, max_iter, e_tol, d_tol, m, verbose, level_shift):
 
     def body(st):
         it, P, C, eps, e_prev, _, _, dF, dErr = st
-        g = jax.grad(lambda Q: KS.electronic(ks, Q))(P)
+        g = jax.grad(lambda Q: ks.electronic(Q))(P)
         F = 0.5 * (g + g.transpose(0, 2, 1))
         err = X.T @ (F @ P @ S - S @ P @ F) @ X          # (nspin, nmo, nmo)
         derr = jnp.linalg.norm(err)
@@ -191,7 +179,7 @@ def _scf_solve(ks: KS, X, max_iter, e_tol, d_tol, m, verbose, level_shift):
 
         F_ls = F_ext + level_shift * (S - inv_w * (S @ P @ S))   # raise virtuals
         P, C, eps = make_density(F_ls)
-        e = KS.total(ks, P)
+        e = ks.total(P)
         de = e - e_prev
         converged = (jnp.abs(de) < e_tol) & (derr < d_tol)
         if verbose:
@@ -205,18 +193,8 @@ def _scf_solve(ks: KS, X, max_iter, e_tol, d_tol, m, verbose, level_shift):
     return e_prev, P, C, eps, converged, it
 
 
-def _warn_not_converged(kind, result, e_tol, d_tol):
-    if not result.converged:
-        warnings.warn(
-            f"{kind} SCF did NOT converge in {result.n_iter} iterations "
-            f"(e_tol={e_tol}, d_tol={d_tol}); the returned energy is unreliable. "
-            f"Increase max_iter or try level_shift>0.",
-            stacklevel=3,
-        )
-
-
-def rks_scf(
-    ks: RKS,
+def scf(
+    ks: KS,
     *,
     max_iter: int = 128,
     e_tol: float = 1e-8,
@@ -225,69 +203,38 @@ def rks_scf(
     lindep_thresh: float = 1e-7,
     level_shift: float = 0.0,
     verbose: bool = False,
-) -> SCFResult:
-    """Run closed-shell RKS SCF to self-consistency.
+) -> KSResult:
+    """Run KS SCF to self-consistency (restricted and spin-polarized alike).
 
     Args:
-        ks: the precomputed :class:`RKS` energy functional.
+        ks: the built :class:`~dftax.ks.energy.KS` energy functional.
         max_iter: maximum SCF iterations.
         e_tol: convergence threshold on the total-energy change (Ha).
         d_tol: convergence threshold on the DIIS commutator norm.
         diis_space: DIIS history depth (fixed buffer size).
         lindep_thresh: overlap-eigenvalue cutoff for canonical orthonormalization.
+        level_shift: Saunders-Hillier virtual level shift (Ha).
         verbose: print per-iteration energy / error (via jax.debug.print).
     """
-    if ks.nelec % 2 != 0:
-        raise ValueError(f"RKS requires an even electron count, got {ks.nelec}.")
     X = canonical_orthonormalizer(ks.S, lindep_thresh)
-
     e_tot, P, C, eps, converged, n_iter = _scf_solve(
         ks, X, max_iter, e_tol, d_tol, diis_space, verbose, level_shift
     )
-    result = SCFResult(
+    result = KSResult(
         e_tot=float(e_tot),
         e_elec=float(e_tot) - float(ks.e_nn),
         converged=bool(converged),
         n_iter=int(n_iter),
-        mo_energy=eps[0],
-        mo_coeff=C[0],
-        P=P[0],
+        nocc=ks.nocc,
+        mo_energy=eps,
+        mo_coeff=C,
+        P=P,
     )
-    _warn_not_converged("RKS", result, e_tol, d_tol)
-    return result
-
-
-def uks_scf(
-    ks: UKS,
-    *,
-    max_iter: int = 128,
-    e_tol: float = 1e-8,
-    d_tol: float = 1e-6,
-    diis_space: int = 8,
-    lindep_thresh: float = 1e-7,
-    level_shift: float = 0.0,
-    verbose: bool = False,
-) -> UKSResult:
-    """Run open-shell UKS SCF to self-consistency.
-
-    Args mirror :func:`rks_scf`; the result carries per-spin MO energies, MO
-    coefficients, and density matrices as ``(α, β)`` tuples.
-    """
-    # Validate the spin configuration (raises on inconsistent nelec/spin).
-    _spin_counts(ks.nelec, ks.nalpha - ks.nbeta)
-    X = canonical_orthonormalizer(ks.S, lindep_thresh)
-
-    e_tot, P, C, eps, converged, n_iter = _scf_solve(
-        ks, X, max_iter, e_tol, d_tol, diis_space, verbose, level_shift
-    )
-    result = UKSResult(
-        e_tot=float(e_tot),
-        e_elec=float(e_tot) - float(ks.e_nn),
-        converged=bool(converged),
-        n_iter=int(n_iter),
-        mo_energy=(eps[0], eps[1]),
-        mo_coeff=(C[0], C[1]),
-        P=(P[0], P[1]),
-    )
-    _warn_not_converged("UKS", result, e_tol, d_tol)
+    if not result.converged:
+        warnings.warn(
+            f"SCF did NOT converge in {result.n_iter} iterations "
+            f"(e_tol={e_tol}, d_tol={d_tol}); the returned energy is unreliable. "
+            f"Increase max_iter or try level_shift>0.",
+            stacklevel=2,
+        )
     return result

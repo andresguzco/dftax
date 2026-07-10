@@ -1,8 +1,9 @@
 """The unified KS build API: KS(system, xc, grid=..., coulomb=..., spin=...).
 
-Checks that the builder produces the same physics as the legacy facade
-constructors, that the spec factories reject inert knob combinations, and that
-the spin-inference rule (None → from system; explicit → polarized) holds.
+Checks that the builder is consistent across equivalent spellings (a becke()
+spec vs the same explicit grid), that the spec factories reject inert knob
+combinations, and that the spin-inference rule (None → from system; explicit →
+polarized) holds.
 """
 
 import jax
@@ -11,7 +12,6 @@ import pytest
 
 from dftax import KS, Molecule, becke, df, exact, points
 from dftax.grid import becke_grid
-from dftax.ks.energy import RKS, UKS
 from dftax.ks.scf import _scf_solve, canonical_orthonormalizer
 from dftax.ks.terms import DFCoulomb, ExactCoulomb, StreamedGridXC
 from dftax.energy.xc import LDA, PBE
@@ -29,31 +29,32 @@ def _solve(ks):
 
 
 @pytest.mark.float64
-def test_builder_matches_facade_constructor():
-    """KS(mol, xc) == RKS.from_molecule with the same becke grid, field by field."""
+def test_builder_grid_spec_matches_explicit_grid():
+    """KS(mol, xc, grid=becke(...)) == KS with the same explicit (coords, weights),
+    field by field."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     grid = becke(n_radial=35, lebedev=50)
-    ks_new = KS(mol, LDA(), grid=grid)
+    ks_spec = KS(mol, LDA(), grid=grid)
     gc, gw = becke_grid(mol.symbols, mol.atom_coords(), 35, 50)
-    ks_old = RKS.from_molecule(mol, LDA(), gc, gw)
+    ks_expl = KS(mol, LDA(), grid=(gc, gw))
 
-    assert ks_new.nocc == ks_old.nocc == (5,)
-    assert jnp.allclose(ks_new.S, ks_old.S)
-    assert jnp.allclose(ks_new.hcore, ks_old.hcore)
-    assert isinstance(ks_new.coulomb, ExactCoulomb)
-    P = jnp.zeros((1, ks_new.S.shape[0], ks_new.S.shape[0]))
-    assert float(KS.total(ks_new, P)) == pytest.approx(float(KS.total(ks_old, P)))
+    assert ks_spec.nocc == ks_expl.nocc == (5,)
+    assert jnp.allclose(ks_spec.S, ks_expl.S)
+    assert jnp.allclose(ks_spec.hcore, ks_expl.hcore)
+    assert isinstance(ks_spec.coulomb, ExactCoulomb)
+    P = jnp.zeros((1, ks_spec.S.shape[0], ks_spec.S.shape[0]))
+    assert float(ks_spec.total(P)) == pytest.approx(float(ks_expl.total(P)))
 
 
 @pytest.mark.float64
-def test_builder_scf_energy_matches_legacy():
-    """A full SCF through the builder path equals the facade path."""
+def test_builder_scf_energy_matches_across_grid_spellings():
+    """A full SCF through the becke() spec equals the explicit-grid build."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
-    e_new, conv_new = _solve(KS(mol, LDA(), grid=becke(35, 50)))
+    e_spec, conv_spec = _solve(KS(mol, LDA(), grid=becke(35, 50)))
     gc, gw = becke_grid(mol.symbols, mol.atom_coords(), 35, 50)
-    e_old, conv_old = _solve(RKS.from_molecule(mol, LDA(), gc, gw))
-    assert conv_new and conv_old
-    assert e_new == pytest.approx(e_old, abs=1e-10)
+    e_expl, conv_expl = _solve(KS(mol, LDA(), grid=(gc, gw)))
+    assert conv_spec and conv_expl
+    assert e_spec == pytest.approx(e_expl, abs=1e-10)
 
 
 @pytest.mark.float64
@@ -61,7 +62,7 @@ def test_spin_inference():
     """spin=None infers from the system; explicit spin forces polarization."""
     water = Molecule.from_xyz(WATER, "sto-3g")
     assert KS(water, LDA(), grid=becke(35, 50)).nocc == (5,)          # closed shell
-    assert KS(water, LDA(), grid=becke(35, 50), spin=0).nocc == (5, 5)  # forced UKS
+    assert KS(water, LDA(), grid=becke(35, 50), spin=0).nocc == (5, 5)  # forced polarized
     oh = Molecule.from_xyz("O 0 0 0; H 0.9697 0 0", "sto-3g", spin=1)
     assert KS(oh, LDA(), grid=becke(35, 50)).nocc == (5, 4)           # from system
 
@@ -78,7 +79,7 @@ def test_df_backend_and_explicit_grid():
     assert isinstance(ks_str.xc_term, StreamedGridXC)
     P = jnp.zeros((1, ks.S.shape[0], ks.S.shape[0]))
     # streamed and materialized XC agree at a (trivial) density
-    assert float(KS.e_xc(ks, P)) == pytest.approx(float(KS.e_xc(ks_str, P)))
+    assert float(ks.e_xc(P)) == pytest.approx(float(ks_str.e_xc(P)))
 
 
 def test_molecule_spherical_field():

@@ -34,10 +34,6 @@ The Coulomb/exchange backend is a value from :func:`~dftax.ks.terms.exact` /
   integrals, O(N³) memory, for larger systems. The fit is the robust Dunlap
   (Coulomb-metric) form; the RI error vs the exact path is sub-mHa with a
   standard JK-fitting auxiliary basis.
-
-:class:`RKS` and :class:`UKS` are thin facades over :class:`KS` that keep the
-historical call signatures (a single ``P`` for RKS, ``(Pα, Pβ)`` for UKS) and
-the flag-based constructors; both are slated to fold into the unified API.
 """
 
 from __future__ import annotations
@@ -74,7 +70,6 @@ from dftax.ks.terms import (
     XCTerm,
     _make_coulomb,
     _metric_pinv,  # noqa: F401  (re-exported; also used by _build_integrals)
-    df,
     exact,
 )
 from dftax.system.molecule import Molecule
@@ -205,28 +200,6 @@ def _resolve_screening(spec, basis):
     return None, None, None
 
 
-def _spec_from_flags(auxbasis, df_chunk, df_screen, eri_screen, exact_stream, load_aux):
-    """Translate the legacy flag cluster into a Coulomb spec (facade shim).
-
-    Mirrors the historical flag semantics exactly: ``df_screen`` is honored only
-    with ``auxbasis`` + ``df_chunk``, ``eri_screen`` only on the materialized
-    exact path — combinations that used to be silently inert stay inert here.
-    The strict factories (:func:`~dftax.ks.terms.exact` /
-    :func:`~dftax.ks.terms.df`) reject those combinations for direct users.
-    """
-    if auxbasis is not None:
-        aux = auxbasis if isinstance(auxbasis, BasisData) else load_aux(auxbasis)
-        return df(
-            aux,
-            chunk=df_chunk,
-            screen=df_screen if df_chunk is not None else None,
-        )
-    return exact(
-        screen=None if exact_stream else eri_screen,
-        stream=exact_stream,
-    )
-
-
 def ao_on_grid(
     basis: BasisData,
     coords: Float[Array, "ng 3"],
@@ -328,7 +301,15 @@ class KS(eqx.Module):
         """
         basis, coords, charges, nelec, sys_spin, symbols = _resolve_system(system)
         if spin is None:
-            nocc = (nelec // 2,) if sys_spin == 0 else _spin_counts(nelec, sys_spin)
+            if sys_spin == 0:
+                if nelec % 2 != 0:
+                    raise ValueError(
+                        f"nelec={nelec} is odd but the system has spin=0; give the "
+                        f"system its actual spin (= 2S) or pass spin= explicitly."
+                    )
+                nocc = (nelec // 2,)
+            else:
+                nocc = _spin_counts(nelec, sys_spin)
         else:
             nocc = _spin_counts(nelec, int(spin))
         spec = _resolve_coulomb(coulomb, symbols, coords)
@@ -376,208 +357,15 @@ class KS(eqx.Module):
 
     def total(self, P: Float[Array, "nspin nao nao"]) -> Scalar:
         """Total KS energy (electronic + nuclear repulsion)."""
-        # KS.electronic explicitly: the RKS/UKS facades override ``electronic``
-        # with their historical signatures, and this must not dispatch there.
-        return KS.electronic(self, P) + self.e_nn
-
-
-def _load_aux_pyscf(mol):
-    def load_aux(name):
-        from dftax.basis.loader import build_basis_data
-
-        symbols = [mol.atom_symbol(i) for i in range(mol.natm)]
-        return build_basis_data(symbols, mol.atom_coords(), name)
-
-    return load_aux
-
-
-def _load_aux_molecule(mol):
-    def load_aux(name):
-        from dftax.basis.loader import build_basis_data
-
-        return build_basis_data(mol.symbols, mol.atom_coords(), name)
-
-    return load_aux
-
-
-class RKS(KS):
-    """Closed-shell facade over :class:`KS`: energies of a single ``P`` (nao, nao)."""
-
-    @classmethod
-    def _assemble(
-        cls, basis, coords, charges, nelec, xc, grid_coords, grid_weights,
-        *, coulomb: ExactSpec | DFSpec | None = None, grid_chunk: int | None = None,
-    ) -> "RKS":
-        """Assemble the closed-shell functional from already-built primitives."""
-        system = System(
-            basis=basis, coords=coords, charges=charges, nelec=int(nelec), spin=0,
-        )
-        return cls(
-            system, xc,
-            grid=Points(coords=grid_coords, weights=grid_weights, chunk=grid_chunk),
-            coulomb=coulomb,
-        )
-
-    @classmethod
-    def from_pyscf(
-        cls, mol, xc: XCFunctional, grid_coords, grid_weights,
-        auxbasis: str | None = None, grid_chunk: int | None = None,
-        df_chunk: int | None = None, eri_screen: float | None = None,
-        exact_stream: bool = False, df_screen: float | None = None,
-    ) -> "RKS":
-        """Build from a PySCF ``Mole`` (setup only) and a quadrature grid.
-
-        ``auxbasis`` (a basis-set name) enables density fitting; ``grid_chunk``
-        streams the XC grid and ``df_chunk`` streams RI-J (both memory-light for
-        large systems). ``eri_screen`` (exact path) sets a Cauchy-Schwarz
-        threshold to skip negligible ERI quartets.
-        """
-        spec = _spec_from_flags(
-            auxbasis, df_chunk, df_screen, eri_screen, exact_stream,
-            _load_aux_pyscf(mol),
-        )
-        return cls._assemble(
-            extract_basis_data(mol), mol.atom_coords(), mol.atom_charges(),
-            mol.nelectron, xc, grid_coords, grid_weights,
-            coulomb=spec, grid_chunk=grid_chunk,
-        )
-
-    @classmethod
-    def from_molecule(
-        cls, mol, xc: XCFunctional, grid_coords, grid_weights,
-        auxbasis: str | None = None, spherical: bool = False,
-        grid_chunk: int | None = None, df_chunk: int | None = None,
-        eri_screen: float | None = None, exact_stream: bool = False,
-        df_screen: float | None = None,
-    ) -> "RKS":
-        """Build from a native :class:`~dftax.system.molecule.Molecule` (no PySCF).
-
-        ``auxbasis`` (a basis-set name, e.g. ``"def2-universal-jkfit"``) enables
-        density fitting. ``spherical=True`` uses spherical-harmonic orbitals
-        (standard for cc-pVXZ/def2; required to match a spherical reference for
-        l>=2 bases). ``grid_chunk`` streams the XC grid and ``df_chunk`` streams
-        RI-J (both memory-light). ``eri_screen`` (exact path) sets a
-        Cauchy-Schwarz threshold to skip negligible ERI quartets.
-        """
-        from dftax.basis.loader import build_basis_data
-
-        basis = build_basis_data(
-            mol.symbols, mol.atom_coords(), mol.basis,
-            spherical=spherical or getattr(mol, "spherical", False),
-        )
-        spec = _spec_from_flags(
-            auxbasis, df_chunk, df_screen, eri_screen, exact_stream,
-            _load_aux_molecule(mol),
-        )
-        return cls._assemble(
-            basis, mol.atom_coords(), mol.atom_charges(),
-            mol.nelectron, xc, grid_coords, grid_weights,
-            coulomb=spec, grid_chunk=grid_chunk,
-        )
+        return self.electronic(P) + self.e_nn
 
     def density(
-        self, P: Float[Array, "nao nao"]
+        self, P: Float[Array, "nspin nao nao"]
     ) -> tuple[Float[Array, "ng"], Float[Array, "ng 3"]]:
-        """Electron density and its gradient on the grid from ``P``."""
+        """Total electron density and its gradient on the grid from ``P``."""
         if not isinstance(self.xc_term, GridXC):
             raise NotImplementedError(
                 "density on the grid requires materialized AO values; "
-                "this RKS streams the XC grid (grid_chunk)."
+                "this KS streams the XC grid (a chunked grid spec)."
             )
-        return self.xc_term.density(P[None])
-
-    def e_xc(self, P: Float[Array, "nao nao"]) -> Scalar:
-        return KS.e_xc(self, P[None])
-
-    def electronic(self, P: Float[Array, "nao nao"]) -> Scalar:
-        return KS.electronic(self, P[None])
-
-    def total(self, P: Float[Array, "nao nao"]) -> Scalar:
-        return KS.total(self, P[None])
-
-
-class UKS(KS):
-    """Open-shell facade over :class:`KS`: energies of ``(Pα, Pβ)``."""
-
-    @property
-    def nalpha(self) -> int:
-        return self.nocc[0]
-
-    @property
-    def nbeta(self) -> int:
-        return self.nocc[1]
-
-    @classmethod
-    def _assemble(
-        cls, basis, coords, charges, nelec, spin, xc, grid_coords, grid_weights,
-        *, coulomb: ExactSpec | DFSpec | None = None, grid_chunk: int | None = None,
-    ) -> "UKS":
-        """Assemble the open-shell functional from already-built primitives."""
-        system = System(
-            basis=basis, coords=coords, charges=charges, nelec=int(nelec),
-            spin=int(spin),
-        )
-        return cls(
-            system, xc,
-            grid=Points(coords=grid_coords, weights=grid_weights, chunk=grid_chunk),
-            coulomb=coulomb,
-            spin=int(spin),                    # explicit: polarized even for 2S=0
-        )
-
-    @classmethod
-    def from_pyscf(
-        cls, mol, xc: XCFunctional, grid_coords, grid_weights,
-        auxbasis: str | None = None, spin: int | None = None,
-        eri_screen: float | None = None, df_chunk: int | None = None,
-        df_screen: float | None = None, grid_chunk: int | None = None,
-    ) -> "UKS":
-        """Build from a PySCF ``Mole``; ``spin`` (= 2S) defaults to ``mol.spin``."""
-        spin = int(mol.spin if spin is None else spin)
-        spec = _spec_from_flags(
-            auxbasis, df_chunk, df_screen, eri_screen, False,
-            _load_aux_pyscf(mol),
-        )
-        return cls._assemble(
-            extract_basis_data(mol), mol.atom_coords(), mol.atom_charges(),
-            mol.nelectron, spin, xc, grid_coords, grid_weights,
-            coulomb=spec, grid_chunk=grid_chunk,
-        )
-
-    @classmethod
-    def from_molecule(
-        cls, mol, xc: XCFunctional, grid_coords, grid_weights,
-        auxbasis: str | None = None, spherical: bool = False,
-        spin: int | None = None, eri_screen: float | None = None,
-        df_chunk: int | None = None, df_screen: float | None = None,
-        grid_chunk: int | None = None,
-    ) -> "UKS":
-        """Build from a native ``Molecule``; ``spin`` (= 2S) defaults to ``mol.spin``."""
-        from dftax.basis.loader import build_basis_data
-
-        basis = build_basis_data(
-            mol.symbols, mol.atom_coords(), mol.basis,
-            spherical=spherical or getattr(mol, "spherical", False),
-        )
-        spin = int(mol.spin if spin is None else spin)
-        spec = _spec_from_flags(
-            auxbasis, df_chunk, df_screen, eri_screen, False,
-            _load_aux_molecule(mol),
-        )
-        return cls._assemble(
-            basis, mol.atom_coords(), mol.atom_charges(),
-            mol.nelectron, spin, xc, grid_coords, grid_weights,
-            coulomb=spec, grid_chunk=grid_chunk,
-        )
-
-    def e_xc(self, Pa: Float[Array, "nao nao"], Pb: Float[Array, "nao nao"]) -> Scalar:
-        return KS.e_xc(self, jnp.stack([Pa, Pb]))
-
-    def electronic(
-        self, Pa: Float[Array, "nao nao"], Pb: Float[Array, "nao nao"]
-    ) -> Scalar:
-        return KS.electronic(self, jnp.stack([Pa, Pb]))
-
-    def total(
-        self, Pa: Float[Array, "nao nao"], Pb: Float[Array, "nao nao"]
-    ) -> Scalar:
-        return KS.total(self, jnp.stack([Pa, Pb]))
+        return self.xc_term.density(P)

@@ -7,9 +7,7 @@ projector density ``P_σ = w Z_σ (Z_σᵀ S Z_σ)⁻¹ Z_σᵀ`` (``w = 2`` for
 doubly-occupied closed-shell channel, ``1`` per spin channel), making the
 energy a smooth, unconstrained function of the ``Z``s. The whole solve is
 differentiable end-to-end, the property that makes it useful for learning over
-the KS energy. The closed-shell and spin-polarized cases run through one core;
-:func:`rks_minimize` / :func:`uks_minimize` adapt the argument and result
-shapes.
+the KS energy.
 
 The projector is computed with ``solve`` rather than an eigendecomposition:
 at the orthonormal stationary point ``ZᵀSZ ≈ I`` is fully degenerate, where
@@ -17,13 +15,14 @@ at the orthonormal stationary point ``ZᵀSZ ≈ I`` is fully degenerate, where
 gradient that on GPU (cuSolver) non-deterministically NaNs the minimization.
 Mirrors :func:`dftax.ks.forces._density_from_Z`.
 
-Optimization uses gradient descent (``optax`` Adam). First-order methods are the
-robust choice here: the KS energy is invariant under occupied-orbital rotations,
-so its Hessian is singular along that gauge, and line-search quasi-Newton solvers
-(BFGS / nonlinear-CG) reliably stall at saddle points / excited determinants when
+The optimizer is any ``optax.GradientTransformation`` (default
+``optax.adam(0.3)``). First-order methods are the robust choice here: the KS
+energy is invariant under occupied-orbital rotations, so its Hessian is
+singular along that gauge, and line-search quasi-Newton solvers (BFGS /
+nonlinear-CG) reliably stall at saddle points / excited determinants when
 started from a core-Hamiltonian guess. Adam descends past them to the ground
 state. (This matches differentiable-DFT practice, e.g. D4FT.) For a robust,
-fast *energy* solver use :func:`~dftax.ks.scf.rks_scf` (DIIS); use direct
+fast *energy* solver use :func:`~dftax.ks.scf.scf` (DIIS); use direct
 minimization when end-to-end differentiability of the solve is what you need.
 """
 
@@ -35,26 +34,13 @@ import jax.numpy as jnp
 import optax
 from jaxtyping import Array, Float
 
-from dftax.ks.energy import KS, RKS, UKS
+from dftax.ks.energy import KS
 from dftax.ks.scf import (
-    SCFResult,
-    UKSResult,
-    _fock,
+    KSResult,
     _fock_stacked,
     _total_energy,
     canonical_orthonormalizer,
 )
-
-
-def _orthonormalize(
-    Z: Float[Array, "nao nocc"], S: Float[Array, "nao nao"], eps: float = 1e-10
-) -> Float[Array, "nao nocc"]:
-    """Löwdin-orthonormalize ``Z`` against ``S``: ``C = Z (Zᵀ S Z)^{-1/2}``."""
-    M = Z.T @ S @ Z
-    w, U = jnp.linalg.eigh(M)
-    w = jnp.clip(w, eps)
-    M_inv_sqrt = (U * (w ** -0.5)) @ U.T
-    return Z @ M_inv_sqrt
 
 
 def _density_stack(Zs, S, w: float) -> Float[Array, "nspin nao nao"]:
@@ -81,13 +67,44 @@ def _value_and_grad(ks: KS, Zs):
     """Energy and dE/dZ per channel (ks arrays traced, not baked as constants)."""
     w = 2.0 if len(ks.nocc) == 1 else 1.0
     def e(Ys):
-        return KS.total(ks, _density_stack(Ys, ks.S, w))
+        return ks.total(_density_stack(Ys, ks.S, w))
     return jax.value_and_grad(e)(Zs)
 
 
-def _minimize(ks: KS, Zs, learning_rate, max_steps, g_tol, verbose):
-    """Adam descent over the per-channel coefficient pytree."""
-    opt = optax.adam(learning_rate)
+def minimize(
+    ks: KS,
+    optimizer: optax.GradientTransformation | None = None,
+    *,
+    max_steps: int = 2000,
+    g_tol: float = 1e-6,
+    Z0=None,
+    verbose: bool = False,
+) -> KSResult:
+    """Minimize the KS energy directly over orthonormalized coefficients.
+
+    Args:
+        ks: the built :class:`~dftax.ks.energy.KS` energy functional.
+        optimizer: any ``optax.GradientTransformation``; default
+            ``optax.adam(0.3)``.
+        max_steps: optimizer step budget.
+        g_tol: stop when the global gradient norm falls below this.
+        Z0: optional initial coefficient guess — one ``(nao, nocc_σ)`` array
+            per channel (a bare array is accepted for a closed shell); default
+            is the core-Hamiltonian guess.
+        verbose: print per-step energy and gradient norm.
+    """
+    if Z0 is None:
+        Zs = _core_guess(ks)
+    elif isinstance(Z0, (tuple, list)):
+        Zs = tuple(jnp.asarray(Z) for Z in Z0)
+    else:
+        Zs = (jnp.asarray(Z0),)
+    if len(Zs) != len(ks.nocc):
+        raise ValueError(
+            f"Z0 has {len(Zs)} channel(s) but the system has {len(ks.nocc)}."
+        )
+
+    opt = optax.adam(0.3) if optimizer is None else optimizer
     state = opt.init(Zs)
     converged = False
     n_iter = max_steps
@@ -102,87 +119,24 @@ def _minimize(ks: KS, Zs, learning_rate, max_steps, g_tol, verbose):
             converged = True
             n_iter = step + 1
             break
-    return Zs, converged, n_iter
 
-
-def rks_minimize(
-    ks: RKS,
-    *,
-    learning_rate: float = 0.3,
-    max_steps: int = 2000,
-    g_tol: float = 1e-6,
-    Z0: Float[Array, "nao nocc"] | None = None,
-    verbose: bool = False,
-) -> SCFResult:
-    """Minimize the RKS energy directly over orthonormalized coefficients (Adam).
-
-    Args:
-        ks: the :class:`RKS` energy functional.
-        learning_rate: Adam step size.
-        max_steps: optimizer step budget.
-        g_tol: stop when the gradient norm falls below this.
-        Z0: optional initial (nao, nocc) coefficient guess; default is the
-            core-Hamiltonian guess.
-        verbose: print per-step energy and gradient norm.
-    """
-    if ks.nelec % 2 != 0:
-        raise ValueError(f"RKS requires an even electron count, got {ks.nelec}.")
-    Zs = _core_guess(ks) if Z0 is None else (Z0,)
-
-    Zs, converged, n_iter = _minimize(
-        ks, Zs, learning_rate, max_steps, g_tol, verbose
-    )
-    (Z,) = Zs
-    P = _density_stack(Zs, ks.S, 2.0)[0]
-    C = _orthonormalize(Z, ks.S)          # coefficients for the result (not differentiated)
+    # Pack the result with the full canonical orbital set from the converged
+    # Fock (forward-only eigh — not differentiated), for parity with SCF: the
+    # occupied columns span the converged density at the optimum.
+    w = 2.0 if len(ks.nocc) == 1 else 1.0
+    P = _density_stack(Zs, ks.S, w)
     e_tot = float(_total_energy(ks, P))
-    # Canonical orbital energies from the converged Fock, for parity with SCF.
     X = canonical_orthonormalizer(ks.S)
-    eps = jnp.linalg.eigvalsh(X.T @ _fock(ks, P) @ X)
-    return SCFResult(
+    F = _fock_stacked(ks, P)
+    eps, Cp = jnp.linalg.eigh(X.T @ F @ X)             # batched over channels
+    C = X @ Cp
+    return KSResult(
         e_tot=e_tot,
         e_elec=e_tot - float(ks.e_nn),
         converged=converged,
         n_iter=n_iter,
+        nocc=ks.nocc,
         mo_energy=eps,
         mo_coeff=C,
         P=P,
-    )
-
-
-def uks_minimize(
-    ks: UKS,
-    *,
-    learning_rate: float = 0.3,
-    max_steps: int = 2000,
-    g_tol: float = 1e-6,
-    Z0: tuple[Float[Array, "nao na"], Float[Array, "nao nb"]] | None = None,
-    verbose: bool = False,
-) -> UKSResult:
-    """Minimize the UKS energy directly over per-spin coefficients (Adam).
-
-    Args mirror :func:`rks_minimize`; ``Z0`` is an optional ``(Zα, Zβ)`` initial
-    guess (default: per-spin core-Hamiltonian guess).
-    """
-    Zs = _core_guess(ks) if Z0 is None else tuple(Z0)
-
-    Zs, converged, n_iter = _minimize(
-        ks, Zs, learning_rate, max_steps, g_tol, verbose
-    )
-    P = _density_stack(Zs, ks.S, 1.0)
-    Ca = _orthonormalize(Zs[0], ks.S)     # coefficients for the result (not differentiated)
-    Cb = _orthonormalize(Zs[1], ks.S)
-    e_tot = float(KS.total(ks, P))
-    X = canonical_orthonormalizer(ks.S)
-    F = _fock_stacked(ks, P)
-    ea = jnp.linalg.eigvalsh(X.T @ F[0] @ X)
-    eb = jnp.linalg.eigvalsh(X.T @ F[1] @ X)
-    return UKSResult(
-        e_tot=e_tot,
-        e_elec=e_tot - float(ks.e_nn),
-        converged=converged,
-        n_iter=n_iter,
-        mo_energy=(ea, eb),
-        mo_coeff=(Ca, Cb),
-        P=(P[0], P[1]),
     )

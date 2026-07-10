@@ -24,12 +24,14 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, Float
 
+from typing import NamedTuple
+
 from dftax.energy.xc import XCFunctional
-from dftax.grid import becke_grid
+from dftax.grid import Becke, becke, becke_grid
 from dftax.integrals.multipole import dipole_matrices
-from dftax.ks.energy import RKS
-from dftax.ks.scf import rks_scf
-from dftax.ks.forces import rks_forces, _density_from_Z
+from dftax.ks.energy import KS, System
+from dftax.ks.scf import scf
+from dftax.ks.forces import forces, _density_from_Z
 from dftax.system.molecule import Molecule
 
 # atomic-unit dipole (e·a0) to Debye
@@ -47,16 +49,41 @@ def nuclear_dipole(mol, origin=(0.0, 0.0, 0.0)) -> Float[Array, "3"]:
     return jnp.einsum("a,ax->x", Z, R - jnp.asarray(origin, dtype=jnp.float64))
 
 
-def _grid(mol, n_radial, lebedev):
-    return becke_grid(mol.symbols, mol.atom_coords(), n_radial, lebedev)
+class Vibrations(NamedTuple):
+    """Harmonic analysis: frequencies (cm⁻¹, negative = imaginary), mass-weighted
+    modes (columns), Cartesian displacement modes (columns)."""
+
+    frequencies: Array
+    modes: Array
+    cart_modes: Array
 
 
-def _solve_field(mol, xc, gc, gw, *, field=None, origin=(0.0, 0.0, 0.0),
-                 spherical=False, **scf_kw):
-    """Run RKS, optionally under a uniform external field. Returns ``(P, e, basis)``
+class IRSpectrum(NamedTuple):
+    """Harmonic IR spectrum: frequencies (cm⁻¹) and intensities (km/mol)."""
+
+    frequencies: Array
+    intensities: Array
+
+
+class RamanSpectrum(NamedTuple):
+    """Harmonic Raman spectrum: frequencies (cm⁻¹) and activities (Å⁴/amu)."""
+
+    frequencies: Array
+    activities: Array
+
+
+def _grid(mol, grid):
+    g = becke() if grid is None else grid
+    if not isinstance(g, Becke):
+        raise ValueError("properties rebuild their own grids: pass becke(...).")
+    return becke_grid(mol.symbols, mol.atom_coords(), g.n_radial, g.lebedev), g
+
+
+def _solve_field(mol, xc, gc, gw, *, field=None, origin=(0.0, 0.0, 0.0), **scf_kw):
+    """Run KS, optionally under a uniform external field. Returns ``(P, e, basis)``
     where the energy includes the nuclear ``−E·μ_nuc`` term so ``e`` is the full
     field-dependent total energy (``μ = −de/dfield``)."""
-    ks = RKS.from_molecule(mol, xc, gc, gw, spherical=spherical)
+    ks = KS(mol, xc, grid=(gc, gw))
     basis = ks.basis
     e_nuc_field = 0.0
     if field is not None:
@@ -64,21 +91,21 @@ def _solve_field(mol, xc, gc, gw, *, field=None, origin=(0.0, 0.0, 0.0),
         D = dipole_matrices(basis, origin)
         ks = eqx.tree_at(lambda k: k.hcore, ks, ks.hcore + jnp.einsum("i,ipq->pq", field, D))
         e_nuc_field = -jnp.dot(field, nuclear_dipole(mol, origin))
-    res = rks_scf(ks, **scf_kw)
-    return res.P, float(res.e_tot) + float(e_nuc_field), basis
+    res = scf(ks, **scf_kw)
+    return res.P[0], float(res.e_tot) + float(e_nuc_field), basis
 
 
 def dipole(
     mol, xc: XCFunctional, *,
-    origin=(0.0, 0.0, 0.0), debye: bool = False, spherical: bool = False,
-    n_radial: int = 75, lebedev: int = 302, **scf_kw,
+    origin=(0.0, 0.0, 0.0), debye: bool = False,
+    grid: Becke | None = None, **scf_kw,
 ) -> Float[Array, "3"]:
     """Permanent electric dipole moment ``μ`` (atomic units, or Debye if ``debye``).
 
     ``μ = Σ_A Z_A (R_A − origin) − Tr(P · r)`` from the converged density. For a
     neutral molecule the result is independent of ``origin``."""
-    gc, gw = _grid(mol, n_radial, lebedev)
-    P, _, basis = _solve_field(mol, xc, gc, gw, origin=origin, spherical=spherical, **scf_kw)
+    (gc, gw), _ = _grid(mol, grid)
+    P, _, basis = _solve_field(mol, xc, gc, gw, origin=origin, **scf_kw)
     D = dipole_matrices(basis, origin)
     mu = nuclear_dipole(mol, origin) - jnp.einsum("ipq,pq->i", D, P)
     return mu * AU_TO_DEBYE if debye else mu
@@ -87,7 +114,7 @@ def dipole(
 def polarizability(
     mol, xc: XCFunctional, *,
     method: str = "fd", field: float = 2e-3, origin=(0.0, 0.0, 0.0),
-    spherical: bool = False, n_radial: int = 75, lebedev: int = 302, **scf_kw,
+    grid: Becke | None = None, **scf_kw,
 ) -> Float[Array, "3 3"]:
     """Static dipole polarizability tensor ``α_ij = ∂μ_i/∂E_j`` (atomic units).
 
@@ -96,8 +123,8 @@ def polarizability(
     exact coupled-perturbed KS response via implicit differentiation of the SCF fixed
     point (:func:`~dftax.ks.implicit.implicit_density`), a single ``jax.jacobian``
     through the converged density, no field stepping. Returned symmetrized."""
-    gc, gw = _grid(mol, n_radial, lebedev)
-    ks0 = RKS.from_molecule(mol, xc, gc, gw, spherical=spherical)
+    (gc, gw), _ = _grid(mol, grid)
+    ks0 = KS(mol, xc, grid=(gc, gw))
     D = dipole_matrices(ks0.basis, origin)
     nuc = nuclear_dipole(mol, origin)
 
@@ -113,7 +140,7 @@ def polarizability(
         return 0.5 * (alpha + alpha.T)
 
     def mu_at(f):
-        P, _, _ = _solve_field(mol, xc, gc, gw, field=f, origin=origin, spherical=spherical, **scf_kw)
+        P, _, _ = _solve_field(mol, xc, gc, gw, field=f, origin=origin, **scf_kw)
         return nuc - jnp.einsum("ipq,pq->i", D, P)
 
     cols = []
@@ -136,20 +163,19 @@ def _atomic_masses(symbols) -> np.ndarray:
     )
 
 
-def _eval_at(mol, xc, coords, origin, n_radial, lebedev, scf_kw):
-    """Analytic forces ``(n_atom,3)`` and dipole ``(3,)`` at a geometry (Cartesian
-    basis, matching the :mod:`dftax.ks.forces` path)."""
-    m = Molecule(mol.symbols, np.asarray(coords), mol.basis)
-    gc, gw = becke_grid(m.symbols, m.atom_coords(), n_radial, lebedev)
-    ks = RKS.from_molecule(m, xc, gc, gw)
-    res = rks_scf(ks, **scf_kw)
-    nocc = m.nelectron // 2
-    F = rks_forces(m, xc, res.mo_coeff[:, :nocc], n_radial=n_radial, lebedev=lebedev)
-    mu = nuclear_dipole(m, origin) - jnp.einsum("ipq,pq->i", dipole_matrices(ks.basis, origin), res.P)
+def _eval_at(mol, xc, coords, origin, g, scf_kw):
+    """Analytic forces ``(n_atom,3)`` and dipole ``(3,)`` at a geometry."""
+    m = Molecule(mol.symbols, np.asarray(coords), mol.basis,
+                 spherical=getattr(mol, "spherical", False))
+    gc, gw = becke_grid(m.symbols, m.atom_coords(), g.n_radial, g.lebedev)
+    ks = KS(m, xc, grid=(gc, gw))
+    res = scf(ks, **scf_kw)
+    F = forces(m, xc, res, grid=g)
+    mu = nuclear_dipole(m, origin) - jnp.einsum("ipq,pq->i", dipole_matrices(ks.basis, origin), res.P[0])
     return np.asarray(F), np.asarray(mu)
 
 
-def _fd_force_dipole_derivs(mol, xc, step, origin, n_radial, lebedev, scf_kw):
+def _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw):
     """Hessian ``H = -dF/dR`` ``(3N,3N)`` and dipole derivatives ``dμ/dR`` ``(3,3N)``
     by central finite difference of the analytic forces / dipole."""
     coords0 = np.asarray(mol.atom_coords())
@@ -162,8 +188,8 @@ def _fd_force_dipole_derivs(mol, xc, step, origin, n_radial, lebedev, scf_kw):
             c = 3 * a + k
             cp = coords0.copy(); cp[a, k] += step
             cm = coords0.copy(); cm[a, k] -= step
-            Fp, mup = _eval_at(mol, xc, cp, origin, n_radial, lebedev, scf_kw)
-            Fm, mum = _eval_at(mol, xc, cm, origin, n_radial, lebedev, scf_kw)
+            Fp, mup = _eval_at(mol, xc, cp, origin, g, scf_kw)
+            Fm, mum = _eval_at(mol, xc, cm, origin, g, scf_kw)
             H[:, c] = (-(Fp - Fm) / (2.0 * step)).reshape(-1)
             dmu[:, c] = (mup - mum) / (2.0 * step)
     return 0.5 * (H + H.T), dmu
@@ -209,47 +235,47 @@ def _harmonic(H, mol):
 
 
 def hessian(mol, xc, *, step: float = 1e-3, origin=(0.0, 0.0, 0.0),
-            n_radial: int = 75, lebedev: int = 302, **scf_kw) -> Float[Array, "n n"]:
+            grid: Becke | None = None, **scf_kw) -> Float[Array, "n n"]:
     """Nuclear Hessian ``∂²E/∂R_A∂R_B`` (Ha/Bohr², shape ``(3N, 3N)``) by central
     finite difference of the analytic Pulay-free forces."""
-    H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, n_radial, lebedev, scf_kw)
+    _, g = _grid(mol, grid)
+    H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw)
     return jnp.asarray(H)
 
 
 def vibrations(mol, xc, *, hess=None, step: float = 1e-3,
-               n_radial: int = 75, lebedev: int = 302, **scf_kw) -> dict:
-    """Harmonic vibrational analysis. Returns a dict with ``frequencies`` (cm⁻¹,
-    negative = imaginary), mass-weighted ``modes`` (columns), and Cartesian
-    displacement modes ``cart_modes`` (columns, ``(3N, 3N)``)."""
-    H = np.asarray(hessian(mol, xc, step=step, n_radial=n_radial, lebedev=lebedev, **scf_kw)) \
+               grid: Becke | None = None, **scf_kw) -> Vibrations:
+    """Harmonic vibrational analysis (see :class:`Vibrations`)."""
+    H = np.asarray(hessian(mol, xc, step=step, grid=grid, **scf_kw)) \
         if hess is None else np.asarray(hess)
     freq, V, m3 = _harmonic(H, mol)
     cart = V / np.sqrt(m3)[:, None]
     cart = cart / np.linalg.norm(cart, axis=0, keepdims=True)
-    return {"frequencies": jnp.asarray(freq), "modes": jnp.asarray(V),
-            "cart_modes": jnp.asarray(cart)}
+    return Vibrations(frequencies=jnp.asarray(freq), modes=jnp.asarray(V),
+                      cart_modes=jnp.asarray(cart))
 
 
 def ir_spectrum(mol, xc, *, step: float = 1e-3, origin=(0.0, 0.0, 0.0),
-                n_radial: int = 75, lebedev: int = 302, **scf_kw) -> dict:
-    """Harmonic IR spectrum. Returns ``frequencies`` (cm⁻¹) and ``intensities``
-    (km/mol) from ``A_k ∝ |dμ/dQ_k|²``."""
-    H, dmu = _fd_force_dipole_derivs(mol, xc, step, origin, n_radial, lebedev, scf_kw)
+                grid: Becke | None = None, **scf_kw) -> IRSpectrum:
+    """Harmonic IR spectrum from ``A_k ∝ |dμ/dQ_k|²`` (see :class:`IRSpectrum`)."""
+    _, g = _grid(mol, grid)
+    H, dmu = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw)
     freq, V, m3 = _harmonic(H, mol)
     dmu_dQ = dmu @ (V / np.sqrt(m3)[:, None])            # (3, n_modes)
     intens = IR_AU_TO_KM_MOL * np.sum(dmu_dQ ** 2, axis=0)
-    return {"frequencies": jnp.asarray(freq), "intensities": jnp.asarray(intens)}
+    return IRSpectrum(frequencies=jnp.asarray(freq), intensities=jnp.asarray(intens))
 
 
 def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
-                   origin=(0.0, 0.0, 0.0), n_radial: int = 75, lebedev: int = 302,
-                   **scf_kw) -> dict:
+                   origin=(0.0, 0.0, 0.0), grid: Becke | None = None,
+                   **scf_kw) -> RamanSpectrum:
     """Harmonic Raman activities (Å⁴/amu, up to the usual constant) from the
     polarizability derivatives ``dα/dQ``. Expensive: a polarizability (field FD)
     at every ±Cartesian displacement (``O(N)`` Hessians' worth of work)."""
     coords0 = np.asarray(mol.atom_coords())
     N = len(coords0); n = 3 * N
-    H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, n_radial, lebedev, scf_kw)
+    _, g = _grid(mol, grid)
+    H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw)
     freq, V, m3 = _harmonic(H, mol)
 
     dalpha = np.zeros((n, 3, 3))
@@ -259,10 +285,10 @@ def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
             cm = coords0.copy(); cm[a, k] -= step
             ap = np.asarray(polarizability(
                 Molecule(mol.symbols, cp, mol.basis), xc, field=field, origin=origin,
-                n_radial=n_radial, lebedev=lebedev, **scf_kw))
+                grid=g, **scf_kw))
             am = np.asarray(polarizability(
                 Molecule(mol.symbols, cm, mol.basis), xc, field=field, origin=origin,
-                n_radial=n_radial, lebedev=lebedev, **scf_kw))
+                grid=g, **scf_kw))
             dalpha[3 * a + k] = (ap - am) / (2.0 * step)
 
     L = V / np.sqrt(m3)[:, None]                          # (n, n_modes)
@@ -275,28 +301,29 @@ def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
         + 6.0 * (dadq[:, 0, 1] ** 2 + dadq[:, 1, 2] ** 2 + dadq[:, 0, 2] ** 2)
     )
     activity = 45.0 * abar ** 2 + 7.0 * g2
-    return {"frequencies": jnp.asarray(freq), "activities": jnp.asarray(activity)}
+    return RamanSpectrum(frequencies=jnp.asarray(freq), activities=jnp.asarray(activity))
 
 
 def alchemical_deriv(
     mol, xc: XCFunctional, *,
-    spherical: bool = False, n_radial: int = 75, lebedev: int = 302, **scf_kw,
+    grid: Becke | None = None, **scf_kw,
 ) -> Float[Array, "n_atom"]:
     """Alchemical gradient ``∂E/∂Z_A`` at fixed electron count (Ha per unit charge).
 
     Hellmann-Feynman: the converged density is held fixed (Löwdin projector) and the
     energy is differentiated w.r.t. the nuclear charges, which enter only the
     nuclear-attraction and nuclear-repulsion terms."""
-    gc, gw = _grid(mol, n_radial, lebedev)
-    ks = RKS.from_molecule(mol, xc, gc, gw, spherical=spherical)
-    res = rks_scf(ks, **scf_kw)
-    Z = jax.lax.stop_gradient(res.mo_coeff[:, : mol.nelectron // 2])
+    (gc, gw), _ = _grid(mol, grid)
+    ks = KS(mol, xc, grid=(gc, gw))
+    res = scf(ks, **scf_kw)
+    Z = jax.lax.stop_gradient(res.mo_coeff[0][:, : mol.nelectron // 2])
     basis = ks.basis
     coords = jnp.asarray(mol.atom_coords())
     charges0 = jnp.asarray(mol.atom_charges(), dtype=jnp.float64)
 
     def energy(charges):
-        k = RKS._assemble(basis, coords, charges, mol.nelectron, xc, gc, gw)
-        return k.total(_density_from_Z(Z, k.S))
+        k = KS(System(basis=basis, coords=coords, charges=charges,
+                      nelec=mol.nelectron), xc, grid=(gc, gw))
+        return k.total(_density_from_Z(Z, k.S)[None])
 
     return jax.grad(energy)(charges0)

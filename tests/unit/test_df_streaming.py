@@ -1,4 +1,4 @@
-"""Streamed RI-J / RI-K (df_chunk) matches materialized density fitting.
+"""Streamed RI-J / RI-K (df(..., chunk=)) matches materialized density fitting.
 
 The streamed path forms γ_P (and, for hybrids, the orbital-chunk RI-K exchange)
 without materializing the nao²×naux 3-center tensor; the DF energy must match the
@@ -13,11 +13,8 @@ from pyscf import dft, gto
 
 from dftax.basis.loader import build_basis_data
 from dftax.energy.xc import LDA, PBE, PBE0
-from dftax.ks.energy import RKS
-from dftax.ks.energy import UKS
+from dftax import KS, df, scf
 from dftax.ks.terms import _streamed_df_rij
-from dftax.ks.scf import rks_scf
-from dftax.ks.scf import uks_scf
 
 AUX = "def2-universal-jkfit"
 
@@ -29,7 +26,7 @@ def _e2_rks(ks, P):
 
 def _e2_uks(ks, Pa, Pb):
     """Coulomb + exact-exchange energy of an open-shell ks at (Pα, Pβ)."""
-    return ks.coulomb.energy(jnp.stack([Pa, Pb]), ks.S, (ks.nalpha, ks.nbeta))
+    return ks.coulomb.energy(jnp.stack([Pa, Pb]), ks.S, (ks.nocc[0], ks.nocc[1]))
 
 
 def _ch3():
@@ -49,8 +46,8 @@ def test_streamed_rij_matches_materialized(water_mol):
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
 
-    ks = RKS.from_pyscf(water_mol, LDA(), grid[0], grid[1], auxbasis=AUX)
-    P = rks_scf(ks).P
+    ks = KS(water_mol, LDA(), grid=(grid[0], grid[1]), coulomb=df(AUX))
+    P = scf(ks).P[0]
 
     aux = build_basis_data(
         [water_mol.atom_symbol(i) for i in range(water_mol.natm)],
@@ -66,7 +63,7 @@ def test_streamed_rij_matches_materialized(water_mol):
 @pytest.mark.pyscf
 @pytest.mark.float64
 def test_df_chunk_hybrid_matches_materialized(water_mol):
-    """Hybrid + df_chunk streams RI-K (orbital-chunk custom_vjp); the DF
+    """Hybrid + df(chunk=) streams RI-K (orbital-chunk custom_vjp); the DF
     energy must match the materialized DF hybrid. Fixed-P (no streamed SCF loop)
     keeps the unit test cheap."""
     mf = dft.RKS(water_mol)
@@ -75,9 +72,9 @@ def test_df_chunk_hybrid_matches_materialized(water_mol):
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks_mat = RKS.from_pyscf(water_mol, PBE0(), grid[0], grid[1], auxbasis=AUX)
-    P = rks_scf(ks_mat).P
-    ks_str = RKS.from_pyscf(water_mol, PBE0(), grid[0], grid[1], auxbasis=AUX, df_chunk=50)
+    ks_mat = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX))
+    P = scf(ks_mat).P[0]
+    ks_str = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50))
     e_mat = float(_e2_rks(ks_mat, P))
     e_str = float(_e2_rks(ks_str, P))
     assert abs(e_str - e_mat) < 1e-8, f"streamed RI-J+RI-K {e_str} vs mat {e_mat}"
@@ -87,7 +84,7 @@ def test_df_chunk_hybrid_matches_materialized(water_mol):
 @pytest.mark.pyscf
 @pytest.mark.float64
 def test_screened_df_chunk_matches_dense(water_mol):
-    """Schwarz-screened streamed RI-J (df_screen) matches the dense streamed RI-J
+    """Schwarz-screened streamed RI-J (df(screen=)) matches the dense streamed RI-J
     at a fixed density (water has no negligible pairs, so screening is exact)."""
     mf = dft.RKS(water_mol)
     mf.xc = "pbe"
@@ -95,10 +92,10 @@ def test_screened_df_chunk_matches_dense(water_mol):
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks_dense = RKS.from_pyscf(water_mol, PBE(), grid[0], grid[1], auxbasis=AUX, df_chunk=50)
-    P = rks_scf(RKS.from_pyscf(water_mol, PBE(), grid[0], grid[1], auxbasis=AUX)).P
-    ks_scr = RKS.from_pyscf(water_mol, PBE(), grid[0], grid[1], auxbasis=AUX,
-                            df_chunk=50, df_screen=1e-10)
+    ks_dense = KS(water_mol, PBE(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50))
+    P = scf(KS(water_mol, PBE(), grid=(grid[0], grid[1]), coulomb=df(AUX))).P[0]
+    ks_scr = KS(water_mol, PBE(), grid=(grid[0], grid[1]),
+                coulomb=df(AUX, chunk=50, screen=1e-10))
     e_dense = float(_e2_rks(ks_dense, P))
     e_scr = float(_e2_rks(ks_scr, P))
     assert abs(e_scr - e_dense) < 1e-8, f"screened {e_scr} vs dense {e_dense}"
@@ -117,9 +114,9 @@ def test_streamed_rik_fock_matches_materialized(water_mol):
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks_mat = RKS.from_pyscf(water_mol, PBE0(), grid[0], grid[1], auxbasis=AUX)
-    P = rks_scf(ks_mat).P
-    ks_str = RKS.from_pyscf(water_mol, PBE0(), grid[0], grid[1], auxbasis=AUX, df_chunk=50)
+    ks_mat = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX))
+    P = scf(ks_mat).P[0]
+    ks_str = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50))
 
     sym = lambda M: 0.5 * (M + M.T)
     F_mat = sym(jax.grad(lambda Q: _e2_rks(ks_mat, Q))(P))  # materialized: full autodiff
@@ -142,9 +139,11 @@ def test_streamed_uks_hybrid_empty_beta():
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks_mat = UKS.from_pyscf(mol, PBE0(), grid[0], grid[1], auxbasis=AUX)
-    Pa, Pb = uks_scf(ks_mat).P
-    ks_str = UKS.from_pyscf(mol, PBE0(), grid[0], grid[1], auxbasis=AUX, df_chunk=50)
+    ks_mat = KS(mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX), spin=mol.spin)
+    Pa, Pb = scf(ks_mat).P
+    ks_str = KS(
+        mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50), spin=mol.spin
+    )
     e_mat = float(_e2_uks(ks_mat, Pa, Pb))
     e_str = float(_e2_uks(ks_str, Pa, Pb))
     assert abs(e_str - e_mat) < 1e-8, f"empty-β streamed {e_str} vs mat {e_mat}"
@@ -154,7 +153,7 @@ def test_streamed_uks_hybrid_empty_beta():
 @pytest.mark.pyscf
 @pytest.mark.float64
 def test_streamed_uks_rik_matches_materialized():
-    """Streamed per-spin UKS RI-K (df_chunk) == materialized DF hybrid, on a doublet
+    """Streamed per-spin UKS RI-K (df(chunk=)) == materialized DF hybrid, on a doublet
     with a non-empty β channel (CH₃)."""
     mol = _ch3()
     mf = dft.UKS(mol)
@@ -163,9 +162,11 @@ def test_streamed_uks_rik_matches_materialized():
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks_mat = UKS.from_pyscf(mol, PBE0(), grid[0], grid[1], auxbasis=AUX)
-    Pa, Pb = uks_scf(ks_mat).P
-    ks_str = UKS.from_pyscf(mol, PBE0(), grid[0], grid[1], auxbasis=AUX, df_chunk=50)
+    ks_mat = KS(mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX), spin=mol.spin)
+    Pa, Pb = scf(ks_mat).P
+    ks_str = KS(
+        mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50), spin=mol.spin
+    )
     e_mat = float(_e2_uks(ks_mat, Pa, Pb))
     e_str = float(_e2_uks(ks_str, Pa, Pb))
     assert abs(e_str - e_mat) < 1e-8, f"UKS streamed RI-K {e_str} vs mat {e_mat}"

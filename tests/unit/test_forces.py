@@ -11,9 +11,8 @@ import pytest
 
 from dftax.energy.xc import LDA
 from dftax.system.molecule import Molecule
-from dftax.ks.energy import RKS
-from dftax.ks.scf import rks_scf
-from dftax.ks.forces import rks_forces, _density_from_Z
+from dftax import KS, becke, df, scf, forces
+from dftax.ks.forces import _density_from_Z
 from dftax.grid import becke_grid
 
 NR, LEB = 35, 50
@@ -29,13 +28,13 @@ class TestForces:
         def energy(coords):
             m = Molecule(mol.symbols, coords, mol.basis)
             gc, gw = becke_grid(m.symbols, m.atom_coords(), NR, LEB)
-            return rks_scf(
-                RKS.from_molecule(m, xc, gc, gw), e_tol=1e-10, d_tol=1e-8
+            return scf(
+                KS(m, xc, grid=(gc, gw)), e_tol=1e-10, d_tol=1e-8
             ).e_tot
 
         gc, gw = becke_grid(mol.symbols, c0, NR, LEB)
-        res = rks_scf(RKS.from_molecule(mol, xc, gc, gw), e_tol=1e-10, d_tol=1e-8)
-        F = rks_forces(mol, xc, res.mo_coeff[:, :1], n_radial=NR, lebedev=LEB)
+        res = scf(KS(mol, xc, grid=(gc, gw)), e_tol=1e-10, d_tol=1e-8)
+        F = forces(mol, xc, (res.mo_coeff[0][:, :1],), grid=becke(NR, LEB))
 
         # Translational invariance: net force vanishes.
         assert float(np.abs(np.asarray(F.sum(axis=0))).max()) < 1e-8
@@ -52,10 +51,10 @@ class TestForces:
         # with nocc > 1, dE/dZ through the (solve-based) density must vanish.
         mol = Molecule.from_xyz("O 0 0 0; H 0.96 0 0; H -0.24 0.93 0", "sto-3g")
         gc, gw = becke_grid(mol.symbols, mol.atom_coords(), 30, 50)
-        ks = RKS.from_molecule(mol, LDA(), gc, gw)
-        res = rks_scf(ks, e_tol=1e-10, d_tol=1e-8)
-        Z = res.mo_coeff[:, : mol.nelectron // 2]
-        gZ = jax.grad(lambda Y: ks.total(_density_from_Z(Y, ks.S)))(Z)
+        ks = KS(mol, LDA(), grid=(gc, gw))
+        res = scf(ks, e_tol=1e-10, d_tol=1e-8)
+        Z = res.mo_coeff[0][:, : mol.nelectron // 2]
+        gZ = jax.grad(lambda Y: ks.total(_density_from_Z(Y, ks.S)[None]))(Z)
         assert float(jnp.linalg.norm(gZ)) < 1e-6
 
 
@@ -89,16 +88,19 @@ class TestDensityFittingForces:
         def energy(coords):
             m = Molecule(mol.symbols, coords, mol.basis)
             gc, gw = becke_grid(m.symbols, m.atom_coords(), NR, LEB)
-            return rks_scf(
-                RKS.from_molecule(m, xc, gc, gw, auxbasis=self.AUX),
+            return scf(
+                KS(m, xc, grid=(gc, gw), coulomb=df(self.AUX)),
                 e_tol=1e-10, d_tol=1e-8,
             ).e_tot
 
         gc, gw = becke_grid(mol.symbols, c0, NR, LEB)
-        res = rks_scf(
-            RKS.from_molecule(mol, xc, gc, gw, auxbasis=self.AUX), e_tol=1e-10, d_tol=1e-8
+        res = scf(
+            KS(mol, xc, grid=(gc, gw), coulomb=df(self.AUX)), e_tol=1e-10, d_tol=1e-8
         )
-        F = rks_forces(mol, xc, res.mo_coeff[:, :1], auxbasis=self.AUX, n_radial=NR, lebedev=LEB)
+        F = forces(
+            mol, xc, (res.mo_coeff[0][:, :1],),
+            grid=becke(NR, LEB), coulomb=df(self.AUX),
+        )
 
         assert bool(np.all(np.isfinite(np.asarray(F))))
         assert float(np.abs(np.asarray(F.sum(axis=0))).max()) < 1e-8

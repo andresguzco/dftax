@@ -16,6 +16,7 @@ from dftax.energy.xc import LDA
 from dftax.integrals.eri4c import eri4c_matrix, screened_quartets, _unique_quartets
 from dftax.ks.energy import RKS
 from dftax.ks.scf import rks_scf
+from dftax.ks.terms import DFCoulomb
 
 AUX = "def2-universal-jkfit"
 
@@ -71,4 +72,4 @@ def test_eri_screen_ignored_under_density_fitting(water_mol):
     ks = RKS.from_pyscf(
         water_mol, LDA(), grid[0], grid[1], auxbasis=AUX, eri_screen=1e-10
     )
-    assert ks.eri is None and ks.int3c is not None
+    assert isinstance(ks.coulomb, DFCoulomb)

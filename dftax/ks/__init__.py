@@ -11,6 +11,11 @@ minimizers, analytic forces, and high-level entry points, including the unified
 
 from dftax.ks.energy import RKS
 from dftax.ks.energy_uks import UKS
+from dftax.ks.terms import (
+    exact, df,
+    CoulombTerm, ExactCoulomb, StreamedExactCoulomb, DFCoulomb, StreamedDFCoulomb,
+    XCTerm, GridXC, StreamedGridXC,
+)
 from dftax.ks.scf import rks_scf, SCFResult
 from dftax.ks.scf_uks import uks_scf, UKSResult
 from dftax.ks.minimize import rks_minimize
@@ -28,6 +33,9 @@ from dftax.ks.properties import (
 from dftax.ks.implicit import implicit_density
 
 __all__ = [
+    "exact", "df",
+    "CoulombTerm", "ExactCoulomb", "StreamedExactCoulomb", "DFCoulomb",
+    "StreamedDFCoulomb", "XCTerm", "GridXC", "StreamedGridXC",
     "RKS", "rks_scf", "rks_minimize", "rks_forces", "SCFResult", "run_rks",
     "UKS", "uks_scf", "uks_minimize", "uks_forces", "UKSResult", "run_uks",
     "run_ks",

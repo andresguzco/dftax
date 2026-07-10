@@ -11,13 +11,25 @@ import pytest
 
 from pyscf import dft, gto
 
+from dftax.basis.loader import build_basis_data
 from dftax.energy.xc import LDA, PBE, PBE0
-from dftax.ks.energy import RKS, _streamed_df_rij
+from dftax.ks.energy import RKS
 from dftax.ks.energy_uks import UKS
+from dftax.ks.terms import _streamed_df_rij
 from dftax.ks.scf import rks_scf
 from dftax.ks.scf_uks import uks_scf
 
 AUX = "def2-universal-jkfit"
+
+
+def _e2_rks(ks, P):
+    """Coulomb + exact-exchange energy of a closed-shell ks at density P."""
+    return ks.coulomb.energy(P[None], ks.S, (ks.nelec // 2,))
+
+
+def _e2_uks(ks, Pa, Pb):
+    """Coulomb + exact-exchange energy of an open-shell ks at (Pα, Pβ)."""
+    return ks.coulomb.energy(jnp.stack([Pa, Pb]), ks.S, (ks.nalpha, ks.nbeta))
 
 
 def _ch3():
@@ -40,9 +52,13 @@ def test_streamed_rij_matches_materialized(water_mol):
     ks = RKS.from_pyscf(water_mol, LDA(), grid[0], grid[1], auxbasis=AUX)
     P = rks_scf(ks).P
 
-    g = jnp.einsum("mnP,mn->P", ks.int3c, P)
-    ej_mat = 0.5 * float(jnp.dot(g, ks.int2c_inv @ g))
-    ej_str = float(_streamed_df_rij(ks.basis, ks.aux_basis, ks.int2c_inv, P, 50))
+    aux = build_basis_data(
+        [water_mol.atom_symbol(i) for i in range(water_mol.natm)],
+        water_mol.atom_coords(), AUX,
+    )
+    g = jnp.einsum("mnP,mn->P", ks.coulomb.int3c, P)
+    ej_mat = 0.5 * float(jnp.dot(g, ks.coulomb.int2c_inv @ g))
+    ej_str = float(_streamed_df_rij(ks.basis, aux, ks.coulomb.int2c_inv, P, 50))
     assert abs(ej_str - ej_mat) < 1e-8, f"streamed {ej_str} vs mat {ej_mat}"
 
 
@@ -62,8 +78,8 @@ def test_df_chunk_hybrid_matches_materialized(water_mol):
     ks_mat = RKS.from_pyscf(water_mol, PBE0(), grid[0], grid[1], auxbasis=AUX)
     P = rks_scf(ks_mat).P
     ks_str = RKS.from_pyscf(water_mol, PBE0(), grid[0], grid[1], auxbasis=AUX, df_chunk=50)
-    e_mat = float(ks_mat._coulomb_exchange(P))
-    e_str = float(ks_str._coulomb_exchange(P))
+    e_mat = float(_e2_rks(ks_mat, P))
+    e_str = float(_e2_rks(ks_str, P))
     assert abs(e_str - e_mat) < 1e-8, f"streamed RI-J+RI-K {e_str} vs mat {e_mat}"
 
 
@@ -83,8 +99,8 @@ def test_screened_df_chunk_matches_dense(water_mol):
     P = rks_scf(RKS.from_pyscf(water_mol, PBE(), grid[0], grid[1], auxbasis=AUX)).P
     ks_scr = RKS.from_pyscf(water_mol, PBE(), grid[0], grid[1], auxbasis=AUX,
                             df_chunk=50, df_screen=1e-10)
-    e_dense = float(ks_dense._coulomb_exchange(P))
-    e_scr = float(ks_scr._coulomb_exchange(P))
+    e_dense = float(_e2_rks(ks_dense, P))
+    e_scr = float(_e2_rks(ks_scr, P))
     assert abs(e_scr - e_dense) < 1e-8, f"screened {e_scr} vs dense {e_dense}"
 
 
@@ -106,8 +122,8 @@ def test_streamed_rik_fock_matches_materialized(water_mol):
     ks_str = RKS.from_pyscf(water_mol, PBE0(), grid[0], grid[1], auxbasis=AUX, df_chunk=50)
 
     sym = lambda M: 0.5 * (M + M.T)
-    F_mat = sym(jax.grad(ks_mat._coulomb_exchange)(P))   # materialized: full autodiff
-    F_str = sym(jax.grad(ks_str._coulomb_exchange)(P))   # streamed: custom_vjp backward
+    F_mat = sym(jax.grad(lambda Q: _e2_rks(ks_mat, Q))(P))  # materialized: full autodiff
+    F_str = sym(jax.grad(lambda Q: _e2_rks(ks_str, Q))(P))  # streamed: custom_vjp backward
     assert float(jnp.max(jnp.abs(F_str - F_mat))) < 1e-6
 
 
@@ -129,8 +145,8 @@ def test_streamed_uks_hybrid_empty_beta():
     ks_mat = UKS.from_pyscf(mol, PBE0(), grid[0], grid[1], auxbasis=AUX)
     Pa, Pb = uks_scf(ks_mat).P
     ks_str = UKS.from_pyscf(mol, PBE0(), grid[0], grid[1], auxbasis=AUX, df_chunk=50)
-    e_mat = float(ks_mat._coulomb_exchange(Pa, Pb))
-    e_str = float(ks_str._coulomb_exchange(Pa, Pb))
+    e_mat = float(_e2_uks(ks_mat, Pa, Pb))
+    e_str = float(_e2_uks(ks_str, Pa, Pb))
     assert abs(e_str - e_mat) < 1e-8, f"empty-β streamed {e_str} vs mat {e_mat}"
 
 
@@ -150,6 +166,6 @@ def test_streamed_uks_rik_matches_materialized():
     ks_mat = UKS.from_pyscf(mol, PBE0(), grid[0], grid[1], auxbasis=AUX)
     Pa, Pb = uks_scf(ks_mat).P
     ks_str = UKS.from_pyscf(mol, PBE0(), grid[0], grid[1], auxbasis=AUX, df_chunk=50)
-    e_mat = float(ks_mat._coulomb_exchange(Pa, Pb))
-    e_str = float(ks_str._coulomb_exchange(Pa, Pb))
+    e_mat = float(_e2_uks(ks_mat, Pa, Pb))
+    e_str = float(_e2_uks(ks_str, Pa, Pb))
     assert abs(e_str - e_mat) < 1e-8, f"UKS streamed RI-K {e_str} vs mat {e_mat}"

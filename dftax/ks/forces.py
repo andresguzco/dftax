@@ -23,6 +23,7 @@ from dftax.energy.xc import XCFunctional
 from dftax.basis.loader import build_basis_data
 from dftax.grid import becke_grid
 from dftax.ks.energy import RKS
+from dftax.ks.terms import df
 
 
 def _density_from_Z(Z, S):
@@ -83,8 +84,10 @@ def rks_forces(
         if auxbasis is not None:
             aux_basis = eqx.tree_at(lambda b: b.centers, aux_t, coords[aux_atom_idx])
         grid_coords, grid_weights = becke_grid(symbols, coords, n_radial, lebedev)
+        spec = df(aux_basis) if aux_basis is not None else None   # materialized DF
         ks = RKS._assemble(
-            basis, coords, charges, nelec, xc, grid_coords, grid_weights, aux_basis
+            basis, coords, charges, nelec, xc, grid_coords, grid_weights,
+            coulomb=spec,
         )
         return ks.total(_density_from_Z(Z, ks.S))
 

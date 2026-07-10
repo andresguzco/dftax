@@ -21,6 +21,7 @@ from dftax.energy.xc import XCFunctional
 from dftax.basis.loader import build_basis_data
 from dftax.grid import becke_grid
 from dftax.ks.energy_uks import UKS
+from dftax.ks.terms import df
 
 
 def _spin_density_from_Z(Z, S):
@@ -82,9 +83,10 @@ def uks_forces(
         if auxbasis is not None:
             aux_basis = eqx.tree_at(lambda b: b.centers, aux_t, coords[aux_atom_idx])
         grid_coords, grid_weights = becke_grid(symbols, coords, n_radial, lebedev)
+        spec = df(aux_basis) if aux_basis is not None else None   # materialized DF
         ks = UKS._assemble(
             basis, coords, charges, nelec, spin, xc,
-            grid_coords, grid_weights, aux_basis,
+            grid_coords, grid_weights, coulomb=spec,
         )
         Pa = _spin_density_from_Z(Za, ks.S)
         Pb = _spin_density_from_Z(Zb, ks.S)

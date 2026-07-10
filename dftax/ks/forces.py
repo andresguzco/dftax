@@ -22,9 +22,10 @@ from jaxtyping import Array, Float
 from dftax.energy.xc import XCFunctional
 from dftax.basis.loader import build_basis_data
 from dftax.grid import Becke, becke, becke_grid
+from dftax.integrals import overlap_matrix
 from dftax.ks.energy import KS, System
 from dftax.ks.scf import KSResult
-from dftax.ks.terms import DFSpec, ExactSpec, df
+from dftax.ks.terms import DFSpec, ExactSpec, _rik_occ_orbitals, df
 
 
 def _density_from_Z(Z, S):
@@ -47,12 +48,26 @@ def _spin_density_from_Z(Z, S):
     return Z @ jnp.linalg.solve(M, Z.T)
 
 
-def _occupied_coefficients(result):
+def _occupied_coefficients(result, S):
     """Per-channel occupied coefficients from a :class:`KSResult` (or accept
-    an explicit tuple of arrays / a bare closed-shell array)."""
+    an explicit tuple of arrays / a bare closed-shell array).
+
+    From a result, the coefficients are extracted from ``result.P`` — the
+    density the solver actually returned — not from the ``mo_coeff`` packing:
+    minimize's aufbau-ordered canonical orbitals need not span ``P`` when the
+    optimization stopped short of ``g_tol`` or settled at a non-aufbau /
+    degenerate-frontier stationary point, and the envelope-theorem force
+    identity requires the frozen projector to span the stationary density.
+    The extraction (``_rik_occ_orbitals``) is a forward-only eigh of the
+    near-idempotent projector — its top-``nocc`` eigenvalues cluster at the
+    occupation weight, cleanly separated from the null space — and is never
+    differentiated (the coefficients are ``stop_gradient``-ed).
+    """
     if isinstance(result, KSResult):
+        dscale = 0.5 if len(result.nocc) == 1 else 1.0
         return tuple(
-            result.mo_coeff[s][:, :n] for s, n in enumerate(result.nocc)
+            _rik_occ_orbitals(result.P[s], S, n, dscale)
+            for s, n in enumerate(result.nocc)
         )
     if isinstance(result, (tuple, list)):
         return tuple(jnp.asarray(Z) for Z in result)
@@ -77,7 +92,10 @@ def forces(
         xc: the exchange-correlation functional.
         result: the converged :class:`~dftax.ks.scf.KSResult` (from
             :func:`~dftax.ks.scf.scf` or :func:`~dftax.ks.minimize.minimize`),
-            or the per-channel occupied coefficients directly.
+            or the per-channel occupied coefficients directly. From a result
+            the frozen density is taken from ``result.P`` (see
+            :func:`_occupied_coefficients`), so the forces belong to exactly
+            the density the solver returned.
         grid: Becke-grid quality (a :func:`~dftax.grid.becke` spec; match the
             energy calculation). Explicit point grids cannot follow the nuclei,
             so only Becke specs are accepted.
@@ -96,10 +114,6 @@ def forces(
     if isinstance(coulomb, ExactSpec) and (coulomb.stream or coulomb.screen):
         raise ValueError("forces support only the plain materialized exact() backend.")
 
-    Zs = tuple(jax.lax.stop_gradient(Z) for Z in _occupied_coefficients(result))
-    w = 2.0 if len(Zs) == 1 else 1.0
-    spin = None if len(Zs) == 1 else Zs[0].shape[1] - Zs[1].shape[1]
-
     symbols = mol.symbols
     coords0 = jnp.asarray(mol.atom_coords())
     charges = jnp.asarray(mol.atom_charges())
@@ -109,6 +123,14 @@ def forces(
         symbols, mol.atom_coords(), mol.basis, return_atom_index=True,
         spherical=getattr(mol, "spherical", False),
     )
+    # Reference-geometry overlap, needed to extract the occupied orbitals
+    # from result.P (only the KSResult path uses it).
+    S0 = overlap_matrix(basis_t) if isinstance(result, KSResult) else None
+    Zs = tuple(
+        jax.lax.stop_gradient(Z) for Z in _occupied_coefficients(result, S0)
+    )
+    w = 2.0 if len(Zs) == 1 else 1.0
+    spin = None if len(Zs) == 1 else Zs[0].shape[1] - Zs[1].shape[1]
     atom_idx = jnp.asarray(atom_idx)
     aux_t = None
     aux_atom_idx = None

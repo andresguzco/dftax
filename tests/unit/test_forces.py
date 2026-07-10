@@ -20,6 +20,25 @@ NR, LEB = 35, 50
 
 @pytest.mark.float64
 class TestForces:
+    def test_forces_use_density_not_coefficient_packing(self):
+        """Contract (audit finding 4): from a KSResult, forces must freeze the
+        density the solver actually returned (result.P) — not whatever the
+        mo_coeff packing implies. minimize's aufbau-ordered canonical orbitals
+        need not span P when unconverged or at a degenerate frontier, so
+        scrambling mo_coeff must not change the forces."""
+        import dataclasses
+
+        xc = LDA()
+        mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.85", "sto-3g")
+        grid = becke(NR, LEB)
+        res = scf(KS(mol, xc, grid=grid), e_tol=1e-10, d_tol=1e-8)
+        scrambled = dataclasses.replace(
+            res, mo_coeff=jnp.zeros_like(res.mo_coeff)
+        )
+        F = forces(mol, xc, res, grid=grid)
+        F2 = forces(mol, xc, scrambled, grid=grid)
+        assert float(jnp.max(jnp.abs(F - F2))) < 1e-12
+
     def test_h2_force_matches_finite_difference(self):
         xc = LDA()
         mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.85", "sto-3g")

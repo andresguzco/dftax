@@ -166,10 +166,20 @@ def _atomic_masses(symbols) -> np.ndarray:
     )
 
 
+def _displaced(mol, coords) -> Molecule:
+    """The molecule at a displaced geometry — same electronic system: charge,
+    spin, and AO convention must all survive the rebuild (dropping charge/spin
+    evaluates a different molecule at every displacement)."""
+    return Molecule(
+        mol.symbols, np.asarray(coords), mol.basis,
+        charge=getattr(mol, "charge", 0), spin=getattr(mol, "spin", 0),
+        spherical=getattr(mol, "spherical", False),
+    )
+
+
 def _eval_at(mol, xc, coords, origin, g, scf_kw):
     """Analytic forces ``(n_atom,3)`` and dipole ``(3,)`` at a geometry."""
-    m = Molecule(mol.symbols, np.asarray(coords), mol.basis,
-                 spherical=getattr(mol, "spherical", False))
+    m = _displaced(mol, coords)
     gc, gw = becke_grid(m.symbols, m.atom_coords(), g.n_radial, g.lebedev)
     ks = KS(m, xc, grid=(gc, gw))
     res = scf(ks, **scf_kw)
@@ -289,10 +299,10 @@ def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
             cp = coords0.copy(); cp[a, k] += step
             cm = coords0.copy(); cm[a, k] -= step
             ap = np.asarray(polarizability(
-                Molecule(mol.symbols, cp, mol.basis), xc, field=field, origin=origin,
+                _displaced(mol, cp), xc, field=field, origin=origin,
                 grid=g, **scf_kw))
             am = np.asarray(polarizability(
-                Molecule(mol.symbols, cm, mol.basis), xc, field=field, origin=origin,
+                _displaced(mol, cm), xc, field=field, origin=origin,
                 grid=g, **scf_kw))
             dalpha[3 * a + k] = (ap - am) / (2.0 * step)
 

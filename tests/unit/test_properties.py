@@ -13,7 +13,8 @@ from dftax.energy.xc import PBE
 from dftax.system.molecule import Molecule
 from dftax import (
     KS, System, becke, scf,
-    dipole, polarizability, ir_spectrum, raman_spectrum, alchemical_deriv,
+    dipole, polarizability, hessian, ir_spectrum, raman_spectrum,
+    alchemical_deriv,
 )
 from dftax.ks.properties import _solve_field, _grid
 from dftax.integrals.multipole import dipole_matrices
@@ -71,6 +72,15 @@ class TestDipole:
 
 @pytest.mark.float64
 class TestResponse:
+    def test_hessian_preserves_charge_and_spin(self):
+        """Regression: the displaced-geometry rebuild inside the FD Hessian must
+        keep the molecule's charge/spin — dropping charge made every displaced
+        SCF run the neutral (odd-electron) system and raise mid-Hessian."""
+        mol = Molecule.from_xyz("He 0 0 0; H 0 0 0.774", "sto-3g", charge=1)
+        H = np.asarray(hessian(mol, PBE(), grid=becke(35, 50), **TOL))
+        assert H.shape == (6, 6)
+        assert np.max(np.abs(H - H.T)) < 1e-6
+
     def test_polarizability_symmetric_positive(self):
         mol = Molecule.from_xyz(WATER, "sto-3g")
         a = np.asarray(polarizability(mol, PBE(), field=2e-3, grid=becke(60, 194), **TOL))

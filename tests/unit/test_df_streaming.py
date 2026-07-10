@@ -14,10 +14,10 @@ from pyscf import dft, gto
 from dftax.basis.loader import build_basis_data
 from dftax.energy.xc import LDA, PBE, PBE0
 from dftax.ks.energy import RKS
-from dftax.ks.energy_uks import UKS
+from dftax.ks.energy import UKS
 from dftax.ks.terms import _streamed_df_rij
 from dftax.ks.scf import rks_scf
-from dftax.ks.scf_uks import uks_scf
+from dftax.ks.scf import uks_scf
 
 AUX = "def2-universal-jkfit"
 

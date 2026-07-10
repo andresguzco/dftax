@@ -5,9 +5,10 @@ one call, useful for ML datasets. All shapes are static across the batch (same a
 same basis); only the nuclear coordinates vary, so the only per-geometry array is
 ``centers = coords[atom_index]`` on a shared basis template.
 
-The per-geometry solve is built from the on-device primitives (``RKS._assemble`` +
-``_scf_solve``), bypassing the ``rks_scf``/``uks_scf`` wrappers whose ``float()``/
-``bool()`` host conversions cannot be vmapped. A fixed-shape symmetric (Löwdin)
+The per-geometry solve is built from the on-device primitives (``RKS._assemble`` /
+``UKS._assemble`` + the spin-stacked ``_scf_solve``), bypassing the
+``rks_scf``/``uks_scf`` wrappers whose ``float()``/``bool()`` host conversions
+cannot be vmapped. A fixed-shape symmetric (Löwdin)
 orthonormalizer is used so the orbital dimension is uniform across the batch; this
 assumes a well-conditioned basis (no severe linear dependence), which is the
 conformer-dataset regime this path targets.
@@ -30,12 +31,9 @@ from jaxtyping import Array, Float
 
 from dftax.basis.loader import build_basis_data
 from dftax.grid import becke_grid
-from dftax.ks.energy import RKS
-from dftax.ks.energy_uks import UKS
-from dftax.ks.forces import _density_from_Z
-from dftax.ks.forces_uks import _spin_density_from_Z
+from dftax.ks.energy import RKS, UKS
+from dftax.ks.forces import _density_from_Z, _spin_density_from_Z
 from dftax.ks.scf import _scf_solve
-from dftax.ks.scf_uks import _scf_solve_u
 
 
 def _lowdin(S, eps: float = 1e-9):
@@ -91,11 +89,11 @@ def run_rks_batched(
     def single(coords):
         ks = _assemble(coords)
         e, _P, C, _eps, conv, n = _scf_solve(
-            ks, _lowdin(ks.S), nocc, max_iter, e_tol, d_tol, diis_space, False, level_shift
+            ks, _lowdin(ks.S), max_iter, e_tol, d_tol, diis_space, False, level_shift
         )
         if not forces:
             return e, conv, n, jnp.zeros_like(coords)
-        Z = jax.lax.stop_gradient(C[:, :nocc])
+        Z = jax.lax.stop_gradient(C[0][:, :nocc])
         F = -jax.grad(lambda c: (lambda k: k.total(_density_from_Z(Z, k.S)))(_assemble(c)))(coords)
         return e, conv, n, F
 
@@ -129,13 +127,13 @@ def run_uks_batched(
     @jax.vmap
     def single(coords):
         ks = _assemble(coords)
-        e, _Pa, _Pb, Ca, Cb, _ea, _eb, conv, n = _scf_solve_u(
+        e, _P, C, _eps, conv, n = _scf_solve(
             ks, _lowdin(ks.S), max_iter, e_tol, d_tol, diis_space, False, level_shift
         )
         if not forces:
             return e, conv, n, jnp.zeros_like(coords)
-        Za = jax.lax.stop_gradient(Ca[:, :nalpha])
-        Zb = jax.lax.stop_gradient(Cb[:, :nbeta])
+        Za = jax.lax.stop_gradient(C[0][:, :nalpha])
+        Zb = jax.lax.stop_gradient(C[1][:, :nbeta])
         def energy(c):
             k = _assemble(c)
             return k.total(_spin_density_from_Z(Za, k.S), _spin_density_from_Z(Zb, k.S))

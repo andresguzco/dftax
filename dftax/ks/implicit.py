@@ -125,8 +125,8 @@ def implicit_density(ks: RKS):
     differentiation of the SCF fixed point."""
     from dftax.ks.scf import _scf_solve, canonical_orthonormalizer
     X = canonical_orthonormalizer(ks.S)
-    _, P, _, _, _, _ = _scf_solve(ks, X, ks.nelec // 2, 128, 1e-10, 1e-8, 8, False, 0.0)
-    return P
+    _, P, _, _, _, _ = _scf_solve(ks, X, 128, 1e-10, 1e-8, 8, False, 0.0)
+    return P[0]
 
 
 def _impl_fwd(ks):

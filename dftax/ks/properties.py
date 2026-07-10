@@ -92,7 +92,10 @@ def _solve_field(mol, xc, gc, gw, *, field=None, origin=(0.0, 0.0, 0.0), **scf_k
         ks = eqx.tree_at(lambda k: k.hcore, ks, ks.hcore + jnp.einsum("i,ipq->pq", field, D))
         e_nuc_field = -jnp.dot(field, nuclear_dipole(mol, origin))
     res = scf(ks, **scf_kw)
-    return res.P[0], float(res.e_tot) + float(e_nuc_field), basis
+    # Total density: sum the spin channels (a closed shell is the single
+    # channel; a spin-polarized system needs α+β — P[0] alone silently drops
+    # every β electron from Tr(D·P)).
+    return jnp.sum(res.P, axis=0), float(res.e_tot) + float(e_nuc_field), basis
 
 
 def dipole(
@@ -171,7 +174,9 @@ def _eval_at(mol, xc, coords, origin, g, scf_kw):
     ks = KS(m, xc, grid=(gc, gw))
     res = scf(ks, **scf_kw)
     F = forces(m, xc, res, grid=g)
-    mu = nuclear_dipole(m, origin) - jnp.einsum("ipq,pq->i", dipole_matrices(ks.basis, origin), res.P[0])
+    mu = nuclear_dipole(m, origin) - jnp.einsum(
+        "ipq,pq->i", dipole_matrices(ks.basis, origin), jnp.sum(res.P, axis=0)
+    )
     return np.asarray(F), np.asarray(mu)
 
 

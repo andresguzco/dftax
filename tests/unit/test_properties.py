@@ -48,6 +48,20 @@ class TestDipole:
         mf = dft.RKS(m); mf.xc = "pbe"; mf.grids.level = 5; mf.conv_tol = 1e-12; mf.kernel()
         assert np.max(np.abs(mu - mf.dip_moment(unit="au", verbose=0))) < 1e-5
 
+    def test_dipole_open_shell_vs_pyscf(self):
+        """Regression: a spin-polarized solve must contribute BOTH spin channels
+        to Tr(D·P) — using P[0] alone drops every β electron (silently wrong
+        dipole for any spin != 0 molecule)."""
+        pyscf = pytest.importorskip("pyscf")
+        from pyscf import dft
+        mol = Molecule.from_xyz("O 0 0 0; H 0.9697 0 0", "sto-3g", spin=1)
+        coords = mol.atom_coords()
+        mu = np.asarray(dipole(mol, PBE(), **TOL))
+        m = pyscf.gto.M(atom=[[s, tuple(coords[i])] for i, s in enumerate(mol.symbols)],
+                        basis="sto-3g", unit="Bohr", spin=1, verbose=0)
+        mf = dft.UKS(m); mf.xc = "pbe"; mf.grids.level = 5; mf.conv_tol = 1e-12; mf.kernel()
+        assert np.max(np.abs(mu - mf.dip_moment(unit="au", verbose=0))) < 1e-4
+
     def test_dipole_matrix_symmetric(self):
         mol = Molecule.from_xyz(WATER, "sto-3g")
         basis = KS(mol, PBE(), grid=_grid(mol, becke(35, 50))[0]).basis

@@ -9,7 +9,7 @@ minimizers, analytic forces, and high-level entry points, including the unified
 :func:`~dftax.ks.driver.run_ks` that dispatches restricted/unrestricted by spin.
 """
 
-from dftax.ks.energy import KS, RKS, UKS
+from dftax.ks.energy import KS, RKS, UKS, System
 from dftax.ks.terms import (
     exact, df,
     CoulombTerm, ExactCoulomb, StreamedExactCoulomb, DFCoulomb, StreamedDFCoulomb,
@@ -29,7 +29,7 @@ from dftax.ks.properties import (
 from dftax.ks.implicit import implicit_density
 
 __all__ = [
-    "KS", "exact", "df",
+    "KS", "System", "exact", "df",
     "CoulombTerm", "ExactCoulomb", "StreamedExactCoulomb", "DFCoulomb",
     "StreamedDFCoulomb", "XCTerm", "GridXC", "StreamedGridXC",
     "RKS", "rks_scf", "rks_minimize", "rks_forces", "SCFResult", "run_rks",

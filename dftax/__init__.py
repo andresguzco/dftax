@@ -26,7 +26,9 @@ from dftax.integrals import (
     eri2c_matrix,
     eri3c_matrix,
 )
+from dftax.grid import becke, points
 from dftax.ks import (
+    KS, System, exact, df,
     RKS, run_rks, rks_scf, rks_minimize, rks_forces, SCFResult,
     UKS, run_uks, uks_scf, uks_minimize, uks_forces, UKSResult,
     run_ks,
@@ -34,6 +36,7 @@ from dftax.ks import (
     dipole, polarizability, hessian, vibrations, ir_spectrum, raman_spectrum,
     alchemical_deriv, implicit_density,
 )
+from dftax.system.molecule import Molecule
 
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
@@ -45,6 +48,8 @@ del _pkg_version, PackageNotFoundError
 
 __all__ = [
     "__version__",
+    # unified build API
+    "KS", "System", "Molecule", "exact", "df", "becke", "points",
     "BasisData",
     "extract_basis_data",
     "eval_gto",

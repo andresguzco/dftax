@@ -8,12 +8,55 @@ follow their home atom and the fuzzy-Voronoi weights depend on all atoms, so
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import jax.numpy as jnp
 
 from dftax.system.molecule import symbol_to_Z
 from dftax.grid.lebedev import lebedev_grid
 from dftax.grid.becke import becke_radial, becke_partition, bragg_radius
+
+
+@dataclass(frozen=True)
+class Becke:
+    """Native Becke grid spec (see :func:`becke`)."""
+
+    n_radial: int = 75
+    lebedev: int = 302
+    chunk: int | None = None
+
+
+@dataclass(frozen=True)
+class Points:
+    """Explicit quadrature spec: user-supplied points + weights (see :func:`points`)."""
+
+    coords: object
+    weights: object
+    chunk: int | None = None
+
+
+def becke(n_radial: int = 75, lebedev: int = 302, *, chunk: int | None = None) -> Becke:
+    """Atom-centered Becke grid of ``n_radial`` radial shells × ``lebedev``
+    angular points per atom (the dftax default quadrature).
+
+    Args:
+        n_radial: Becke-mapped Chebyshev radial shells per atom.
+        lebedev: Lebedev angular points per shell (a vendored order; see
+            :func:`~dftax.grid.lebedev.available_lebedev`).
+        chunk: if set, the XC integral is streamed over grid chunks of this many
+            points (AO values recomputed per chunk, O(chunk·nao) memory) instead
+            of materializing the AO grid.
+    """
+    return Becke(n_radial=n_radial, lebedev=lebedev, chunk=chunk)
+
+
+def points(coords, weights, *, chunk: int | None = None) -> Points:
+    """An explicit quadrature grid ``(coords, weights)`` (e.g. from PySCF).
+
+    ``chunk`` streams the XC integral over grid chunks (see :func:`becke`).
+    """
+    return Points(coords=coords, weights=weights, chunk=chunk)
 
 
 def becke_grid(

@@ -57,14 +57,15 @@ spin (or an explicit `spin=`) runs spin-polarized α/β channels.
 
 ## Where to next
 
-- [Getting started](tutorials/getting-started.md): install, precision, a first calculation.
-- [Build & solve](tutorials/drivers.md): the `KS` builder, LDA/PBE/PBE0/B3LYP, `scf` vs `minimize`.
-- [Coulomb backends](tutorials/coulomb-backends.md): exact ERIs, density fitting, streaming, screening.
+Read [All of dftax](all-of-dftax.md) — one page, ~15 minutes, the whole mental
+model. Then:
+
+- [Coulomb backends](tutorials/coulomb-backends.md): exact ERIs, density fitting, streaming, multi-GPU.
 - [Forces](tutorials/forces.md): analytic Pulay-free nuclear gradients.
 - [Batched evaluation](tutorials/batched.md): `vmap` over many geometries.
 - [Properties](tutorials/properties.md): dipole, polarizability, IR/Raman, alchemy.
 - [Implicit differentiation](tutorials/implicit-diff.md): CPHF response, analytic polarizability.
-- [API reference](api.md): the full public surface.
+- [API reference](api/build.md) · [FAQ](faq.md) · [Tips](tips.md)
 
 Accuracy and performance records live in
 [`scripts/bench/BENCHMARKS.md`](https://github.com/andresguzco/dftax/blob/main/scripts/bench/BENCHMARKS.md)

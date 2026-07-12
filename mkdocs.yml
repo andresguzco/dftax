@@ -45,15 +45,26 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Tutorials:
-      - Getting started: tutorials/getting-started.md
-      - Build & solve: tutorials/drivers.md
+  - All of dftax: all-of-dftax.md
+  - Features:
       - Coulomb backends: tutorials/coulomb-backends.md
       - Forces: tutorials/forces.md
       - Batched evaluation: tutorials/batched.md
       - Properties: tutorials/properties.md
       - Implicit differentiation: tutorials/implicit-diff.md
-  - API reference: api.md
+  - API reference:
+      - Building a calculation: api/build.md
+      - Grid specs: api/grids.md
+      - Coulomb backends: api/coulomb.md
+      - Solvers and results: api/solvers.md
+      - Forces and properties: api/forces-properties.md
+      - Batched evaluation: api/batched.md
+      - Multi-device execution: api/multi-device.md
+      - Functionals: api/functionals.md
+      - Integrals and GTO: api/integrals.md
+  - Misc:
+      - FAQ: faq.md
+      - Tips: tips.md
 
 plugins:
   - search

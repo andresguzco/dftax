@@ -31,7 +31,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from dftax.energy.xc import LDA, PBE, PBE0
-from dftax.ks.driver import run_rks, run_uks
+from dftax import KS, becke, scf
 from dftax.system.molecule import Molecule
 
 # sto-3g geometries (Angstrom). Water = closed shell (RKS); CH3 = doublet (UKS).
@@ -60,9 +60,9 @@ def _pyscf_ref(kind, atom, xcstr, basis, spin, level=3):
 
 
 def _energy_on(device, kind, mol, xc_obj, grid):
-    runner = run_rks if kind == "rks" else run_uks
+    spin = None if kind == "rks" else mol.spin   # explicit spin => polarized
     with jax.default_device(device):
-        res = runner(mol, xc_obj, grid=grid)
+        res = scf(KS(mol, xc_obj, grid=grid, spin=spin))
     return float(res.e_tot), bool(res.converged)
 
 
@@ -112,7 +112,7 @@ def gate() -> bool:
 
 
 def _nao(mol) -> int:
-    """Cartesian AO count (what ``run_rks(spherical=False)`` uses); cheap, no integrals."""
+    """Cartesian AO count (the default AO convention); cheap, no integrals."""
     from dftax.basis.loader import build_basis_data
 
     b = build_basis_data(mol.symbols, mol.atom_coords(), mol.basis)
@@ -137,10 +137,10 @@ def probe(max_waters: int) -> None:
         # dedicated cc-pVDZ section below; the compile-time probe uses sto-3g.
         mol = Molecule.from_xyz(WATER, "sto-3g")
         t0 = time.time()
-        e1 = run_rks(mol, PBE(), n_radial=75, lebedev=302).e_tot
+        e1 = scf(KS(mol, PBE(), grid=becke(75, 302))).e_tot
         t_compile = time.time() - t0
         t0 = time.time()
-        run_rks(mol, PBE(), n_radial=75, lebedev=302)  # timed cached run
+        scf(KS(mol, PBE(), grid=becke(75, 302)))  # timed cached run
         t_cached = time.time() - t0
         print("\n[probe] compile vs cached (water/sto-3g PBE, exact):")
         print(f"  nao={_nao(mol)}  E={float(e1):.8f}  1st(compile+run)={t_compile:.2f}s  2nd(cached)={t_cached:.2f}s")
@@ -160,9 +160,9 @@ def probe(max_waters: int) -> None:
             "H 2.147 -1.240 0; H 0 -2.479 0; H -2.147 -1.240 0; H -2.147 1.240 0"
         )
         bz = Molecule.from_xyz(benzene, "sto-3g")
-        run_rks(bz, PBE(), n_radial=50, lebedev=110)  # warm compile
+        scf(KS(bz, PBE(), grid=becke(50, 110)))  # warm compile
         t0 = time.time()
-        res = run_rks(bz, PBE(), n_radial=50, lebedev=110)
+        res = scf(KS(bz, PBE(), grid=becke(50, 110)))
         t_bz = time.time() - t0
         print("\n[probe] f64 throughput (benzene/sto-3g PBE, exact, cached):")
         print(f"  nao={_nao(bz)}  E={res.e_tot:.6f}  iters={res.n_iter}  wall={t_bz:.2f}s")
@@ -177,7 +177,7 @@ def probe(max_waters: int) -> None:
             tensor_gb = nao ** 4 * 8 / 1e9
             try:
                 t0 = time.time()
-                run_rks(mol, LDA(), n_radial=20, lebedev=50, max_iter=1)
+                scf(KS(mol, LDA(), grid=becke(20, 50)), max_iter=1)
                 dt = time.time() - t0
                 print(f"  n={n:3d}  nao={nao:4d}  eri4c~{tensor_gb:7.1f} GB  OK   {dt:6.1f}s")
                 last_ok = (n, nao, tensor_gb)

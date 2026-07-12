@@ -9,9 +9,9 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from dftax import KS, Molecule, becke, mesh, minimize, scf
-from dftax.ks.terms import GridXC, ShardedGridXC, StreamedGridXC
-from dftax.energy.xc import LDA, PBE
+from dftax import KS, Molecule, becke, df, mesh, minimize, scf
+from dftax.ks.terms import GridXC, ShardedDFCoulomb, ShardedGridXC, StreamedGridXC
+from dftax.energy.xc import LDA, PBE, PBE0
 
 jax.config.update("jax_enable_x64", True)
 
@@ -58,6 +58,49 @@ def test_sharded_xc_matches_unsharded():
     e_ref = float(KS(oh, LDA(), grid=GRID).e_xc(Pu))
     e_shd = float(KS(oh, LDA(), grid=GRID, mesh=mesh()).e_xc(Pu))
     assert e_shd == pytest.approx(e_ref, abs=1e-12)
+
+
+@multi
+@pytest.mark.float64
+def test_sharded_df_matches_unsharded():
+    """Aux-sharded RI-J: per-device slabs hold naux/ndev of the 3-center
+    tensor, and the Coulomb energy / full SCF match the single-device DF."""
+    AUX = "def2-universal-jkfit"
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    ks0 = KS(mol, PBE(), grid=GRID, coulomb=df(AUX))
+    P = scf(ks0).P
+    ksm = KS(mol, PBE(), grid=GRID, coulomb=df(AUX), mesh=mesh())
+    assert isinstance(ksm.coulomb, ShardedDFCoulomb)
+
+    nauxp = ksm.coulomb.int3c.shape[2]
+    ndev = len(jax.devices())
+    assert all(
+        s.data.shape[2] == nauxp // ndev
+        for s in ksm.coulomb.int3c.addressable_shards
+    )
+    e0 = float(ks0.coulomb.energy(P, ks0.S, ks0.nocc))
+    em = float(ksm.coulomb.energy(P, ksm.S, ksm.nocc))
+    # rel: the per-slab contraction re-associates the fp sum (observed ~1e-12
+    # relative), which is the expected noise floor, not a physics difference.
+    assert em == pytest.approx(e0, rel=1e-10)
+
+    r0 = scf(ks0, e_tol=1e-10, d_tol=1e-8)
+    r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8)
+    assert r0.converged and r1.converged
+    # Two SCF trajectories whose Fock matrices differ by fp-reassociation
+    # noise agree only to the stopping tolerance, not to machine precision.
+    assert r1.e_tot == pytest.approx(r0.e_tot, abs=1e-9)
+
+
+@multi
+def test_sharded_df_guards():
+    """Unsupported mesh combinations fail loudly at build, not silently."""
+    AUX = "def2-universal-jkfit"
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    with pytest.raises(NotImplementedError):
+        KS(mol, PBE0(), grid=GRID, coulomb=df(AUX), mesh=mesh())   # hybrid RI-K
+    with pytest.raises(NotImplementedError):
+        KS(mol, PBE(), grid=GRID, coulomb=df(AUX, chunk=50), mesh=mesh())
 
 
 @multi

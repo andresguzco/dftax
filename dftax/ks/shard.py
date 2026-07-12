@@ -69,3 +69,53 @@ def _pad_shard_grid(coords, weights, devices):
     jmesh = jax.sharding.Mesh(np.asarray(devices), ("grid",))
     sh = jax.sharding.NamedSharding(jmesh, jax.sharding.PartitionSpec("grid"))
     return jax.device_put(coords, sh), jax.device_put(weights, sh)
+
+
+def _slice_basis(basis, lo, hi):
+    """A BasisData holding functions ``lo:hi`` (per-function arrays share axis 0)."""
+    import equinox as eqx
+
+    return eqx.tree_at(
+        lambda b: (b.centers, b.exponents, b.coefficients, b.angular),
+        basis,
+        (basis.centers[lo:hi], basis.exponents[lo:hi],
+         basis.coefficients[lo:hi], basis.angular[lo:hi]),
+    )
+
+
+def _build_int3c_sharded(basis, aux_basis, devices):
+    """Build the DF 3-center tensor directly in aux-axis shards, one slab per
+    device — no device ever materializes more than its (nao², naux/ndev) slice,
+    which is the whole capacity point.
+
+    Returns ``(int3c, naux_pad)``: the globally-sharded ``(nao, nao, naux_pad)``
+    array (aux axis zero-padded to a multiple of the device count; padded
+    columns contribute exactly zero to γ) and the padded aux dimension.
+    """
+    import numpy as np
+
+    from dftax.integrals import eri3c_matrix
+
+    naux = aux_basis.centers.shape[0]
+    ndev = len(devices)
+    slab = -(-naux // ndev)                                # ceil
+    shards = []
+    for d, dev in enumerate(devices):
+        lo, hi = d * slab, min((d + 1) * slab, naux)
+        aux_d = _slice_basis(aux_basis, lo, hi)
+        with jax.default_device(dev):
+            blk = jax.jit(eri3c_matrix)(basis, aux_d)      # (nao, nao, hi-lo)
+            if hi - lo < slab:
+                blk = jnp.pad(blk, ((0, 0), (0, 0), (0, slab - (hi - lo))))
+            blk.block_until_ready()
+        shards.append(blk)
+
+    nao = shards[0].shape[0]
+    jmesh = jax.sharding.Mesh(np.asarray(devices), ("aux",))
+    sh = jax.sharding.NamedSharding(
+        jmesh, jax.sharding.PartitionSpec(None, None, "aux")
+    )
+    int3c = jax.make_array_from_single_device_arrays(
+        (nao, nao, ndev * slab), sh, [jax.device_put(b, dev) for b, dev in zip(shards, devices)]
+    )
+    return int3c, ndev * slab

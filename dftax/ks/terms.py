@@ -503,6 +503,47 @@ class DFCoulomb(CoulombTerm):
         return e
 
 
+class ShardedDFCoulomb(CoulombTerm):
+    """Materialized RI-J with the 3-center tensor sharded over the aux axis.
+
+    Each device holds a ``(nao, nao, naux/ndev)`` slab of ``int3c`` (built
+    directly in shards; see :func:`dftax.ks.shard._build_int3c_sharded`) and
+    contracts its own slice of ``γ_P = Σ_μν (μν|P) P_μν``; the slices are
+    ``all_gather``-ed (γ is a tiny naux-vector) and the metric quadratic form
+    ``½ γᵀ V⁻¹ γ`` is evaluated replicated. Padded aux columns carry exact
+    zeros in both γ and the (zero-padded) metric inverse, so the energy is the
+    single-device value bit-for-bit up to summation order. Hybrid exact
+    exchange over a sharded tensor is not implemented yet (``hf_coeff == 0``
+    is enforced at build time).
+    """
+
+    int3c: Float[Array, "nao nao nauxp"]
+    int2c_inv: Float[Array, "nauxp nauxp"]
+    devices: tuple = eqx.field(static=True)
+
+    def energy(self, P, S, nocc):
+        import numpy as np
+        from jax.experimental.shard_map import shard_map
+
+        Ptot = jnp.sum(P, axis=0)
+        jmesh = jax.sharding.Mesh(np.asarray(self.devices), ("aux",))
+        spec = jax.sharding.PartitionSpec
+
+        def part(t3, vinv, Pt):
+            g_local = jnp.einsum("mnP,mn->P", t3, Pt)          # local aux slice
+            g = jax.lax.all_gather(g_local, "aux", tiled=True)  # (nauxp,) replicated
+            return 0.5 * jnp.dot(g, vinv @ g)
+
+        # check_rep=False: the static replication checker cannot prove the
+        # post-all_gather value is replicated (it is — every device computes
+        # the identical quadratic form after the gather).
+        return shard_map(
+            part, mesh=jmesh,
+            in_specs=(spec(None, None, "aux"), spec(), spec()),
+            out_specs=spec(), check_rep=False,
+        )(self.int3c, self.int2c_inv, Ptot)
+
+
 class StreamedDFCoulomb(CoulombTerm):
     """Streamed density fitting: RI-J over auxiliary chunks, per-spin streamed
     RI-K for hybrids (see the gradient caveats on :func:`_streamed_df_rik`)."""

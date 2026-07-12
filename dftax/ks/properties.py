@@ -72,10 +72,16 @@ class RamanSpectrum(NamedTuple):
     activities: Array
 
 
-def _grid(mol, grid):
+def _becke_spec(grid) -> Becke:
+    """Validate/default the grid spec without building any points."""
     g = becke() if grid is None else grid
     if not isinstance(g, Becke):
         raise ValueError("properties rebuild their own grids: pass becke(...).")
+    return g
+
+
+def _grid(mol, grid):
+    g = _becke_spec(grid)
     return becke_grid(mol.symbols, mol.atom_coords(), g.n_radial, g.lebedev), g
 
 
@@ -255,7 +261,7 @@ def hessian(mol, xc, *, step: float = 1e-3, origin=(0.0, 0.0, 0.0),
             grid: Becke | None = None, **scf_kw) -> Float[Array, "n n"]:
     """Nuclear Hessian ``∂²E/∂R_A∂R_B`` (Ha/Bohr², shape ``(3N, 3N)``) by central
     finite difference of the analytic Pulay-free forces."""
-    _, g = _grid(mol, grid)
+    g = _becke_spec(grid)   # spec only: the FD legs build their own per-geometry grids
     H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw)
     return jnp.asarray(H)
 
@@ -275,7 +281,7 @@ def vibrations(mol, xc, *, hess=None, step: float = 1e-3,
 def ir_spectrum(mol, xc, *, step: float = 1e-3, origin=(0.0, 0.0, 0.0),
                 grid: Becke | None = None, **scf_kw) -> IRSpectrum:
     """Harmonic IR spectrum from ``A_k ∝ |dμ/dQ_k|²`` (see :class:`IRSpectrum`)."""
-    _, g = _grid(mol, grid)
+    g = _becke_spec(grid)   # spec only: the FD legs build their own per-geometry grids
     H, dmu = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw)
     freq, V, m3 = _harmonic(H, mol)
     dmu_dQ = dmu @ (V / np.sqrt(m3)[:, None])            # (3, n_modes)
@@ -291,7 +297,7 @@ def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
     at every ±Cartesian displacement (``O(N)`` Hessians' worth of work)."""
     coords0 = np.asarray(mol.atom_coords())
     N = len(coords0); n = 3 * N
-    _, g = _grid(mol, grid)
+    g = _becke_spec(grid)   # spec only: the FD legs build their own per-geometry grids
     H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw)
     freq, V, m3 = _harmonic(H, mol)
 

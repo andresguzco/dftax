@@ -61,12 +61,15 @@ from dftax.integrals.eri4c import (
     screened_quartets,
     significant_pairs,
 )
-from dftax.ks.shard import MeshSpec, _pad_shard_grid, _resolve_mesh
+from dftax.ks.shard import (
+    MeshSpec, _build_int3c_sharded, _pad_shard_grid, _resolve_mesh,
+)
 from dftax.ks.terms import (
     CoulombTerm,
     DFSpec,
     ExactSpec,
     GridXC,
+    ShardedDFCoulomb,
     ShardedGridXC,
     StreamedGridXC,
     XCTerm,
@@ -330,19 +333,47 @@ class KS(eqx.Module):
         quartets, qof, pairs = _resolve_screening(spec, basis)
         is_df = isinstance(spec, DFSpec)
         aux_basis = spec.auxbasis if is_df else None
+        shard_df = devices is not None and is_df
+        if shard_df:
+            if spec.chunk is not None:
+                raise NotImplementedError(
+                    "mesh= with a streamed df(chunk=...) backend is not "
+                    "supported; the aux-sharded materialized backend covers "
+                    "that memory regime — use df(auxbasis) with mesh=."
+                )
+            if float(xc.hf_coeff) != 0.0:
+                raise NotImplementedError(
+                    "hybrid exact exchange over a sharded DF tensor is not "
+                    "implemented yet; use a non-hybrid functional or drop mesh=."
+                )
         S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv = _build_integrals(
             basis, coords, charges, grid_coords, aux_basis,
             devices is None and grid_chunk is None,   # sharded AO grid built below
-            not (is_df and spec.chunk is not None),
+            (not shard_df) and not (is_df and spec.chunk is not None),
             quartets, qof, (not is_df) and spec.stream,
         )
         self.S = S
         self.hcore = hcore
         self.e_nn = e_nn
         self.basis = basis
-        self.coulomb = _make_coulomb(
-            spec, basis, eri, int3c, int2c_inv, pairs, float(xc.hf_coeff)
-        )
+        if shard_df:
+            # Built directly in per-device slabs: the capacity path — no
+            # device ever holds more than its naux/ndev slice of the
+            # O(nao²·naux) tensor. The metric inverse is zero-padded to the
+            # padded aux dimension (padded γ entries are exact zeros).
+            int3c_s, nauxp = _build_int3c_sharded(basis, aux_basis, devices)
+            naux = int2c_inv.shape[0]
+            vinv = (
+                jnp.zeros((nauxp, nauxp), int2c_inv.dtype)
+                .at[:naux, :naux].set(int2c_inv)
+            )
+            self.coulomb = ShardedDFCoulomb(
+                int3c=int3c_s, int2c_inv=vinv, devices=devices
+            )
+        else:
+            self.coulomb = _make_coulomb(
+                spec, basis, eri, int3c, int2c_inv, pairs, float(xc.hf_coeff)
+            )
         if devices is not None:
             # Pad the quadrature to the mesh and lay it out sharded; the AO
             # values are built under jit from the sharded coordinates, so each

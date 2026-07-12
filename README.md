@@ -133,6 +133,21 @@ scf(KS(mol, PBE(),
 scf(KS(mol, PBE(), coulomb=exact(stream=True)))               # exact J/K, O(N²) memory
 ```
 
+**Multi-GPU.** One more value shards the calculation across a device mesh:
+
+```python
+from dftax import mesh
+
+scf(KS(mol, PBE0(), coulomb=df("def2-universal-jkfit"), mesh=mesh()))
+```
+
+The quadrature grid is sharded over the devices and the DF 3-center tensor is
+*built and held* in per-device aux slabs (no device ever materializes more than
+its `naux/ndev` slice), with hybrid exact exchange running slab-wise; the dense
+nao² matrices stay replicated. Everything differentiates through the collectives,
+so SCF, direct minimization, and forces are unchanged. `scf_batched(mesh=mesh())`
+instead shards the *batch* axis — data parallelism over conformers.
+
 All of this works for hybrids (streamed RI-K via an exact `custom_vjp`) and for
 open shells. Invalid combinations raise at the factory. See the
 [examples](examples/) and [documentation](https://andresguzco.github.io/dftax/)

@@ -24,6 +24,14 @@
 ::: dftax.ks.forces.forces
 ::: dftax.ks.batched.scf_batched
 ::: dftax.ks.scf.KSResult
+::: dftax.ks.batched.BatchedResult
+
+## Multi-device execution
+
+::: dftax.ks.shard.mesh
+::: dftax.ks.shard.MeshSpec
+::: dftax.ks.terms.ShardedGridXC
+::: dftax.ks.terms.ShardedDFCoulomb
 
 ## Response properties
 

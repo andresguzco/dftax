@@ -45,7 +45,12 @@ cuda12 = ["jax[cuda12]>=0.10.0"]
 # test suite (and as an optional convenience path for building a system from a
 # PySCF Mole). The compute path is pure JAX.
 test = ["pytest>=8.0", "scipy>=1.11", "pyscf>=2.11.0"]
-docs = ["mkdocs-material>=9.5", "mkdocstrings[python]>=0.25"]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.25",
+    "hippogriffe>=0.2",
+    "mkdocs-ipynb>=0.1",
+]
 
 [project.urls]
 Homepage = "https://github.com/andresguzco/dftax"

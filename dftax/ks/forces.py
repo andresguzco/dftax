@@ -26,6 +26,7 @@ from dftax.integrals import overlap_matrix
 from dftax.ks.energy import KS, System
 from dftax.ks.scf import KSResult
 from dftax.ks.terms import DFSpec, ExactSpec, _rik_occ_orbitals, df
+from dftax.system.molecule import Molecule
 
 
 def _density_from_Z(Z, S):
@@ -82,9 +83,9 @@ def _occupied_coefficients(result, S):
 
 
 def forces(
-    mol,
+    mol: "Molecule",
     xc: XCFunctional,
-    result,
+    result: "KSResult | tuple | Array",
     *,
     grid: Becke | None = None,
     coulomb: ExactSpec | DFSpec | None = None,

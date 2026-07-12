@@ -62,4 +62,13 @@
 ::: dftax.integrals.overlap_matrix
 ::: dftax.integrals.kinetic_matrix
 ::: dftax.integrals.nuclear_attraction_matrix
+::: dftax.integrals.nuclear_repulsion
+::: dftax.integrals.eri2c_matrix
+::: dftax.integrals.eri3c_matrix
 ::: dftax.integrals.multipole.dipole_matrices
+
+## GTO basis (low level)
+
+::: dftax.energy.gto.BasisData
+::: dftax.energy.gto.extract_basis_data
+::: dftax.energy.gto.eval_gto

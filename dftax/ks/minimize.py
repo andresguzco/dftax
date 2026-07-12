@@ -77,7 +77,7 @@ def minimize(
     *,
     max_steps: int = 2000,
     g_tol: float = 1e-6,
-    Z0=None,
+    Z0: Array | tuple | None = None,
     verbose: bool = False,
 ) -> KSResult:
     """Minimize the KS energy directly over orthonormalized coefficients.

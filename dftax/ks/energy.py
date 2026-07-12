@@ -281,10 +281,10 @@ class KS(eqx.Module):
 
     def __init__(
         self,
-        system,
+        system: "Molecule | System | object",
         xc: XCFunctional,
         *,
-        grid=None,
+        grid: "Becke | Points | tuple | None" = None,
         coulomb: ExactSpec | DFSpec | None = None,
         spin: int | None = None,
         mesh: MeshSpec | None = None,

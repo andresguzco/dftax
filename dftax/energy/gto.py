@@ -132,7 +132,7 @@ class BasisData(eqx.Module):
     max_l: int = eqx.field(static=True, default=4)
 
 
-def extract_basis_data(mol) -> BasisData:
+def extract_basis_data(mol: "object") -> BasisData:
     """Extract GTO basis data from a PySCF Mole object.
 
     This is a CPU-side function called once at setup.  It returns a

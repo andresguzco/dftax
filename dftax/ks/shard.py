@@ -29,7 +29,7 @@ class MeshSpec:
     devices: tuple | None = None
 
 
-def mesh(devices=None) -> MeshSpec:
+def mesh(devices: tuple | list | None = None) -> MeshSpec:
     """Shard the calculation across a 1-D device mesh.
 
     Args:

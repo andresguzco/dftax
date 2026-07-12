@@ -1,8 +1,48 @@
 site_name: dftax
 site_description: Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox
 repo_url: https://github.com/andresguzco/dftax
+strict: true
+
 theme:
   name: material
+  features:
+    - navigation.sections
+    - toc.integrate
+    - header.autohide
+    - content.code.copy
+  palette:
+    - scheme: default
+      primary: white
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: black
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+    logo: material/atom
+
+extra_css:
+  - _static/custom.css
+extra_javascript:
+  - _static/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+markdown_extensions:
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.superfences
+  - pymdownx.details
+  - admonition
+  - toc:
+      permalink: "¤"
+      toc_depth: 4
+
 nav:
   - Home: index.md
   - Tutorials:
@@ -14,11 +54,25 @@ nav:
       - Properties: tutorials/properties.md
       - Implicit differentiation: tutorials/implicit-diff.md
   - API reference: api.md
+
 plugins:
   - search
+  - hippogriffe:
+      extra_public_objects:
+        - jax.Array
+        - equinox.Module
+        - optax.GradientTransformation
   - mkdocstrings:
       handlers:
         python:
           options:
-            show_source: false
+            force_inspection: true
+            heading_level: 4
             members_order: source
+            show_bases: false
+            show_if_no_docstring: true
+            show_root_heading: true
+            show_signature_annotations: true
+            show_source: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true

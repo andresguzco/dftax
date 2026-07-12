@@ -624,6 +624,56 @@ class StreamedGridXC(XCTerm):
         )
 
 
+class ShardedGridXC(XCTerm):
+    """XC integral sharded over grid points across a 1-D device mesh.
+
+    ``inner`` is an ordinary :class:`GridXC` or :class:`StreamedGridXC` whose
+    grid-axis arrays are padded to a multiple of the device count and laid out
+    sharded over the mesh (see :func:`dftax.ks.shard._pad_shard_grid`). The
+    energy runs each device's slice through the *unmodified* inner math under
+    ``shard_map`` — the density is replicated, the partial energies are
+    ``psum``-reduced — so the quadrature is exactly the single-device sum and
+    the collective differentiates natively (autodiff Fock, forces).
+    """
+
+    inner: XCTerm
+    devices: tuple = eqx.field(static=True)
+
+    def energy(self, P):
+        import numpy as np
+        from jax.experimental.shard_map import shard_map
+
+        jmesh = jax.sharding.Mesh(np.asarray(self.devices), ("grid",))
+        spec = jax.sharding.PartitionSpec
+        rep = spec()                                   # replicated
+        g = spec("grid")                               # shard the leading axis
+
+        if isinstance(self.inner, GridXC):
+            xc = self.inner.xc
+
+            def part(ao, dao, w, Pf):
+                local = GridXC(ao=ao, dao=dao, weights=w, xc=xc)
+                return jax.lax.psum(local.energy(Pf), "grid")
+
+            args = (self.inner.ao, self.inner.dao, self.inner.weights)
+            in_specs = (g, g, g, rep)
+        else:
+            chunk, xc = self.inner.chunk, self.inner.xc
+
+            def part(basis, gc, w, Pf):
+                local = StreamedGridXC(
+                    basis=basis, grid_coords=gc, weights=w, chunk=chunk, xc=xc
+                )
+                return jax.lax.psum(local.energy(Pf), "grid")
+
+            args = (self.inner.basis, self.inner.grid_coords, self.inner.weights)
+            in_specs = (jax.tree.map(lambda _: rep, self.inner.basis), g, g, rep)
+
+        return shard_map(
+            part, mesh=jmesh, in_specs=in_specs, out_specs=rep
+        )(*args, P)
+
+
 # ---------------------------------------------------------------------------
 # Term construction from a resolved spec + built integral arrays
 # ---------------------------------------------------------------------------

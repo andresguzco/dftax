@@ -61,11 +61,13 @@ from dftax.integrals.eri4c import (
     screened_quartets,
     significant_pairs,
 )
+from dftax.ks.shard import MeshSpec, _pad_shard_grid, _resolve_mesh
 from dftax.ks.terms import (
     CoulombTerm,
     DFSpec,
     ExactSpec,
     GridXC,
+    ShardedGridXC,
     StreamedGridXC,
     XCTerm,
     _make_coulomb,
@@ -282,6 +284,7 @@ class KS(eqx.Module):
         grid=None,
         coulomb: ExactSpec | DFSpec | None = None,
         spin: int | None = None,
+        mesh: MeshSpec | None = None,
     ):
         """Build the energy functional.
 
@@ -298,6 +301,9 @@ class KS(eqx.Module):
             spin: ``None`` infers from the system (closed shell → restricted);
                 an explicit ``spin`` (= 2S, including 0) requests
                 spin-polarized α/β channels.
+            mesh: a :func:`~dftax.ks.shard.mesh` spec to shard the calculation
+                across a device mesh (currently: the XC quadrature; the dense
+                nao² matrices stay replicated). ``None`` = single device.
         """
         basis, coords, charges, nelec, sys_spin, symbols = _resolve_system(system)
         if spin is None:
@@ -320,12 +326,14 @@ class KS(eqx.Module):
         grid_coords = jnp.asarray(grid_coords)
         weights = jnp.asarray(grid_weights)
 
+        devices = _resolve_mesh(mesh)
         quartets, qof, pairs = _resolve_screening(spec, basis)
         is_df = isinstance(spec, DFSpec)
         aux_basis = spec.auxbasis if is_df else None
         S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv = _build_integrals(
             basis, coords, charges, grid_coords, aux_basis,
-            grid_chunk is None, not (is_df and spec.chunk is not None),
+            devices is None and grid_chunk is None,   # sharded AO grid built below
+            not (is_df and spec.chunk is not None),
             quartets, qof, (not is_df) and spec.stream,
         )
         self.S = S
@@ -335,7 +343,21 @@ class KS(eqx.Module):
         self.coulomb = _make_coulomb(
             spec, basis, eri, int3c, int2c_inv, pairs, float(xc.hf_coeff)
         )
-        if grid_chunk is None:
+        if devices is not None:
+            # Pad the quadrature to the mesh and lay it out sharded; the AO
+            # values are built under jit from the sharded coordinates, so each
+            # device only ever materializes its own O(ng/ndev · nao) slice.
+            gc_s, gw_s = _pad_shard_grid(grid_coords, weights, devices)
+            if grid_chunk is None:
+                ao_s, dao_s = jax.jit(ao_on_grid)(basis, gc_s)
+                inner = GridXC(ao=ao_s, dao=dao_s, weights=gw_s, xc=xc)
+            else:
+                inner = StreamedGridXC(
+                    basis=basis, grid_coords=gc_s, weights=gw_s,
+                    chunk=grid_chunk, xc=xc,
+                )
+            self.xc_term = ShardedGridXC(inner=inner, devices=devices)
+        elif grid_chunk is None:
             self.xc_term = GridXC(ao=ao, dao=dao, weights=weights, xc=xc)
         else:
             self.xc_term = StreamedGridXC(

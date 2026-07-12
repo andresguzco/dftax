@@ -39,7 +39,7 @@ from dftax.integrals import (
     eri3c_matrix,
 )
 from dftax.ks import (
-    KS, System, exact, df,
+    KS, System, exact, df, mesh,
     scf, minimize, forces, scf_batched, KSResult,
     dipole, polarizability, hessian, vibrations, ir_spectrum, raman_spectrum,
     alchemical_deriv, implicit_density,
@@ -57,7 +57,7 @@ del _pkg_version, PackageNotFoundError
 __all__ = [
     "__version__",
     # build: system + choices-as-values
-    "KS", "System", "Molecule", "exact", "df", "becke", "points",
+    "KS", "System", "Molecule", "exact", "df", "becke", "points", "mesh",
     # run: solver verbs + result
     "scf", "minimize", "forces", "scf_batched", "KSResult",
     # response properties

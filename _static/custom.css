@@ -1,0 +1,25 @@
+/* Equinox-style docs chrome: slightly smaller base font, bordered API entries. */
+
+html {
+    font-size: 110%;
+}
+
+/* Each documented symbol reads as a distinct block: highlighted heading,
+   indented body behind a rule. */
+h4.doc-heading {
+    background-color: var(--md-code-bg-color);
+    border: 1px solid var(--md-default-fg-color--lightest);
+    border-radius: 4px;
+    padding: 0.35em 0.6em;
+}
+
+div.doc-contents:not(.first) {
+    padding-left: 25px;
+    border-left: 4px solid var(--md-default-fg-color--lightest);
+    margin-bottom: 40px;
+}
+
+/* Hide the prev/next footer; the nav is the navigation. */
+.md-footer__inner {
+    display: none;
+}

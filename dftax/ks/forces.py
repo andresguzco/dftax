@@ -21,7 +21,7 @@ from jaxtyping import Array, Float
 
 from dftax.energy.xc import XCFunctional
 from dftax.basis.loader import build_basis_data
-from dftax.grid import Becke, becke, becke_grid
+from dftax.grid import Becke, becke, becke_grid, points
 from dftax.integrals import overlap_matrix
 from dftax.ks.energy import KS, System
 from dftax.ks.scf import KSResult
@@ -97,8 +97,9 @@ def forces(
             :func:`_occupied_coefficients`), so the forces belong to exactly
             the density the solver returned.
         grid: Becke-grid quality (a :func:`~dftax.grid.becke` spec; match the
-            energy calculation). Explicit point grids cannot follow the nuclei,
-            so only Becke specs are accepted.
+            energy calculation — a ``chunk`` on the spec streams the XC grid
+            here too). Explicit point grids cannot follow the nuclei, so only
+            Becke specs are accepted.
         coulomb: :func:`~dftax.ks.terms.exact` (default) or a *materialized*
             :func:`~dftax.ks.terms.df` — the streamed backends do not propagate
             geometry gradients (see :func:`dftax.ks.terms._streamed_df_rik`).
@@ -153,10 +154,13 @@ def forces(
             aux_basis = eqx.tree_at(lambda b: b.centers, aux_t, coords[aux_atom_idx])
             spec = df(aux_basis)                          # materialized DF
         gc, gw = becke_grid(symbols, coords, grid.n_radial, grid.lebedev)
+        # points(..., chunk=...) keeps the spec's XC streaming: silently
+        # materializing the AO grid here would OOM exactly the systems the
+        # chunk was chosen for.
         ks = KS(
             System(basis=basis, coords=coords, charges=charges,
                    nelec=nelec, spin=0 if spin is None else spin),
-            xc, grid=(gc, gw), coulomb=spec, spin=spin,
+            xc, grid=points(gc, gw, chunk=grid.chunk), coulomb=spec, spin=spin,
         )
         P = jnp.stack([w * (Z @ jnp.linalg.solve(Z.T @ ks.S @ Z, Z.T)) for Z in Zs])
         return ks.total(P)

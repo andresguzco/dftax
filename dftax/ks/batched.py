@@ -27,7 +27,7 @@ import jax
 import jax.numpy as jnp
 
 from dftax.basis.loader import build_basis_data
-from dftax.grid import Becke, becke, becke_grid
+from dftax.grid import Becke, becke, becke_grid, points
 from dftax.integrals import nuclear_repulsion
 from dftax.ks.energy import KS, System, _spin_counts
 from dftax.ks.scf import KSResult, _scf_solve
@@ -80,7 +80,7 @@ def scf_batched(
         return KS(
             System(basis=basis, coords=coords, charges=charges,
                    nelec=nelec, spin=sys_spin),
-            xc, grid=(gc, gw), spin=spin,
+            xc, grid=points(gc, gw, chunk=grid.chunk), spin=spin,
         )
 
     @jax.vmap

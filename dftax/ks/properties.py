@@ -27,7 +27,7 @@ from jaxtyping import Array, Float
 from typing import NamedTuple
 
 from dftax.energy.xc import XCFunctional
-from dftax.grid import Becke, becke, becke_grid
+from dftax.grid import Becke, becke, becke_grid, points
 from dftax.integrals.multipole import dipole_matrices
 from dftax.ks.energy import KS, System
 from dftax.ks.scf import scf
@@ -79,11 +79,12 @@ def _grid(mol, grid):
     return becke_grid(mol.symbols, mol.atom_coords(), g.n_radial, g.lebedev), g
 
 
-def _solve_field(mol, xc, gc, gw, *, field=None, origin=(0.0, 0.0, 0.0), **scf_kw):
+def _solve_field(mol, xc, gc, gw, *, chunk=None, field=None,
+                 origin=(0.0, 0.0, 0.0), **scf_kw):
     """Run KS, optionally under a uniform external field. Returns ``(P, e, basis)``
     where the energy includes the nuclear ``−E·μ_nuc`` term so ``e`` is the full
     field-dependent total energy (``μ = −de/dfield``)."""
-    ks = KS(mol, xc, grid=(gc, gw))
+    ks = KS(mol, xc, grid=points(gc, gw, chunk=chunk))
     basis = ks.basis
     e_nuc_field = 0.0
     if field is not None:
@@ -107,8 +108,8 @@ def dipole(
 
     ``μ = Σ_A Z_A (R_A − origin) − Tr(P · r)`` from the converged density. For a
     neutral molecule the result is independent of ``origin``."""
-    (gc, gw), _ = _grid(mol, grid)
-    P, _, basis = _solve_field(mol, xc, gc, gw, origin=origin, **scf_kw)
+    (gc, gw), g = _grid(mol, grid)
+    P, _, basis = _solve_field(mol, xc, gc, gw, chunk=g.chunk, origin=origin, **scf_kw)
     D = dipole_matrices(basis, origin)
     mu = nuclear_dipole(mol, origin) - jnp.einsum("ipq,pq->i", D, P)
     return mu * AU_TO_DEBYE if debye else mu
@@ -126,8 +127,8 @@ def polarizability(
     exact coupled-perturbed KS response via implicit differentiation of the SCF fixed
     point (:func:`~dftax.ks.implicit.implicit_density`), a single ``jax.jacobian``
     through the converged density, no field stepping. Returned symmetrized."""
-    (gc, gw), _ = _grid(mol, grid)
-    ks0 = KS(mol, xc, grid=(gc, gw))
+    (gc, gw), g = _grid(mol, grid)
+    ks0 = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk))
     D = dipole_matrices(ks0.basis, origin)
     nuc = nuclear_dipole(mol, origin)
 
@@ -143,7 +144,8 @@ def polarizability(
         return 0.5 * (alpha + alpha.T)
 
     def mu_at(f):
-        P, _, _ = _solve_field(mol, xc, gc, gw, field=f, origin=origin, **scf_kw)
+        P, _, _ = _solve_field(mol, xc, gc, gw, chunk=g.chunk, field=f,
+                               origin=origin, **scf_kw)
         return nuc - jnp.einsum("ipq,pq->i", D, P)
 
     cols = []
@@ -181,7 +183,7 @@ def _eval_at(mol, xc, coords, origin, g, scf_kw):
     """Analytic forces ``(n_atom,3)`` and dipole ``(3,)`` at a geometry."""
     m = _displaced(mol, coords)
     gc, gw = becke_grid(m.symbols, m.atom_coords(), g.n_radial, g.lebedev)
-    ks = KS(m, xc, grid=(gc, gw))
+    ks = KS(m, xc, grid=points(gc, gw, chunk=g.chunk))
     res = scf(ks, **scf_kw)
     F = forces(m, xc, res, grid=g)
     mu = nuclear_dipole(m, origin) - jnp.einsum(
@@ -329,8 +331,8 @@ def alchemical_deriv(
     its solve-based projector) and the energy is differentiated w.r.t. the
     nuclear charges, which enter only the nuclear-attraction and
     nuclear-repulsion terms."""
-    (gc, gw), _ = _grid(mol, grid)
-    ks = KS(mol, xc, grid=(gc, gw))
+    (gc, gw), g = _grid(mol, grid)
+    ks = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk))
     res = scf(ks, **scf_kw)
     # Per-channel occupied coefficients spanning the converged density
     # (closed shell: one doubly-occupied channel, w=2; polarized: unit w) —
@@ -349,7 +351,8 @@ def alchemical_deriv(
 
     def energy(charges):
         k = KS(System(basis=basis, coords=coords, charges=charges,
-                      nelec=mol.nelectron, spin=spin), xc, grid=(gc, gw))
+                      nelec=mol.nelectron, spin=spin), xc,
+               grid=points(gc, gw, chunk=g.chunk))
         P = jnp.stack(
             [w * (Z @ jnp.linalg.solve(Z.T @ k.S @ Z, Z.T)) for Z in Zs]
         )

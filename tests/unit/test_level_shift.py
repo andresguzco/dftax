@@ -13,10 +13,7 @@ import pytest
 from pyscf import dft, gto
 
 from dftax.energy.xc import LDA
-from dftax.ks.energy import RKS
-from dftax.ks.energy_uks import UKS
-from dftax.ks.scf import rks_scf
-from dftax.ks.scf_uks import uks_scf
+from dftax import KS, scf
 
 
 @pytest.mark.pyscf
@@ -28,9 +25,9 @@ def test_rks_level_shift_invariant(water_mol):
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks = RKS.from_pyscf(water_mol, LDA(), grid[0], grid[1])
-    r0 = rks_scf(ks, level_shift=0.0)
-    r1 = rks_scf(ks, level_shift=0.5)
+    ks = KS(water_mol, LDA(), grid=(grid[0], grid[1]))
+    r0 = scf(ks, level_shift=0.0)
+    r1 = scf(ks, level_shift=0.5)
     assert r0.converged and r1.converged
     assert abs(r0.e_tot - r1.e_tot) < 1e-9, f"shift changed E: {r0.e_tot} vs {r1.e_tot}"
 
@@ -48,8 +45,8 @@ def test_uks_level_shift_invariant():
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks = UKS.from_pyscf(mol, LDA(), grid[0], grid[1])
-    r0 = uks_scf(ks, level_shift=0.0)
-    r1 = uks_scf(ks, level_shift=0.5)
+    ks = KS(mol, LDA(), grid=(grid[0], grid[1]), spin=mol.spin)
+    r0 = scf(ks, level_shift=0.0)
+    r1 = scf(ks, level_shift=0.5)
     assert r0.converged and r1.converged
     assert abs(r0.e_tot - r1.e_tot) < 1e-9, f"shift changed E: {r0.e_tot} vs {r1.e_tot}"

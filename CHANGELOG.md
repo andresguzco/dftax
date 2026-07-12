@@ -4,6 +4,57 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] - 0.2.0
+
+A breaking release: the public API is rebuilt in the Equinox/Optax style
+(choices as composable values, one result type), and the engine gains
+multi-GPU execution.
+
+### Changed (breaking)
+- **One builder, solver verbs.** `KS(system, xc, grid=becke(...),
+  coulomb=exact()/df(...), spin=..., mesh=...)` replaces `RKS`/`UKS` and the
+  `run_ks`/`run_rks`/`run_uks` drivers; `scf(ks)`, `minimize(ks, optimizer)`,
+  `forces(mol, xc, result)` and `scf_batched(...)` replace the `rks_*`/`uks_*`
+  wrappers. `minimize` takes any `optax.GradientTransformation`; `forces`
+  takes the converged result directly (occupied orbitals are extracted from
+  `result.P`, the authoritative density).
+- **One result type.** `KSResult` (spin-stacked `mo_energy`/`mo_coeff`/`P`
+  with a leading `nspin` axis + the per-channel `nocc` tuple) replaces
+  `SCFResult`/`UKSResult`; batched runs return a distinct slim
+  `BatchedResult` (orbitals opt-in via `return_orbitals=True`).
+- **Flags became values.** `auxbasis`/`df_chunk`/`df_screen`/`eri_screen`/
+  `exact_stream`/`grid_chunk` are gone: each knob lives on the backend it
+  configures (`exact(screen=, stream=)`, `df(auxbasis, chunk=, screen=)`,
+  `becke(n_radial, lebedev, chunk=)`, `points(coords, weights, chunk=)`).
+  Formerly inert combinations now raise at the factory. `spherical` moved
+  onto `Molecule`; grid quality moved into the grid spec (also for the
+  property helpers, which now take `grid=becke(...)`).
+- **Spin rule.** `spin=None` infers from the system (closed shell →
+  restricted); an explicit `spin` (= 2S, including 0) requests polarized
+  channels. There is no `restricted=True` override for spin-labeled systems.
+- **PySCF `Mole` inputs now default to the native Becke grid** (75×302)
+  instead of a PySCF level-3 grid; pass an explicit `(coords, weights)`
+  grid to reproduce old numbers.
+- `vibrations`/`ir_spectrum`/`raman_spectrum` return NamedTuples, not dicts.
+
+### Added
+- **Multi-GPU execution** via `KS(..., mesh=mesh())`: the XC quadrature is
+  sharded over grid points and the DF 3-center tensor is built and held in
+  per-device aux slabs (hybrid exact exchange computed slab-wise); the dense
+  nao² matrices stay replicated and every collective differentiates, so SCF,
+  direct minimization and forces run unchanged. `scf_batched(mesh=mesh())`
+  shards the batch axis instead (conformer data parallelism).
+- Spin-polarized property layer: `dipole`/`polarizability(fd)`/`ir_spectrum`/
+  `alchemical_deriv` are correct for open shells (they previously required
+  the restricted path).
+
+### Fixed
+- All ten findings of the post-refactor audit, including: property-layer
+  total density (α+β), displaced-geometry rebuilds preserving
+  charge/spin/spherical, forces frozen at the returned density,
+  `becke(chunk=...)` honored everywhere, occupied-sliced density build,
+  and the CI/bench/GPU-script migration.
+
 ## [0.1.1] - 2026-06-30
 
 ### Changed

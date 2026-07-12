@@ -1,15 +1,15 @@
-"""Analytic nuclear forces for restricted Kohn-Sham DFT.
+"""Analytic nuclear forces for Kohn-Sham DFT (closed- and open-shell).
 
 The force on nucleus A is ``F_A = -∂E/∂R_A``. We obtain the whole force tensor
 in one reverse-mode pass by differentiating the total energy w.r.t. the nuclear
 coordinates, rebuilt end-to-end as a function of ``R``: the basis centers follow
 their atoms, the integrals are differentiable w.r.t. those centers, and the
 Becke grid moves with the nuclei. The density is held at the converged solution
-through the Löwdin parametrization ``C = Z (Zᵀ S(R) Z)^{-1/2}`` with ``Z`` fixed;
-at the SCF stationary point ``∂E/∂Z = 0``, so ``dE/dR`` reduces to the explicit
-geometry derivative, which captures both the Hellmann-Feynman term and the Pulay
-terms (the latter via the S(R) dependence inside the Löwdin factor and the
-moving basis centers). Native-``Molecule`` path only.
+through the projector parametrization ``P_σ = w Z_σ (Z_σᵀ S(R) Z_σ)⁻¹ Z_σᵀ`` with
+``Z_σ`` fixed; at the SCF stationary point ``∂E/∂Z = 0``, so ``dE/dR`` reduces to
+the explicit geometry derivative, which captures both the Hellmann-Feynman term
+and the Pulay terms (the latter via the S(R) dependence inside the projector and
+the moving basis centers). Native-``Molecule`` path only.
 """
 
 from __future__ import annotations
@@ -21,8 +21,11 @@ from jaxtyping import Array, Float
 
 from dftax.energy.xc import XCFunctional
 from dftax.basis.loader import build_basis_data
-from dftax.grid import becke_grid
-from dftax.ks.energy import RKS
+from dftax.grid import Becke, becke, becke_grid, points
+from dftax.integrals import overlap_matrix
+from dftax.ks.energy import KS, System
+from dftax.ks.scf import KSResult
+from dftax.ks.terms import DFSpec, ExactSpec, _rik_occ_orbitals, df
 
 
 def _density_from_Z(Z, S):
@@ -38,40 +41,114 @@ def _density_from_Z(Z, S):
     return 2.0 * Z @ jnp.linalg.solve(M, Z.T)
 
 
-def rks_forces(
+def _spin_density_from_Z(Z, S):
+    """One spin channel's density (unit occupation): ``P_σ = Z (ZᵀSZ)⁻¹ Zᵀ``
+    (see :func:`_density_from_Z` for why ``solve``, not eigh)."""
+    M = Z.T @ S @ Z
+    return Z @ jnp.linalg.solve(M, Z.T)
+
+
+def _occupied_coefficients(result, S):
+    """Per-channel occupied coefficients from a :class:`KSResult` (or accept
+    an explicit tuple of arrays / a bare closed-shell array).
+
+    From a result, the coefficients are extracted from ``result.P`` — the
+    density the solver actually returned — not from the ``mo_coeff`` packing:
+    minimize's aufbau-ordered canonical orbitals need not span ``P`` when the
+    optimization stopped short of ``g_tol`` or settled at a non-aufbau /
+    degenerate-frontier stationary point, and the envelope-theorem force
+    identity requires the frozen projector to span the stationary density.
+    The extraction (``_rik_occ_orbitals``) is a forward-only eigh of the
+    near-idempotent projector — its top-``nocc`` eigenvalues cluster at the
+    occupation weight, cleanly separated from the null space — and is never
+    differentiated (the coefficients are ``stop_gradient``-ed).
+    """
+    from dftax.ks.batched import BatchedResult
+
+    if isinstance(result, BatchedResult):
+        raise TypeError(
+            "forces takes a single-geometry result; index or loop over the "
+            "batch, or use scf_batched(forces=True) for batched forces."
+        )
+    if isinstance(result, KSResult):
+        dscale = 0.5 if len(result.nocc) == 1 else 1.0
+        return tuple(
+            _rik_occ_orbitals(result.P[s], S, n, dscale)
+            for s, n in enumerate(result.nocc)
+        )
+    if isinstance(result, (tuple, list)):
+        return tuple(jnp.asarray(Z) for Z in result)
+    return (jnp.asarray(result),)
+
+
+def forces(
     mol,
     xc: XCFunctional,
-    C_occ: Float[Array, "nao nocc"],
+    result,
     *,
-    auxbasis: str | None = None,
-    n_radial: int = 75,
-    lebedev: int = 302,
+    grid: Becke | None = None,
+    coulomb: ExactSpec | DFSpec | None = None,
 ) -> Float[Array, "n_atom 3"]:
     """Nuclear forces ``F = -dE/dR`` (Ha/Bohr), shape ``(n_atom, 3)``.
 
     Args:
-        mol: a native :class:`~dftax.system.molecule.Molecule`.
+        mol: a native :class:`~dftax.system.molecule.Molecule` (the energy is
+            rebuilt as a function of the nuclear coordinates, so the basis and
+            grid must be reconstructible — PySCF ``Mole`` objects are not
+            supported here).
         xc: the exchange-correlation functional.
-        C_occ: converged occupied MO coefficients ``(nao, nocc)``, e.g.
-            ``result.mo_coeff[:, : mol.nelectron // 2]`` from
-            :func:`~dftax.ks.scf.rks_scf`.
-        auxbasis: optional density-fitting auxiliary basis (forces are then for
-            the density-fitted energy surface).
-        n_radial, lebedev: Becke-grid quality (match the energy calculation).
+        result: the converged :class:`~dftax.ks.scf.KSResult` (from
+            :func:`~dftax.ks.scf.scf` or :func:`~dftax.ks.minimize.minimize`),
+            or the per-channel occupied coefficients directly. From a result
+            the frozen density is taken from ``result.P`` (see
+            :func:`_occupied_coefficients`), so the forces belong to exactly
+            the density the solver returned.
+        grid: Becke-grid quality (a :func:`~dftax.grid.becke` spec; match the
+            energy calculation — a ``chunk`` on the spec streams the XC grid
+            here too). Explicit point grids cannot follow the nuclei, so only
+            Becke specs are accepted.
+        coulomb: :func:`~dftax.ks.terms.exact` (default) or a *materialized*
+            :func:`~dftax.ks.terms.df` — the streamed backends do not propagate
+            geometry gradients (see :func:`dftax.ks.terms._streamed_df_rik`).
     """
+    grid = becke() if grid is None else grid
+    if not isinstance(grid, Becke):
+        raise ValueError("forces need a geometry-following grid: pass becke(...).")
+    if isinstance(coulomb, DFSpec) and coulomb.chunk is not None:
+        raise ValueError(
+            "forces need the materialized DF backend: df(...) without chunk "
+            "(the streamed RI-K vjp does not propagate geometry gradients)."
+        )
+    if isinstance(coulomb, ExactSpec) and (coulomb.stream or coulomb.screen):
+        raise ValueError("forces support only the plain materialized exact() backend.")
+
     symbols = mol.symbols
     coords0 = jnp.asarray(mol.atom_coords())
     charges = jnp.asarray(mol.atom_charges())
     nelec = mol.nelectron
-    Z = jax.lax.stop_gradient(jnp.asarray(C_occ))
 
     basis_t, atom_idx = build_basis_data(
-        symbols, mol.atom_coords(), mol.basis, return_atom_index=True
+        symbols, mol.atom_coords(), mol.basis, return_atom_index=True,
+        spherical=getattr(mol, "spherical", False),
     )
+    # Reference-geometry overlap, needed to extract the occupied orbitals
+    # from result.P (only the KSResult path uses it).
+    S0 = overlap_matrix(basis_t) if isinstance(result, KSResult) else None
+    Zs = tuple(
+        jax.lax.stop_gradient(Z) for Z in _occupied_coefficients(result, S0)
+    )
+    w = 2.0 if len(Zs) == 1 else 1.0
+    spin = None if len(Zs) == 1 else Zs[0].shape[1] - Zs[1].shape[1]
     atom_idx = jnp.asarray(atom_idx)
     aux_t = None
     aux_atom_idx = None
-    if auxbasis is not None:
+    if isinstance(coulomb, DFSpec):
+        auxbasis = coulomb.auxbasis
+        if not isinstance(auxbasis, str):
+            raise TypeError(
+                "forces rebuild the auxiliary basis per geometry; pass "
+                "df(<basis-set name>), not a prebuilt BasisData."
+            )
         aux_t, a_idx = build_basis_data(
             symbols, mol.atom_coords(), auxbasis, return_atom_index=True
         )
@@ -79,13 +156,20 @@ def rks_forces(
 
     def energy(coords: Float[Array, "n_atom 3"]) -> Array:
         basis = eqx.tree_at(lambda b: b.centers, basis_t, coords[atom_idx])
-        aux_basis = None
-        if auxbasis is not None:
+        spec = None
+        if aux_t is not None:
             aux_basis = eqx.tree_at(lambda b: b.centers, aux_t, coords[aux_atom_idx])
-        grid_coords, grid_weights = becke_grid(symbols, coords, n_radial, lebedev)
-        ks = RKS._assemble(
-            basis, coords, charges, nelec, xc, grid_coords, grid_weights, aux_basis
+            spec = df(aux_basis)                          # materialized DF
+        gc, gw = becke_grid(symbols, coords, grid.n_radial, grid.lebedev)
+        # points(..., chunk=...) keeps the spec's XC streaming: silently
+        # materializing the AO grid here would OOM exactly the systems the
+        # chunk was chosen for.
+        ks = KS(
+            System(basis=basis, coords=coords, charges=charges,
+                   nelec=nelec, spin=0 if spin is None else spin),
+            xc, grid=points(gc, gw, chunk=grid.chunk), coulomb=spec, spin=spin,
         )
-        return ks.total(_density_from_Z(Z, ks.S))
+        P = jnp.stack([w * (Z @ jnp.linalg.solve(Z.T @ ks.S @ Z, Z.T)) for Z in Zs])
+        return ks.total(P)
 
     return -jax.grad(energy)(coords0)

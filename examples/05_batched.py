@@ -6,8 +6,7 @@ One call evaluates the whole batch; ``forces=True`` adds analytic Pulay-free for
 import jax; jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
-from dftax import run_rks_batched
-from dftax.system import Molecule
+from dftax import Molecule, scf_batched
 from dftax.energy.xc import PBE
 
 # A 1-D H2 bond scan: 8 geometries differing only in the bond length.
@@ -15,7 +14,7 @@ mol = Molecule.from_xyz("H 0 0 0; H 0 0 1.4", "sto-3g")  # template atoms + basi
 lengths = jnp.linspace(1.0, 2.4, 8)                       # Bohr
 coords_batch = jnp.stack([jnp.array([[0.0, 0.0, 0.0], [0.0, 0.0, L]]) for L in lengths])
 
-res = run_rks_batched(mol, coords_batch, PBE(), forces=True)
+res = scf_batched(mol, coords_batch, PBE(), forces=True)  # batched KSResult
 print("converged:", np.asarray(res.converged))
 print(" R (Bohr)   E (Ha)        F_z on atom 1 (Ha/Bohr)")
 for L, e, F in zip(lengths, res.e_tot, res.forces):

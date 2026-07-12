@@ -11,9 +11,8 @@ import pytest
 
 from dftax.energy.xc import LDA
 from dftax.system.molecule import Molecule
-from dftax.ks.energy import RKS
-from dftax.ks.scf import rks_scf
-from dftax.ks.forces import rks_forces, _density_from_Z
+from dftax import KS, becke, df, scf, forces
+from dftax.ks.forces import _density_from_Z
 from dftax.grid import becke_grid
 
 NR, LEB = 35, 50
@@ -21,6 +20,46 @@ NR, LEB = 35, 50
 
 @pytest.mark.float64
 class TestForces:
+    def test_forces_use_density_not_coefficient_packing(self):
+        """Contract (audit finding 4): from a KSResult, forces must freeze the
+        density the solver actually returned (result.P) — not whatever the
+        mo_coeff packing implies. minimize's aufbau-ordered canonical orbitals
+        need not span P when unconverged or at a degenerate frontier, so
+        scrambling mo_coeff must not change the forces."""
+        import dataclasses
+
+        xc = LDA()
+        mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.85", "sto-3g")
+        grid = becke(NR, LEB)
+        res = scf(KS(mol, xc, grid=grid), e_tol=1e-10, d_tol=1e-8)
+        scrambled = dataclasses.replace(
+            res, mo_coeff=jnp.zeros_like(res.mo_coeff)
+        )
+        F = forces(mol, xc, res, grid=grid)
+        F2 = forces(mol, xc, scrambled, grid=grid)
+        assert float(jnp.max(jnp.abs(F - F2))) < 1e-12
+
+    def test_forces_honor_grid_chunk(self, monkeypatch):
+        """Regression (audit finding 6): becke(chunk=...) must stream the XC
+        grid inside the force rebuild — not be silently dropped — and the
+        streamed geometry gradient must match the materialized one."""
+        import dftax.ks.terms as terms
+
+        calls = []
+        orig = terms._streamed_e_xc
+        monkeypatch.setattr(
+            terms, "_streamed_e_xc",
+            lambda *a, **k: (calls.append(1), orig(*a, **k))[1],
+        )
+        xc = LDA()
+        mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.85", "sto-3g")
+        res = scf(KS(mol, xc, grid=becke(NR, LEB)), e_tol=1e-10, d_tol=1e-8)
+        F_mat = forces(mol, xc, res, grid=becke(NR, LEB))
+        assert not calls                                  # materialized path
+        F_str = forces(mol, xc, res, grid=becke(NR, LEB, chunk=500))
+        assert calls                                      # streamed path taken
+        assert float(jnp.max(jnp.abs(F_str - F_mat))) < 1e-9
+
     def test_h2_force_matches_finite_difference(self):
         xc = LDA()
         mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.85", "sto-3g")
@@ -29,13 +68,13 @@ class TestForces:
         def energy(coords):
             m = Molecule(mol.symbols, coords, mol.basis)
             gc, gw = becke_grid(m.symbols, m.atom_coords(), NR, LEB)
-            return rks_scf(
-                RKS.from_molecule(m, xc, gc, gw), e_tol=1e-10, d_tol=1e-8
+            return scf(
+                KS(m, xc, grid=(gc, gw)), e_tol=1e-10, d_tol=1e-8
             ).e_tot
 
         gc, gw = becke_grid(mol.symbols, c0, NR, LEB)
-        res = rks_scf(RKS.from_molecule(mol, xc, gc, gw), e_tol=1e-10, d_tol=1e-8)
-        F = rks_forces(mol, xc, res.mo_coeff[:, :1], n_radial=NR, lebedev=LEB)
+        res = scf(KS(mol, xc, grid=(gc, gw)), e_tol=1e-10, d_tol=1e-8)
+        F = forces(mol, xc, (res.mo_coeff[0][:, :1],), grid=becke(NR, LEB))
 
         # Translational invariance: net force vanishes.
         assert float(np.abs(np.asarray(F.sum(axis=0))).max()) < 1e-8
@@ -52,10 +91,10 @@ class TestForces:
         # with nocc > 1, dE/dZ through the (solve-based) density must vanish.
         mol = Molecule.from_xyz("O 0 0 0; H 0.96 0 0; H -0.24 0.93 0", "sto-3g")
         gc, gw = becke_grid(mol.symbols, mol.atom_coords(), 30, 50)
-        ks = RKS.from_molecule(mol, LDA(), gc, gw)
-        res = rks_scf(ks, e_tol=1e-10, d_tol=1e-8)
-        Z = res.mo_coeff[:, : mol.nelectron // 2]
-        gZ = jax.grad(lambda Y: ks.total(_density_from_Z(Y, ks.S)))(Z)
+        ks = KS(mol, LDA(), grid=(gc, gw))
+        res = scf(ks, e_tol=1e-10, d_tol=1e-8)
+        Z = res.mo_coeff[0][:, : mol.nelectron // 2]
+        gZ = jax.grad(lambda Y: ks.total(_density_from_Z(Y, ks.S)[None]))(Z)
         assert float(jnp.linalg.norm(gZ)) < 1e-6
 
 
@@ -89,16 +128,19 @@ class TestDensityFittingForces:
         def energy(coords):
             m = Molecule(mol.symbols, coords, mol.basis)
             gc, gw = becke_grid(m.symbols, m.atom_coords(), NR, LEB)
-            return rks_scf(
-                RKS.from_molecule(m, xc, gc, gw, auxbasis=self.AUX),
+            return scf(
+                KS(m, xc, grid=(gc, gw), coulomb=df(self.AUX)),
                 e_tol=1e-10, d_tol=1e-8,
             ).e_tot
 
         gc, gw = becke_grid(mol.symbols, c0, NR, LEB)
-        res = rks_scf(
-            RKS.from_molecule(mol, xc, gc, gw, auxbasis=self.AUX), e_tol=1e-10, d_tol=1e-8
+        res = scf(
+            KS(mol, xc, grid=(gc, gw), coulomb=df(self.AUX)), e_tol=1e-10, d_tol=1e-8
         )
-        F = rks_forces(mol, xc, res.mo_coeff[:, :1], auxbasis=self.AUX, n_radial=NR, lebedev=LEB)
+        F = forces(
+            mol, xc, (res.mo_coeff[0][:, :1],),
+            grid=becke(NR, LEB), coulomb=df(self.AUX),
+        )
 
         assert bool(np.all(np.isfinite(np.asarray(F))))
         assert float(np.abs(np.asarray(F.sum(axis=0))).max()) < 1e-8

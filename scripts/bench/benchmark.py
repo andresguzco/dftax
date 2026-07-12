@@ -26,10 +26,8 @@ import numpy as np
 from pyscf import gto, dft
 
 from dftax.energy.xc import LDA, PBE, PBE0, B3LYP
-from dftax.ks.driver import run_rks
-from dftax.ks.scf import rks_scf
-from dftax.ks.forces import rks_forces
-from dftax.ks.energy import RKS
+from dftax import KS, becke, scf
+from dftax import forces as ks_forces
 from dftax.grid import becke_grid
 from dftax.system.molecule import Molecule
 
@@ -63,7 +61,7 @@ def accuracy():
     print("|---|---:|---:|---:|")
     for name, cls, xcstr in FUNCS:
         mol, e_ref, grid, _ = _pyscf_rks(WATER, xcstr, "sto-3g")
-        e = run_rks(mol, cls(), grid=grid).e_tot
+        e = scf(KS(mol, cls(), grid=grid)).e_tot
         print(f"| {name} | {e:.8f} | {e_ref:.8f} | {abs(e - e_ref):.1e} |")
     print()
 
@@ -76,10 +74,10 @@ def scaling():
         mol, e_ref, grid, tp = _pyscf_rks(_water_cluster(n), "pbe", "sto-3g", level=1)
         nao = int(mol.nao)
         t0 = time.time()
-        e1 = run_rks(mol, PBE(), grid=grid).e_tot
+        e1 = scf(KS(mol, PBE(), grid=grid)).e_tot
         t_compile = time.time() - t0
         t0 = time.time()
-        run_rks(mol, PBE(), grid=grid)  # timed cached run
+        scf(KS(mol, PBE(), grid=grid))  # timed cached run
         t_cached = time.time() - t0
         print(f"| {n} | {nao} | {e1:.6f} | {abs(e1 - e_ref):.1e} | {t_compile:.1f} | {t_cached:.2f} | {tp:.1f} |")
     print()
@@ -90,15 +88,14 @@ def forces():
     nmol = Molecule.from_xyz(WATER, "sto-3g")
     NR, LEB = 50, 110
     gc, gw = becke_grid(nmol.symbols, nmol.atom_coords(), NR, LEB)
-    res = rks_scf(RKS.from_molecule(nmol, PBE(), gc, gw))
-    nocc = nmol.nelectron // 2
-    F = np.asarray(rks_forces(nmol, PBE(), res.mo_coeff[:, :nocc], n_radial=NR, lebedev=LEB))
+    res = scf(KS(nmol, PBE(), grid=(gc, gw)))
+    F = np.asarray(ks_forces(nmol, PBE(), res, grid=becke(NR, LEB)))
     net = np.abs(F.sum(axis=0)).max()
 
     def energy(coords):
         m = Molecule(nmol.symbols, coords, nmol.basis)
         g1, w1 = becke_grid(m.symbols, m.atom_coords(), NR, LEB)
-        return rks_scf(RKS.from_molecule(m, PBE(), g1, w1), e_tol=1e-10, d_tol=1e-8).e_tot
+        return scf(KS(m, PBE(), grid=(g1, w1)), e_tol=1e-10, d_tol=1e-8).e_tot
     c0 = nmol.atom_coords()
     eps = 1e-3
     cp = c0.copy(); cp[1, 2] += eps

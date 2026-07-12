@@ -50,12 +50,17 @@ class Molecule:
         basis: str,
         charge: int = 0,
         spin: int = 0,
+        spherical: bool = False,
     ):
         self.symbols = [s.strip().capitalize() for s in symbols]
         self.coords = np.asarray(coords_bohr, dtype=np.float64).reshape(-1, 3)
         self.basis = basis
         self.charge = int(charge)
         self.spin = int(spin)  # 2S (number of unpaired electrons)
+        # Spherical-harmonic AOs ((2l+1) per shell) vs Cartesian; spherical is
+        # the standard convention for cc-pVXZ/def2 and required to match a
+        # spherical reference for l >= 2 bases.
+        self.spherical = bool(spherical)
         if len(self.symbols) != self.coords.shape[0]:
             raise ValueError("symbols and coords length mismatch")
 
@@ -68,6 +73,7 @@ class Molecule:
         unit: str = "angstrom",
         charge: int = 0,
         spin: int = 0,
+        spherical: bool = False,
     ) -> "Molecule":
         """Build from a PySCF-style atom string (Angstrom by default)."""
         symbols, coords = _parse_atom_string(atom)
@@ -75,7 +81,7 @@ class Molecule:
             coords = coords * ANGSTROM_TO_BOHR
         elif not unit.lower().startswith("b"):
             raise ValueError(f"unit must be 'angstrom' or 'bohr', got {unit!r}")
-        return cls(symbols, coords, basis, charge=charge, spin=spin)
+        return cls(symbols, coords, basis, charge=charge, spin=spin, spherical=spherical)
 
     def atom_coords(self) -> np.ndarray:
         """Nuclear coordinates in Bohr, shape (n_atoms, 3)."""

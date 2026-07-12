@@ -1586,6 +1586,13 @@ hand.</p>
     </table>
 
 
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="highlight"><pre><span></span><code><span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="s2">&quot;def2-universal-jkfit&quot;</span><span class="p">),</span> <span class="n">mesh</span><span class="o">=</span><span class="n">mesh</span><span class="p">())</span>
+<span class="n">scf_batched</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">coords_batch</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">mesh</span><span class="o">=</span><span class="n">mesh</span><span class="p">())</span>   <span class="c1"># batch-axis sharding</span>
+</code></pre></div>
+</details>
+
     </div>
 
 </div>

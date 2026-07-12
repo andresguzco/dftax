@@ -1665,6 +1665,13 @@ significant pairs; requires <code>chunk</code>.</p>
     </table>
 
 
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="highlight"><pre><span></span><code><span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="s2">&quot;def2-universal-jkfit&quot;</span><span class="p">))</span>            <span class="c1"># materialized</span>
+<span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="s2">&quot;def2-universal-jkfit&quot;</span><span class="p">,</span> <span class="n">chunk</span><span class="o">=</span><span class="mi">64</span><span class="p">))</span>  <span class="c1"># streamed</span>
+</code></pre></div>
+</details>
+
     </div>
 
 </div>

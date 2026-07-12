@@ -1696,6 +1696,14 @@ exposes the converged density as a differentiable function of the functional
     </table>
 
 
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="highlight"><pre><span></span><code><span class="n">ks</span> <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">())</span>
+<span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">e_tol</span><span class="o">=</span><span class="mf">1e-9</span><span class="p">)</span>
+<span class="n">res</span><span class="o">.</span><span class="n">e_tot</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">P</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>       <span class="c1"># P is spin-stacked</span>
+</code></pre></div>
+</details>
+
     </div>
 
 </div>
@@ -1827,6 +1835,14 @@ is the core-Hamiltonian guess.</p>
       </tbody>
     </table>
 
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">minimize</span><span class="p">(</span><span class="n">ks</span><span class="p">)</span>                             <span class="c1"># optax.adam(0.3)</span>
+<span class="n">res</span> <span class="o">=</span> <span class="n">minimize</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">chain</span><span class="p">(</span>
+    <span class="n">optax</span><span class="o">.</span><span class="n">clip_by_global_norm</span><span class="p">(</span><span class="mf">1.0</span><span class="p">),</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">0.1</span><span class="p">)),</span> <span class="n">g_tol</span><span class="o">=</span><span class="mf">1e-7</span><span class="p">)</span>
+</code></pre></div>
+</details>
 
     </div>
 

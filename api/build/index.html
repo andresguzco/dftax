@@ -1989,8 +1989,9 @@ spin-polarized α/β channels.</p>
             <td>
               <div class="doc-md-description">
                 <p>a :func:<code>~dftax.ks.shard.mesh</code> spec to shard the calculation
-across a device mesh (currently: the XC quadrature; the dense
-nao² matrices stay replicated). <code>None</code> = single device.</p>
+across a device mesh (the XC quadrature and the DF 3-center
+tensor; the dense nao² matrices stay replicated).
+<code>None</code> = single device.</p>
               </div>
             </td>
             <td>
@@ -2000,6 +2001,14 @@ nao² matrices stay replicated). <code>None</code> = single device.</p>
       </tbody>
     </table>
 
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="highlight"><pre><span></span><code><span class="n">ks</span> <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE0</span><span class="p">(),</span>
+        <span class="n">grid</span><span class="o">=</span><span class="n">becke</span><span class="p">(</span><span class="mi">75</span><span class="p">,</span> <span class="mi">302</span><span class="p">),</span>
+        <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="s2">&quot;def2-universal-jkfit&quot;</span><span class="p">))</span>
+</code></pre></div>
+</details>
 
     </div>
 

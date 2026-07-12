@@ -26,7 +26,8 @@ import numpy as np
 from pyscf import gto, dft
 
 from dftax.energy.xc import LDA, PBE, PBE0, B3LYP
-from dftax import KS, becke, forces, scf
+from dftax import KS, becke, scf
+from dftax import forces as ks_forces
 from dftax.grid import becke_grid
 from dftax.system.molecule import Molecule
 
@@ -88,7 +89,7 @@ def forces():
     NR, LEB = 50, 110
     gc, gw = becke_grid(nmol.symbols, nmol.atom_coords(), NR, LEB)
     res = scf(KS(nmol, PBE(), grid=(gc, gw)))
-    F = np.asarray(forces(nmol, PBE(), res, grid=becke(NR, LEB)))
+    F = np.asarray(ks_forces(nmol, PBE(), res, grid=becke(NR, LEB)))
     net = np.abs(F.sum(axis=0)).max()
 
     def energy(coords):

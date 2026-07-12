@@ -305,8 +305,16 @@ class KS(eqx.Module):
                 an explicit ``spin`` (= 2S, including 0) requests
                 spin-polarized α/β channels.
             mesh: a :func:`~dftax.ks.shard.mesh` spec to shard the calculation
-                across a device mesh (currently: the XC quadrature; the dense
-                nao² matrices stay replicated). ``None`` = single device.
+                across a device mesh (the XC quadrature and the DF 3-center
+                tensor; the dense nao² matrices stay replicated).
+                ``None`` = single device.
+
+        Example:
+            ```python
+            ks = KS(mol, PBE0(),
+                    grid=becke(75, 302),
+                    coulomb=df("def2-universal-jkfit"))
+            ```
         """
         basis, coords, charges, nelec, sys_spin, symbols = _resolve_system(system)
         if spin is None:

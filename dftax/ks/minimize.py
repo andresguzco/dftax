@@ -92,6 +92,13 @@ def minimize(
             per channel (a bare array is accepted for a closed shell); default
             is the core-Hamiltonian guess.
         verbose: print per-step energy and gradient norm.
+
+    Example:
+        ```python
+        res = minimize(ks)                             # optax.adam(0.3)
+        res = minimize(ks, optax.chain(
+            optax.clip_by_global_norm(1.0), optax.adam(0.1)), g_tol=1e-7)
+        ```
     """
     if Z0 is None:
         Zs = _core_guess(ks)

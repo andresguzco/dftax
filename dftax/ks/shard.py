@@ -35,6 +35,12 @@ def mesh(devices: tuple | list | None = None) -> MeshSpec:
     Args:
         devices: the devices to use; ``None`` means all local devices
             (``jax.devices()``) at build time.
+
+    Example:
+        ```python
+        KS(mol, xc, coulomb=df("def2-universal-jkfit"), mesh=mesh())
+        scf_batched(mol, coords_batch, xc, mesh=mesh())   # batch-axis sharding
+        ```
     """
     return MeshSpec(devices=None if devices is None else tuple(devices))
 

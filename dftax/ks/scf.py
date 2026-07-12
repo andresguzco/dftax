@@ -215,6 +215,13 @@ def scf(
         lindep_thresh: overlap-eigenvalue cutoff for canonical orthonormalization.
         level_shift: Saunders-Hillier virtual level shift (Ha).
         verbose: print per-iteration energy / error (via jax.debug.print).
+
+    Example:
+        ```python
+        ks = KS(mol, PBE())
+        res = scf(ks, e_tol=1e-9)
+        res.e_tot, res.converged, res.P[0]       # P is spin-stacked
+        ```
     """
     X = canonical_orthonormalizer(ks.S, lindep_thresh)
     e_tot, P, C, eps, converged, n_iter = _scf_solve(

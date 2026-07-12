@@ -105,6 +105,12 @@ def df(
             chunks of this size instead of materializing the nao²×naux tensor.
         screen: Schwarz threshold restricting the streamed RI-J bra sum to
             significant pairs; requires ``chunk``.
+
+    Example:
+        ```python
+        KS(mol, xc, coulomb=df("def2-universal-jkfit"))            # materialized
+        KS(mol, xc, coulomb=df("def2-universal-jkfit", chunk=64))  # streamed
+        ```
     """
     if screen is not None and chunk is None:
         raise ValueError(

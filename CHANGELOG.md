@@ -4,7 +4,7 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased] - 0.2.0
+## [0.2.0] - 2026-07-11
 
 A breaking release: the public API is rebuilt in the Equinox/Optax style
 (choices as composable values, one result type), and the engine gains

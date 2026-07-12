@@ -46,7 +46,20 @@ markdown_extensions:
 nav:
   - Home: index.md
   - All of dftax: all-of-dftax.md
-  - Features:
+  - Examples:
+      - Introductory:
+          - A first calculation: examples/water.ipynb
+          - An open-shell radical: examples/open-shell.ipynb
+          - Analytic forces: examples/forces.ipynb
+      - Advanced:
+          - Geometry optimization: examples/geometry-optimization.ipynb
+          - Conformer batches: examples/conformers.ipynb
+          - Multi-GPU execution: examples/multi-gpu.ipynb
+      - Features:
+          - Density fitting & streaming: examples/density-fitting.ipynb
+          - Properties, dipole to IR: examples/properties.ipynb
+          - Implicit differentiation: examples/implicit-diff.ipynb
+  - Guides:
       - Coulomb backends: tutorials/coulomb-backends.md
       - Forces: tutorials/forces.md
       - Batched evaluation: tutorials/batched.md
@@ -68,6 +81,7 @@ nav:
 
 plugins:
   - search
+  - ipynb
   - hippogriffe:
       extra_public_objects:
         - jax.Array

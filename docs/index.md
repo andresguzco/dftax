@@ -27,7 +27,9 @@ runtime (PySCF is only a test-time reference oracle).
   response (CPHF), dipole, polarizability, Hessian, frequencies, IR/Raman, and
   alchemical derivatives.
 - **Batched** energies and forces over many geometries via `vmap`.
-- **GPU-validated** on an A100, where energies match CPU to machine precision.
+- **Multi-GPU**: one `mesh()` value shards the quadrature and the DF tensors
+  across a device mesh — capacity and throughput, still fully differentiable.
+- **GPU-validated** on A100s, where energies match CPU to machine precision.
 
 ## Install
 
@@ -58,7 +60,8 @@ spin (or an explicit `spin=`) runs spin-polarized α/β channels.
 ## Where to next
 
 Read [All of dftax](all-of-dftax.md) — one page, ~15 minutes, the whole mental
-model. Then:
+model. Then the [examples gallery](examples/water.ipynb) (introductory →
+advanced → features, all executed notebooks), or:
 
 - [Coulomb backends](tutorials/coulomb-backends.md): exact ERIs, density fitting, streaming, multi-GPU.
 - [Forces](tutorials/forces.md): analytic Pulay-free nuclear gradients.
@@ -70,4 +73,5 @@ model. Then:
 Accuracy and performance records live in
 [`scripts/bench/BENCHMARKS.md`](https://github.com/andresguzco/dftax/blob/main/scripts/bench/BENCHMARKS.md)
 and [`scripts/gpu/GPU_VALIDATION.md`](https://github.com/andresguzco/dftax/blob/main/scripts/gpu/GPU_VALIDATION.md).
-Runnable scripts are in [`examples/`](https://github.com/andresguzco/dftax/tree/main/examples).
+The examples are also plain scripts in
+[`examples/`](https://github.com/andresguzco/dftax/tree/main/examples).

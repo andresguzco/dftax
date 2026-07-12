@@ -14,3 +14,7 @@ Runnable from the repo root (`uv run python examples/<file>.py`):
 All are PySCF-free and follow the same pattern: build with
 `KS(mol, xc, grid=..., coulomb=...)`, then solve with `scf` (or `minimize`).
 For GPU, install the CUDA extra (`uv sync --extra cuda12`).
+
+> The rendered, executed versions of these examples (plus geometry
+> optimization, multi-GPU, and implicit differentiation) live in the
+> [documentation gallery](https://andresguzco.github.io/dftax/).

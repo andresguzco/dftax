@@ -40,7 +40,7 @@ from dftax.integrals import (
 )
 from dftax.ks import (
     KS, System, exact, df, mesh,
-    scf, minimize, forces, scf_batched, KSResult,
+    scf, minimize, forces, scf_batched, KSResult, BatchedResult,
     dipole, polarizability, hessian, vibrations, ir_spectrum, raman_spectrum,
     alchemical_deriv, implicit_density,
 )
@@ -59,7 +59,7 @@ __all__ = [
     # build: system + choices-as-values
     "KS", "System", "Molecule", "exact", "df", "becke", "points", "mesh",
     # run: solver verbs + result
-    "scf", "minimize", "forces", "scf_batched", "KSResult",
+    "scf", "minimize", "forces", "scf_batched", "KSResult", "BatchedResult",
     # response properties
     "dipole", "polarizability", "hessian", "vibrations", "ir_spectrum",
     "raman_spectrum", "alchemical_deriv",

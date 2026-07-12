@@ -55,9 +55,8 @@ class KSResult:
 
     All orbital/density fields carry a leading ``nspin`` axis (``nspin =
     len(nocc)``): a closed shell is ``nspin = 1`` (``P[0]`` doubly occupied),
-    a spin-polarized system is ``nspin = 2`` (α, β). From
-    :func:`~dftax.ks.batched.scf_batched` the scalar fields are per-geometry
-    arrays and every stacked field gains a leading batch axis.
+    a spin-polarized system is ``nspin = 2`` (α, β). Batched solves return the
+    distinct :class:`~dftax.ks.batched.BatchedResult` instead.
     """
 
     e_tot: float
@@ -68,7 +67,6 @@ class KSResult:
     mo_energy: Float[Array, "nspin nmo"]
     mo_coeff: Float[Array, "nspin nao nmo"]
     P: Float[Array, "nspin nao nao"]
-    forces: Float[Array, "n_atom 3"] | None = None
 
 
 def canonical_orthonormalizer(

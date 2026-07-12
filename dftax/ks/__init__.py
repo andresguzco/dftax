@@ -13,6 +13,7 @@ through the same spin-stacked code path.
 """
 
 from dftax.ks.energy import KS, System
+from dftax.ks.shard import mesh, MeshSpec
 from dftax.ks.terms import (
     exact, df,
     CoulombTerm, ExactCoulomb, StreamedExactCoulomb, DFCoulomb, StreamedDFCoulomb,
@@ -29,7 +30,7 @@ from dftax.ks.properties import (
 from dftax.ks.implicit import implicit_density
 
 __all__ = [
-    "KS", "System", "exact", "df",
+    "KS", "System", "exact", "df", "mesh",
     "scf", "minimize", "forces", "scf_batched", "KSResult",
     "CoulombTerm", "ExactCoulomb", "StreamedExactCoulomb", "DFCoulomb",
     "StreamedDFCoulomb", "XCTerm", "GridXC", "StreamedGridXC",

@@ -39,6 +39,27 @@ class TestForces:
         F2 = forces(mol, xc, scrambled, grid=grid)
         assert float(jnp.max(jnp.abs(F - F2))) < 1e-12
 
+    def test_forces_honor_grid_chunk(self, monkeypatch):
+        """Regression (audit finding 6): becke(chunk=...) must stream the XC
+        grid inside the force rebuild — not be silently dropped — and the
+        streamed geometry gradient must match the materialized one."""
+        import dftax.ks.terms as terms
+
+        calls = []
+        orig = terms._streamed_e_xc
+        monkeypatch.setattr(
+            terms, "_streamed_e_xc",
+            lambda *a, **k: (calls.append(1), orig(*a, **k))[1],
+        )
+        xc = LDA()
+        mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.85", "sto-3g")
+        res = scf(KS(mol, xc, grid=becke(NR, LEB)), e_tol=1e-10, d_tol=1e-8)
+        F_mat = forces(mol, xc, res, grid=becke(NR, LEB))
+        assert not calls                                  # materialized path
+        F_str = forces(mol, xc, res, grid=becke(NR, LEB, chunk=500))
+        assert calls                                      # streamed path taken
+        assert float(jnp.max(jnp.abs(F_str - F_mat))) < 1e-9
+
     def test_h2_force_matches_finite_difference(self):
         xc = LDA()
         mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.85", "sto-3g")

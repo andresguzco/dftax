@@ -105,6 +105,5 @@ def test_spec_factories_reject_inert_combinations():
         exact(screen=1e-10, stream=True)
     with pytest.raises(ValueError):
         df(AUX, screen=1e-10)                              # screen needs chunk
-    mol = Molecule.from_xyz(WATER, "sto-3g")
     with pytest.raises(TypeError):
         KS("not a system", LDA())

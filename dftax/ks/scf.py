@@ -32,10 +32,6 @@ from jaxtyping import Array, Float
 from dftax.ks.energy import KS
 
 
-def _sym(m: Float[Array, "n n"]) -> Float[Array, "n n"]:
-    return 0.5 * (m + m.T)
-
-
 @eqx.filter_jit
 def _total_energy(ks: KS, P: Float[Array, "nspin nao nao"]) -> Array:
     """Total KS energy E(P) (filter-jit so ks arrays are traced, not baked)."""

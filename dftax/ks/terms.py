@@ -14,18 +14,19 @@ and flag-driven branches on the energy class, each strategy is a small
 Every term is a function of the **spin-stacked** density ``P`` of shape
 ``(nspin, nao, nao)``: ``nspin == 1`` is a closed shell (``P[0]`` doubly
 occupied, ``P = 2ΣCCᵀ``), ``nspin == 2`` is spin-polarized (``P[σ] = ΣC_σC_σᵀ``,
-unit occupation). The restricted and unrestricted energy classes are thin
-wrappers that stack their densities and add ``Tr(P·Hcore) + E_nn``.
+unit occupation). :class:`~dftax.ks.energy.KS` holds one Coulomb term and one
+XC term and adds ``Tr(P·Hcore) + E_nn``.
 
 Users select a backend with the lowercase factories :func:`exact` and
 :func:`df` (Optax-style: each strategy's knobs are arguments of the strategy
 itself, so invalid combinations are unrepresentable):
 
-    RKS.from_molecule(mol, xc, gc, gw)                      # exact 4c ERI
-    exact(screen=1e-10)                                     # Schwarz-screened
-    exact(stream=True)                                      # J/K on the fly
-    df("def2-universal-jkfit")                              # materialized RI
-    df("def2-universal-jkfit", chunk=64, screen=1e-10)      # streamed RI-J/K
+    KS(mol, xc)                                             # exact 4c ERI
+    KS(mol, xc, coulomb=exact(screen=1e-10))                # Schwarz-screened
+    KS(mol, xc, coulomb=exact(stream=True))                 # J/K on the fly
+    KS(mol, xc, coulomb=df("def2-universal-jkfit"))         # materialized RI
+    KS(mol, xc, coulomb=df("...jkfit", chunk=64, screen=1e-10))  # streamed
+    KS(mol, xc, coulomb=df("...jkfit"), mesh=mesh())        # aux-sharded RI
 """
 
 from __future__ import annotations
@@ -512,36 +513,70 @@ class ShardedDFCoulomb(CoulombTerm):
     ``all_gather``-ed (γ is a tiny naux-vector) and the metric quadratic form
     ``½ γᵀ V⁻¹ γ`` is evaluated replicated. Padded aux columns carry exact
     zeros in both γ and the (zero-padded) metric inverse, so the energy is the
-    single-device value bit-for-bit up to summation order. Hybrid exact
-    exchange over a sharded tensor is not implemented yet (``hf_coeff == 0``
-    is enforced at build time).
+    single-device value bit-for-bit up to summation order.
+
+    Hybrid exact exchange uses ``V⁻¹ = LLᵀ`` and
+    ``Tr(P K(P)) = Σ_X ⟨P W_X P, W_X⟩`` with ``W = int3c·L``: each device
+    builds only its own aux-slab of ``W`` (an all-to-all done as ``ndev``
+    rounds of ``psum``, one per destination slab), contracts its slab's
+    exchange partial against the replicated density, and the scalar partials
+    are ``psum``-reduced — per-device memory stays O(nao²·naux/ndev). Padded
+    aux rows are zero in ``int3c`` and null in the padded metric, so they
+    contribute exactly nothing to J or K.
     """
 
     int3c: Float[Array, "nao nao nauxp"]
     int2c_inv: Float[Array, "nauxp nauxp"]
     devices: tuple = eqx.field(static=True)
+    hf_coeff: float = eqx.field(static=True, default=0.0)
 
     def energy(self, P, S, nocc):
         import numpy as np
         from jax.experimental.shard_map import shard_map
 
-        Ptot = jnp.sum(P, axis=0)
         jmesh = jax.sharding.Mesh(np.asarray(self.devices), ("aux",))
         spec = jax.sharding.PartitionSpec
+        ndev = len(self.devices)
+        slab = self.int3c.shape[2] // ndev
+        ax = self.hf_coeff
+        nspin = P.shape[0]
+        Lf = _rik_cholesky(self.int2c_inv) if ax != 0.0 else self.int2c_inv
 
-        def part(t3, vinv, Pt):
-            g_local = jnp.einsum("mnP,mn->P", t3, Pt)          # local aux slice
-            g = jax.lax.all_gather(g_local, "aux", tiled=True)  # (nauxp,) replicated
-            return 0.5 * jnp.dot(g, vinv @ g)
+        def part(t3, vinv, Lfull, Pst):
+            Ptot = jnp.sum(Pst, axis=0)
+            g_local = jnp.einsum("mnP,mn->P", t3, Ptot)         # local aux slice
+            g = jax.lax.all_gather(g_local, "aux", tiled=True)   # (nauxp,) replicated
+            e = 0.5 * jnp.dot(g, vinv @ g)
+            if ax == 0.0:
+                return e
+
+            my = jax.lax.axis_index("aux")
+            rows = jax.lax.dynamic_slice_in_dim(Lfull, my * slab, slab, axis=0)
+            W = jnp.zeros_like(t3)                               # (nao, nao, slab)
+            for d in range(ndev):                                # all-to-all rounds
+                part_d = jnp.einsum(
+                    "mnP,PX->mnX", t3, rows[:, d * slab:(d + 1) * slab]
+                )
+                W = jnp.where(my == d, jax.lax.psum(part_d, "aux"), W)
+
+            def tr_pkp(Q):                                       # local X-slab partial
+                QW = jnp.einsum("ls,mlX->msX", Q, W)
+                return jax.lax.psum(
+                    jnp.einsum("mn,nsX,msX->", Q, W, QW), "aux"
+                )
+
+            if nspin == 1:
+                return e - 0.25 * ax * tr_pkp(Pst[0])
+            return e - 0.5 * ax * (tr_pkp(Pst[0]) + tr_pkp(Pst[1]))
 
         # check_rep=False: the static replication checker cannot prove the
         # post-all_gather value is replicated (it is — every device computes
         # the identical quadratic form after the gather).
         return shard_map(
             part, mesh=jmesh,
-            in_specs=(spec(None, None, "aux"), spec(), spec()),
+            in_specs=(spec(None, None, "aux"), spec(), spec(), spec()),
             out_specs=spec(), check_rep=False,
-        )(self.int3c, self.int2c_inv, Ptot)
+        )(self.int3c, self.int2c_inv, Lf, P)
 
 
 class StreamedDFCoulomb(CoulombTerm):

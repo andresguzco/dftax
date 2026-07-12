@@ -63,6 +63,13 @@ def _occupied_coefficients(result, S):
     occupation weight, cleanly separated from the null space — and is never
     differentiated (the coefficients are ``stop_gradient``-ed).
     """
+    from dftax.ks.batched import BatchedResult
+
+    if isinstance(result, BatchedResult):
+        raise TypeError(
+            "forces takes a single-geometry result; index or loop over the "
+            "batch, or use scf_batched(forces=True) for batched forces."
+        )
     if isinstance(result, KSResult):
         dscale = 0.5 if len(result.nocc) == 1 else 1.0
         return tuple(

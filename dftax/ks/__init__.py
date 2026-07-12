@@ -22,7 +22,7 @@ from dftax.ks.terms import (
 from dftax.ks.scf import scf, KSResult
 from dftax.ks.minimize import minimize
 from dftax.ks.forces import forces
-from dftax.ks.batched import scf_batched
+from dftax.ks.batched import scf_batched, BatchedResult
 from dftax.ks.properties import (
     dipole, polarizability, hessian, vibrations, ir_spectrum, raman_spectrum,
     alchemical_deriv, Vibrations, IRSpectrum, RamanSpectrum,
@@ -31,7 +31,7 @@ from dftax.ks.implicit import implicit_density
 
 __all__ = [
     "KS", "System", "exact", "df", "mesh",
-    "scf", "minimize", "forces", "scf_batched", "KSResult",
+    "scf", "minimize", "forces", "scf_batched", "KSResult", "BatchedResult",
     "CoulombTerm", "ExactCoulomb", "StreamedExactCoulomb", "DFCoulomb",
     "StreamedDFCoulomb", "XCTerm", "GridXC", "StreamedGridXC",
     "dipole", "polarizability", "hessian", "vibrations", "ir_spectrum",

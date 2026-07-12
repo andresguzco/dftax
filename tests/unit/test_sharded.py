@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from dftax import KS, Molecule, becke, df, mesh, minimize, scf
+from dftax import KS, Molecule, becke, df, mesh, minimize, scf, scf_batched
 from dftax.ks.terms import GridXC, ShardedDFCoulomb, ShardedGridXC, StreamedGridXC
 from dftax.energy.xc import LDA, PBE, PBE0
 
@@ -118,3 +118,19 @@ def test_sharded_scf_and_minimize_match():
     m0 = minimize(KS(mol, LDA(), grid=GRID), max_steps=1500)
     m1 = minimize(KS(mol, LDA(), grid=GRID, mesh=mesh()), max_steps=1500)
     assert m1.e_tot == pytest.approx(m0.e_tot, abs=1e-8)
+
+
+@multi
+@pytest.mark.float64
+def test_batch_axis_sharding_matches_unsharded():
+    """scf_batched(mesh=...) shards the batch (data parallel, independent
+    per-device convergence); energies match the single-device batch. Batch
+    size 3 on 4 devices also exercises the padding path."""
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    c0 = jnp.asarray(mol.atom_coords())
+    batch = jnp.stack([c0, c0.at[1, 2].add(0.05), c0.at[2, 0].add(-0.04)])
+    r0 = scf_batched(mol, batch, PBE(), grid=GRID)
+    r1 = scf_batched(mol, batch, PBE(), grid=GRID, mesh=mesh())
+    assert bool(jnp.all(r0.converged)) and bool(jnp.all(r1.converged))
+    assert r1.e_tot.shape == r0.e_tot.shape == (3,)
+    assert float(jnp.max(jnp.abs(r1.e_tot - r0.e_tot))) < 1e-9

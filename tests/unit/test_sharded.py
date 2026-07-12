@@ -98,9 +98,27 @@ def test_sharded_df_guards():
     AUX = "def2-universal-jkfit"
     mol = Molecule.from_xyz(WATER, "sto-3g")
     with pytest.raises(NotImplementedError):
-        KS(mol, PBE0(), grid=GRID, coulomb=df(AUX), mesh=mesh())   # hybrid RI-K
-    with pytest.raises(NotImplementedError):
         KS(mol, PBE(), grid=GRID, coulomb=df(AUX, chunk=50), mesh=mesh())
+
+
+@multi
+@pytest.mark.float64
+def test_sharded_df_hybrid_matches_unsharded():
+    """Sharded RI-K (slab-wise W = int3c·L with all-to-all psum rounds): the
+    hybrid J+K energy and the full PBE0 SCF match the single-device DF."""
+    AUX = "def2-universal-jkfit"
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    ks0 = KS(mol, PBE0(), grid=GRID, coulomb=df(AUX))
+    P = scf(ks0).P
+    ksm = KS(mol, PBE0(), grid=GRID, coulomb=df(AUX), mesh=mesh())
+    e0 = float(ks0.coulomb.energy(P, ks0.S, ks0.nocc))
+    em = float(ksm.coulomb.energy(P, ksm.S, ksm.nocc))
+    assert em == pytest.approx(e0, rel=1e-10)
+
+    r0 = scf(ks0, e_tol=1e-10, d_tol=1e-8)
+    r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8)
+    assert r0.converged and r1.converged
+    assert r1.e_tot == pytest.approx(r0.e_tot, abs=1e-9)
 
 
 @multi

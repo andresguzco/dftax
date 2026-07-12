@@ -341,11 +341,6 @@ class KS(eqx.Module):
                     "supported; the aux-sharded materialized backend covers "
                     "that memory regime — use df(auxbasis) with mesh=."
                 )
-            if float(xc.hf_coeff) != 0.0:
-                raise NotImplementedError(
-                    "hybrid exact exchange over a sharded DF tensor is not "
-                    "implemented yet; use a non-hybrid functional or drop mesh=."
-                )
         S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv = _build_integrals(
             basis, coords, charges, grid_coords, aux_basis,
             devices is None and grid_chunk is None,   # sharded AO grid built below
@@ -368,7 +363,8 @@ class KS(eqx.Module):
                 .at[:naux, :naux].set(int2c_inv)
             )
             self.coulomb = ShardedDFCoulomb(
-                int3c=int3c_s, int2c_inv=vinv, devices=devices
+                int3c=int3c_s, int2c_inv=vinv, devices=devices,
+                hf_coeff=float(xc.hf_coeff),
             )
         else:
             self.coulomb = _make_coulomb(

@@ -139,14 +139,20 @@ def _scf_solve(ks: KS, X, max_iter, e_tol, d_tol, m, verbose, level_shift):
     nao = S.shape[0]
     nmo = X.shape[1]
     nspin = len(ks.nocc)
-    f = _occupations(ks.nocc, nmo)          # (nspin, nmo) occupation numbers
+    # Statically slice the occupied block: nocc is static, and contracting the
+    # full nmo set against a mostly-zero occupation vector costs nmo/nocc times
+    # the flops for the same result (XLA does not eliminate constant-zero
+    # columns from a dense dot).
+    nmax = max(ks.nocc)
+    f = _occupations(ks.nocc, nmax)         # (nspin, nmax) occupation numbers
     # Occupied projector scale for the level shift: P_σ = (1/inv_w) C_occ C_occᵀ.
     inv_w = 0.5 if nspin == 1 else 1.0
 
     def make_density(F):                     # F: (nspin, nao, nao)
         eps, Cp = jnp.linalg.eigh(X.T @ F @ X)          # batched over channels
         C = X @ Cp                                       # (nspin, nao, nmo)
-        P = jnp.einsum("smi,si,sni->smn", C, f, C)       # aufbau fill
+        Co = C[:, :, :nmax]                              # static occupied slice
+        P = jnp.einsum("smi,si,sni->smn", Co, f, Co)     # aufbau fill
         return P, C, eps
 
     F0 = jnp.broadcast_to(ks.hcore, (nspin, nao, nao))

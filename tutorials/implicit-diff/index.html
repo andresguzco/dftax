@@ -335,7 +335,7 @@
   <span class="md-ellipsis">
     
   
-    Drivers & functionals
+    Build & solve
   
 
     
@@ -665,8 +665,9 @@
 minimum <code>∂E/∂C = 0</code>, so the <a href="../forces/">forces</a> come straight from the explicit geometry
 derivative. What <em>does</em> need the orbital response is the derivative of the <strong>converged
 density</strong> with respect to a parameter, and hence first-order response properties.</p>
-<p><code>implicit_density(ks)</code> is the converged closed-shell density <code>P*</code> as a function of the
-assembled <code>RKS</code>, made differentiable by implicit differentiation of the SCF fixed point:</p>
+<p><code>implicit_density(ks)</code> is the converged density <code>P*</code> as a function of the assembled
+<code>KS</code> (restricted / closed-shell only), made differentiable by implicit differentiation
+of the SCF fixed point:</p>
 <ul>
 <li>the <strong>forward</strong> runs the ordinary SCF under <code>stop_gradient</code>;</li>
 <li>the <strong>backward</strong> solves the response (CPHF) equation <code>(I − ∂g/∂P)ᵀ w = P̄</code> matrix-free
@@ -682,8 +683,7 @@ the SCF iteration count</strong>.</p>
 <code>jax.jacobian</code> of the dipole through the converged density, no field stepping:</p>
 <pre><code class="language-python">import jax; jax.config.update(&quot;jax_enable_x64&quot;, True)
 import numpy as np
-from dftax import polarizability
-from dftax.system import Molecule
+from dftax import Molecule, polarizability
 from dftax.energy.xc import PBE
 
 mol = Molecule.from_xyz(&quot;O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043&quot;, &quot;sto-3g&quot;)

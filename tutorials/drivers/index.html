@@ -25,7 +25,7 @@
     
     
       
-        <title>Drivers & functionals - dftax</title>
+        <title>Build & solve - dftax</title>
       
     
     
@@ -68,7 +68,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#drivers-functionals" class="md-skip">
+        <a href="#build-solve" class="md-skip">
           Skip to content
         </a>
       
@@ -104,7 +104,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Drivers & functionals
+              Build & solve
             
           </span>
         </div>
@@ -344,7 +344,7 @@
   <span class="md-ellipsis">
     
   
-    Drivers & functionals
+    Build & solve
   
 
     
@@ -362,7 +362,7 @@
   <span class="md-ellipsis">
     
   
-    Drivers & functionals
+    Build & solve
   
 
     
@@ -388,10 +388,21 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#closed-shell-rks-and-open-shell-uks" class="md-nav__link">
+  <a href="#closed-and-open-shells" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Closed-shell (RKS) and open-shell (UKS)
+        Closed and open shells
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-builder-accepts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the builder accepts
       
     </span>
   </a>
@@ -630,10 +641,21 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#closed-shell-rks-and-open-shell-uks" class="md-nav__link">
+  <a href="#closed-and-open-shells" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Closed-shell (RKS) and open-shell (UKS)
+        Closed and open shells
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-builder-accepts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the builder accepts
       
     </span>
   </a>
@@ -682,44 +704,76 @@
   
 
 
-<h1 id="drivers-functionals">Drivers &amp; functionals</h1>
-<h2 id="closed-shell-rks-and-open-shell-uks">Closed-shell (RKS) and open-shell (UKS)</h2>
-<p><code>run_ks</code> dispatches by spin; <code>run_rks</code> / <code>run_uks</code> are the explicit entry points.</p>
+<h1 id="build-solve">Build &amp; solve</h1>
+<p>One builder, two solver verbs: <code>KS(system, xc, *, grid=None, coulomb=None, spin=None)</code>
+assembles the differentiable energy functional, and <code>scf</code> (DIIS) or <code>minimize</code>
+(direct minimization) converges it. Every choice is a value passed to the builder —
+grids from <code>becke()</code> / <code>points()</code>, Coulomb backends from <code>exact()</code> / <code>df()</code> — not a
+flag.</p>
+<h2 id="closed-and-open-shells">Closed and open shells</h2>
 <pre><code class="language-python">import jax; jax.config.update(&quot;jax_enable_x64&quot;, True)
-from dftax import run_rks, run_uks
-from dftax.system import Molecule
+from dftax import KS, Molecule, scf
 from dftax.energy.xc import LDA, PBE, PBE0, B3LYP
 
 water = Molecule.from_xyz(&quot;O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043&quot;, &quot;sto-3g&quot;)
 for xc in (LDA(), PBE(), PBE0(), B3LYP()):
-    print(type(xc).__name__, run_rks(water, xc).e_tot)
+    print(type(xc).__name__, scf(KS(water, xc)).e_tot)
 
-# open-shell: the CH3 radical (spin = 1 unpaired electron)
+# open-shell: the CH3 radical (spin = 2S = 1 unpaired electron)
 ch3 = Molecule.from_xyz(&quot;C 0 0 0; H 0 1.079 0; H 0.934 -0.539 0; H -0.934 -0.539 0&quot;,
                         &quot;sto-3g&quot;, spin=1)
-print(run_uks(ch3, PBE()).e_tot)
+print(scf(KS(ch3, PBE())).e_tot)
 </code></pre>
+<p>Spin routing is by value: <code>spin=None</code> (the default) infers from the system — spin 0
+runs closed-shell restricted (<code>nspin = 1</code>, <code>res.P[0]</code> doubly occupied), nonzero spin
+runs spin-polarized α/β channels (<code>nspin = 2</code>). Passing an explicit <code>spin=</code> (= 2S,
+<em>including</em> 0) forces spin-polarized channels regardless.</p>
 <p>The four built-in functionals span the rungs: <code>LDA</code> (SVWN), <code>PBE</code> (GGA), and the
 hybrids <code>PBE0</code> / <code>B3LYP</code> (which add exact exchange; see
 <a href="../coulomb-backends/">Coulomb backends</a>). The XC energy is evaluated on a Becke grid
 and the Fock matrix is obtained by autodiff of the energy (<code>F = ∂E/∂P</code>), so there is no
 hand-coded XC potential.</p>
+<h2 id="what-the-builder-accepts">What the builder accepts</h2>
+<ul>
+<li><strong>system</strong>: a native <code>Molecule</code> (PySCF-free; pass <code>spherical=True</code> for
+  spherical-harmonic AOs — required to match spherical references for l ≥ 2 bases
+  like cc-pVXZ/def2), a PySCF <code>Mole</code> (setup only), or a raw
+  <code>System(basis, coords, charges, nelec, spin)</code> for advanced use (e.g. custom
+  differentiable rebuilds from an already-built basis).</li>
+<li><strong>grid</strong>: <code>becke(n_radial=75, lebedev=302)</code> (the default), an explicit
+  <code>(coords, weights)</code> tuple (e.g. from PySCF grids), or <code>points(coords, weights,
+  chunk=...)</code> for an explicit grid with streaming (see
+  <a href="../coulomb-backends/">Coulomb backends</a>).</li>
+<li><strong>coulomb</strong>: <code>exact()</code> (default) or <code>df(...)</code>; see
+  <a href="../coulomb-backends/">Coulomb backends</a>.</li>
+</ul>
 <h2 id="scf-controls">SCF controls</h2>
-<pre><code class="language-python">from dftax import RKS, rks_scf
-from dftax.grid import becke_grid
+<pre><code class="language-python">from dftax import KS, becke, scf
 
-gc, gw = becke_grid(water.symbols, water.atom_coords(), n_radial=75, lebedev=302)
-ks = RKS.from_molecule(water, PBE(), gc, gw)
-res = rks_scf(ks, e_tol=1e-9, d_tol=1e-7, diis_space=8, level_shift=0.0)
+ks = KS(water, PBE(), grid=becke(n_radial=75, lebedev=302))
+res = scf(ks, e_tol=1e-9, d_tol=1e-7, diis_space=8, level_shift=0.0)
 print(res.e_tot, res.converged, res.n_iter)
 </code></pre>
-<p>The SCF is Pulay DIIS with an autodiff Fock. <code>level_shift</code> (Saunders-Hillier) widens the
-HOMO-LUMO gap to damp oscillation on hard cases; it leaves the converged density
-unchanged. For larger / spherical (l ≥ 2) bases pass <code>spherical=True</code> to
-<code>RKS.from_molecule</code>.</p>
+<p>The SCF is Pulay DIIS with an autodiff Fock, with the whole loop on device.
+<code>level_shift</code> (Saunders-Hillier) widens the HOMO-LUMO gap to damp oscillation on hard
+cases; it leaves the converged density unchanged. <code>lindep_thresh</code> sets the
+overlap-eigenvalue cutoff for canonical orthonormalization on near-linearly-dependent
+bases.</p>
 <h2 id="direct-minimization">Direct minimization</h2>
-<p>For an SCF-free route, <code>rks_minimize</code> (Adam over the orbital coefficients) optimizes the
-energy directly. It is robust where DIIS struggles, at the cost of more iterations.</p>
+<p>For an SCF-free, end-to-end differentiable route, <code>minimize</code> optimizes the energy
+directly over orthonormalized orbital coefficients. It is robust where DIIS
+struggles, at the cost of more iterations. The optimizer is <strong>any</strong>
+<code>optax.GradientTransformation</code> (default <code>optax.adam(0.3)</code>):</p>
+<pre><code class="language-python">import optax
+from dftax import KS, minimize
+
+res = minimize(ks)                                   # optax.adam(0.3)
+res = minimize(ks, optax.chain(optax.clip_by_global_norm(1.0), optax.adam(0.1)),
+               max_steps=5000, g_tol=1e-7)
+</code></pre>
+<p>Both solvers return the same <code>KSResult</code> (<code>e_tot</code>, <code>e_elec</code>, <code>converged</code>, <code>n_iter</code>,
+<code>nocc</code>, <code>mo_energy</code>, <code>mo_coeff</code>, <code>P</code>, all spin-stacked), so everything downstream —
+<a href="../forces/">forces</a>, <a href="../properties/">properties</a> — is solver-agnostic.</p>
 
 
 

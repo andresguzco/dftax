@@ -335,7 +335,7 @@
   <span class="md-ellipsis">
     
   
-    Drivers & functionals
+    Build & solve
   
 
     
@@ -646,8 +646,7 @@ dipole and polarizability are exact (matrix trace and finite field). Everything 
 validated against PySCF and/or finite difference.</p>
 <pre><code class="language-python">import jax; jax.config.update(&quot;jax_enable_x64&quot;, True)
 import numpy as np
-from dftax import dipole, polarizability, ir_spectrum, alchemical_deriv
-from dftax.system import Molecule
+from dftax import Molecule, becke, dipole, polarizability, ir_spectrum, alchemical_deriv
 from dftax.energy.xc import PBE
 
 mol = Molecule.from_xyz(&quot;O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043&quot;, &quot;sto-3g&quot;)
@@ -658,13 +657,18 @@ print(&quot;dipole:&quot;, np.linalg.norm(mu), &quot;Debye&quot;)            # ~
 alpha = np.asarray(polarizability(mol, PBE()))           # field finite difference
 print(&quot;isotropic α:&quot;, np.trace(alpha) / 3, &quot;a.u.&quot;)
 
-ir = ir_spectrum(mol, PBE(), n_radial=60, lebedev=194)
-for f, a in sorted(zip(np.asarray(ir[&quot;frequencies&quot;]), np.asarray(ir[&quot;intensities&quot;]))):
+ir = ir_spectrum(mol, PBE(), grid=becke(60, 194))
+for f, a in sorted(zip(np.asarray(ir.frequencies), np.asarray(ir.intensities))):
     if f &gt; 100:                                          # skip ~0 translations/rotations
         print(f&quot;{f:8.1f} cm^-1   {a:6.2f} km/mol&quot;)       # freqs match PySCF to ~1 cm^-1
 
 print(&quot;dE/dZ:&quot;, np.asarray(alchemical_deriv(mol, PBE())))  # Hellmann-Feynman alchemy
 </code></pre>
+<p>Every property takes <code>(mol, xc)</code> and runs its own SCF internally; grid quality is a
+<code>grid=becke(...)</code> spec (the properties rebuild the grid at displaced geometries), and
+extra keyword arguments are forwarded to <code>scf</code>. <code>vibrations</code>, <code>ir_spectrum</code>, and
+<code>raman_spectrum</code> return NamedTuples (<code>.frequencies</code>, <code>.modes</code>/<code>.cart_modes</code>,
+<code>.intensities</code>, <code>.activities</code>).</p>
 <h2 id="whats-available">What's available</h2>
 <table>
 <thead>

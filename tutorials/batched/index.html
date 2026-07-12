@@ -335,7 +335,7 @@
   <span class="md-ellipsis">
     
   
-    Drivers & functionals
+    Build & solve
   
 
     
@@ -573,14 +573,13 @@
 
 <h1 id="batched-evaluation-vmap-over-geometries">Batched evaluation (vmap over geometries)</h1>
 <p>When the atoms and basis are fixed and only the <strong>coordinates</strong> vary (a conformer set, a
-bond scan, an ML dataset), <code>run_{rks,uks,ks}_batched</code> evaluate the whole batch in one
-<code>vmap</code>ped call. Only <code>centers = coords[atom_index]</code> changes per geometry, on a shared
-basis template; the Becke grid moves with the nuclei and the SCF runs on-device.</p>
+bond scan, an ML dataset), <code>scf_batched</code> evaluates the whole batch in one <code>vmap</code>ped
+call. Only <code>centers = coords[atom_index]</code> changes per geometry, on a shared basis
+template; the Becke grid moves with the nuclei and the SCF runs on-device.</p>
 <pre><code class="language-python">import jax; jax.config.update(&quot;jax_enable_x64&quot;, True)
 import jax.numpy as jnp
 import numpy as np
-from dftax import run_rks_batched
-from dftax.system import Molecule
+from dftax import Molecule, scf_batched
 from dftax.energy.xc import PBE
 
 # H2 bond scan: 8 geometries differing only in the bond length
@@ -588,21 +587,29 @@ mol = Molecule.from_xyz(&quot;H 0 0 0; H 0 0 1.4&quot;, &quot;sto-3g&quot;)
 lengths = jnp.linspace(1.0, 2.4, 8)                       # Bohr
 coords = jnp.stack([jnp.array([[0., 0., 0.], [0., 0., L]]) for L in lengths])
 
-res = run_rks_batched(mol, coords, PBE(), forces=True)
+res = scf_batched(mol, coords, PBE(), forces=True)
 print(np.asarray(res.converged))                         # all True
 print(np.asarray(res.e_tot))                             # (8,) energies
 print(res.forces.shape)                                  # (8, 2, 3) Ha/Bohr
 </code></pre>
-<p><code>BatchedResult</code> carries <code>e_tot</code>, <code>converged</code>, <code>n_iter</code>, and (with <code>forces=True</code>) <code>forces</code>,
-each batched on the leading axis. <code>run_uks_batched</code> handles open shells; <code>run_ks_batched</code>
-dispatches by spin.</p>
+<p><code>scf_batched(mol, coords_batch, xc, *, spin=None, grid=becke(...), forces=False,
+return_orbitals=False, mesh=None, ...)</code> takes coordinates of shape <code>(B, n_atom, 3)</code>
+(Bohr) and returns a <code>BatchedResult</code>: <code>e_tot</code>, <code>e_elec</code>, <code>converged</code>, <code>n_iter</code> are
+per-geometry arrays; with <code>forces=True</code> the <code>forces</code> field holds the analytic force
+tensor <code>(B, n_atom, 3)</code>. Orbital-sized fields (<code>P</code>, <code>mo_coeff</code>, <code>mo_energy</code>,
+O(B·nspin·nao²) device memory) are <code>None</code> unless you opt in with
+<code>return_orbitals=True</code>. <code>mesh=mesh()</code> shards the batch axis across a device mesh —
+data parallelism over conformers, each device converging its slice independently.
+Open shells run through the same call — give the template molecule its spin, or pass
+<code>spin=</code> explicitly (the usual <code>KS</code> rule).</p>
 <p><strong>Notes.</strong> Forces are <em>not</em> taken by differentiating through the SCF (the <code>while_loop</code>
-solve isn't reverse-differentiable). Instead they reuse the analytic Pulay-free force kernel
-inside the same <code>vmap</code>. A fixed-shape Löwdin orthonormalizer keeps array shapes uniform
-across the batch, which assumes a well-conditioned basis (the conformer-dataset regime).
-v1 targets the exact path (small/moderate bases); batched DF is a follow-up.</p>
-<p>Validated against the serial path: batched energies match per-geometry <code>run_rks</code>
-and batched forces match <code>rks_forces</code> to ≤1e-9 (the tolerance the test suite enforces).</p>
+solve isn't reverse-differentiable). Instead they reuse the analytic Pulay-free force
+kernel inside the same <code>vmap</code>. A fixed-shape Löwdin orthonormalizer keeps array shapes
+uniform across the batch, which assumes a well-conditioned basis (the conformer-dataset
+regime). The batched path targets the exact Coulomb backend (small/moderate bases);
+batched DF is a follow-up.</p>
+<p>Validated against the serial path: batched energies match per-geometry <code>scf</code>
+and batched forces match <code>forces</code> to ≤1e-9 (the tolerance the test suite enforces).</p>
 
 
 

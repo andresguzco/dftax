@@ -335,7 +335,7 @@
   <span class="md-ellipsis">
     
   
-    Drivers & functionals
+    Build & solve
   
 
     
@@ -582,23 +582,23 @@ hand-coded integral derivatives. (This is the envelope theorem; differentiating 
 the SCF loop is unnecessary for forces.)</p>
 <pre><code class="language-python">import jax; jax.config.update(&quot;jax_enable_x64&quot;, True)
 import numpy as np
-from dftax import RKS, rks_scf, rks_forces
-from dftax.system import Molecule
+from dftax import KS, Molecule, becke, forces, scf
 from dftax.energy.xc import PBE
-from dftax.grid import becke_grid
 
 mol = Molecule.from_xyz(&quot;H 0 0 0; H 0 0 0.74&quot;, &quot;sto-3g&quot;)
-NR, LEB = 50, 110
-gc, gw = becke_grid(mol.symbols, mol.atom_coords(), NR, LEB)
-res = rks_scf(RKS.from_molecule(mol, PBE(), gc, gw))
-F = np.asarray(rks_forces(mol, PBE(), res.mo_coeff[:, : mol.nelectron // 2],
-                          n_radial=NR, lebedev=LEB))
+grid = becke(n_radial=50, lebedev=110)
+res = scf(KS(mol, PBE(), grid=grid))
+F = np.asarray(forces(mol, PBE(), res, grid=grid))
 print(F)                       # (n_atom, 3) Ha/Bohr
 print(&quot;net |Σ F| =&quot;, np.abs(F.sum(0)).max())   # ~0 (translational invariance)
 </code></pre>
-<p><code>rks_forces</code> takes the converged occupied orbitals <code>mo_coeff[:, :nocc]</code>; pass the same
-grid as the energy. <code>uks_forces</code> is the open-shell counterpart (α/β occupied orbitals).
-With <code>auxbasis=...</code> the forces are for the density-fitted energy surface.</p>
+<p><code>forces(mol, xc, res, *, grid=..., coulomb=None)</code> takes the converged <code>KSResult</code>
+(from <code>scf</code> or <code>minimize</code>) and slices the per-channel occupied orbitals itself —
+open shells work through the same call (you can also pass the occupied coefficients
+directly). Pass the same <code>becke(...)</code> grid spec as the energy calculation; explicit
+point grids cannot follow the nuclei, so only Becke specs are accepted. With
+<code>coulomb=df("...")</code> the forces are for the density-fitted energy surface
+(materialized DF only — the streamed backends do not propagate geometry gradients).</p>
 <p>A finite-difference check (central difference of the energy) agrees with the analytic
 force to ~1e-9; see <code>examples/03_forces_h2.py</code>.</p>
 <p>For forces over <strong>many geometries at once</strong>, see <a href="../batched/">batched evaluation</a>.</p>

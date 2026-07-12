@@ -335,7 +335,7 @@
   <span class="md-ellipsis">
     
   
-    Drivers & functionals
+    Build & solve
   
 
     
@@ -464,6 +464,17 @@
     <span class="md-ellipsis">
       
         Choosing a backend
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multi-gpu-mesh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-GPU: mesh=
       
     </span>
   </a>
@@ -706,6 +717,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#multi-gpu-mesh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-GPU: mesh=
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -728,36 +750,46 @@
 
 <h1 id="coulomb-backends-exact-density-fitted-streamed-screened">Coulomb backends: exact, density-fitted, streamed, screened</h1>
 <p>The two-electron Coulomb (and exact-exchange) term is the engine's cost center. dftax
-offers a ladder of backends with the same energy but different memory/compute trade-offs.</p>
+offers a ladder of backends with the same energy but different memory/compute
+trade-offs. Each backend is a <strong>value</strong> passed to the builder as <code>coulomb=</code>; invalid
+combinations raise at the factory.</p>
 <h2 id="exact-4-center-eris-default">Exact 4-center ERIs (default)</h2>
-<pre><code class="language-python">from dftax import run_rks
-from dftax.system import Molecule
+<pre><code class="language-python">from dftax import KS, Molecule, exact, scf
 from dftax.energy.xc import PBE
 
 water = Molecule.from_xyz(&quot;O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043&quot;, &quot;sto-3g&quot;)
-run_rks(water, PBE())                      # builds the (nao⁴) ERI tensor
+scf(KS(water, PBE()))                          # builds the (nao⁴) ERI tensor
+scf(KS(water, PBE(), coulomb=exact()))         # the same, spelled explicitly
 </code></pre>
 <p>Exact <code>(μν|λσ)</code> via McMurchie-Davidson, using the 8-fold permutational symmetry. O(N⁴)
-memory, best for small systems and as the validation reference.</p>
+memory, best for small systems and as the validation reference. Two variants trade
+compute for memory:</p>
+<pre><code class="language-python">exact(screen=1e-10)   # Cauchy-Schwarz-screened materialized ERI tensor
+exact(stream=True)    # J/K contracted on the fly, O(N²) memory, no ERI tensor
+</code></pre>
 <h2 id="density-fitting-ri">Density fitting (RI)</h2>
-<pre><code class="language-python">run_rks(water, PBE(), auxbasis=&quot;weigend&quot;)  # RI-J Coulomb via a fitting basis
+<pre><code class="language-python">from dftax import df
+
+scf(KS(water, PBE(), coulomb=df(&quot;def2-universal-jkfit&quot;)))   # RI-J / RI-K
 </code></pre>
 <p>Resolution-of-identity reduces the 4-center integral to 2- and 3-center pieces against an
-auxiliary basis: O(N³) compute, O(N²·N_aux) memory for the 3-center tensor.</p>
+auxiliary basis: O(N³) compute, O(N²·N_aux) memory for the materialized 3-center tensor.</p>
 <h2 id="streaming-screening-large-systems">Streaming + screening (large systems)</h2>
 <p>For memory-light runs, stream the RI-J contraction over auxiliary chunks (never forming
-the 3-center tensor) and Cauchy-Schwarz-screen negligible bra pairs:</p>
-<pre><code class="language-python">from dftax import RKS, rks_scf
-from dftax.grid import becke_grid
+the nao²×naux tensor) and Schwarz-screen negligible bra pairs; the XC integral streams
+over grid chunks the same way via the grid spec:</p>
+<pre><code class="language-python">from dftax import KS, becke, df, scf
 
-gc, gw = becke_grid(water.symbols, water.atom_coords(), 75, 302)
-ks = RKS.from_molecule(water, PBE(), gc, gw,
-                       auxbasis=&quot;weigend&quot;, df_chunk=64, df_screen=1e-10)
-rks_scf(ks).e_tot
+ks = KS(water, PBE(),
+        coulomb=df(&quot;def2-universal-jkfit&quot;, chunk=64, screen=1e-10),
+        grid=becke(chunk=20_000))
+scf(ks).e_tot
 </code></pre>
-<p><code>df_chunk</code> sets the auxiliary streaming chunk (O(chunk·nao) grid memory); <code>df_screen</code>
-drops bra pairs whose self-Schwarz factor is below the relative cutoff (O(N) survivors for
-extended systems). Hybrids stream RI-K the same way.</p>
+<p><code>df(..., chunk=...)</code> sets the auxiliary streaming chunk; <code>screen=</code> drops bra pairs
+whose self-Schwarz factor is below the relative cutoff (O(N) survivors for extended
+systems; it requires <code>chunk</code>). <code>becke(chunk=...)</code> (or <code>points(coords, weights,
+chunk=...)</code> for an explicit grid) streams the XC integral over grid chunks of that
+many points, O(chunk·nao) memory. Hybrids stream RI-K the same way.</p>
 <h2 id="hybrids-and-exact-exchange">Hybrids and exact exchange</h2>
 <p><code>PBE0</code> / <code>B3LYP</code> add a fraction of exact exchange <code>K</code>. On the exact path it is contracted
 on the fly (<code>exchange_k_4c</code>); under density fitting it uses streamed RI-K. The L ≥ 2 exact
@@ -774,18 +806,33 @@ path is compile- and memory-bounded by scanning the bra primitive pair in the ER
 <tbody>
 <tr>
 <td>small / validation</td>
-<td>exact 4-center (default)</td>
+<td><code>exact()</code> (default)</td>
+</tr>
+<tr>
+<td>small, memory-tight</td>
+<td><code>exact(stream=True)</code> or <code>exact(screen=1e-10)</code></td>
 </tr>
 <tr>
 <td>medium</td>
-<td>RI density fitting (<code>auxbasis=...</code>)</td>
+<td><code>df("def2-universal-jkfit")</code></td>
 </tr>
 <tr>
 <td>large</td>
-<td>streamed + screened DF (<code>df_chunk</code>, <code>df_screen</code>)</td>
+<td><code>df("def2-universal-jkfit", chunk=64, screen=1e-10)</code> + <code>becke(chunk=20_000)</code></td>
 </tr>
 </tbody>
 </table>
+<h2 id="multi-gpu-mesh">Multi-GPU: <code>mesh=</code></h2>
+<p><code>KS(..., mesh=mesh())</code> shards the calculation across a 1-D device mesh (all
+local devices by default; pass <code>mesh(devices=[...])</code> to choose). The XC
+quadrature is sharded over grid points, and the density-fitted backend builds
+and holds its 3-center tensor in per-device aux slabs — no device ever
+materializes more than <code>naux/ndev</code> of it — with hybrid exact exchange computed
+slab-wise. The dense nao² matrices (S, hcore, P, Fock) stay replicated, and
+every collective differentiates, so <code>scf</code>, <code>minimize</code>, and property workflows
+run unchanged. Not supported with <code>mesh=</code>: the streamed <code>df(chunk=...)</code> backend
+(the aux-sharded materialized backend covers that memory regime) — it raises at
+build time. A one-device mesh is a no-op.</p>
 
 
 

@@ -422,7 +422,7 @@
   <span class="md-ellipsis">
     
   
-    Drivers & functionals
+    Build & solve
   
 
     
@@ -715,9 +715,10 @@ matrix is <code>F = sym(∂E/∂P)</code>, so no XC potential is hand-coded, and
 runtime (PySCF is only a test-time reference oracle).</p>
 <h2 id="highlights">Highlights</h2>
 <ul>
-<li><strong>RKS + UKS</strong> closed- and open-shell DFT; <strong>LDA, PBE, PBE0, B3LYP</strong>.</li>
-<li><strong>Solvers</strong>: on-device DIIS SCF (optional level-shifting) and differentiable Adam
-  direct minimization.</li>
+<li><strong>Closed- and open-shell</strong> (spin-polarized) DFT through one spin-stacked <code>KS</code>
+  functional; <strong>LDA, PBE, PBE0, B3LYP</strong>.</li>
+<li><strong>Solvers</strong>: on-device DIIS SCF (optional level-shifting) and differentiable
+  direct minimization with any <a href="https://optax.readthedocs.io/">optax</a> optimizer.</li>
 <li><strong>Coulomb/exchange</strong>: exact 4-center ERI, RI density fitting (RI-J / RI-K), and
   memory-light <strong>streamed, Schwarz-screened</strong> paths for larger systems.</li>
 <li><strong>Gradients and properties</strong>: analytic forces (Pulay-free), implicit-diff SCF
@@ -734,18 +735,21 @@ pip install dftax[cuda12]    # + CUDA 12 jaxlib (Linux GPU)
 <pre><code class="language-python">import jax
 jax.config.update(&quot;jax_enable_x64&quot;, True)   # DFT energies want float64
 
-from dftax import run_ks
-from dftax.system import Molecule
+from dftax import KS, Molecule, scf
 from dftax.energy.xc import PBE
 
 water = Molecule.from_xyz(&quot;O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043&quot;, &quot;sto-3g&quot;)
-print(run_ks(water, PBE()).e_tot)           # -75.146751...
+ks  = KS(water, PBE())                      # exact ERI + default becke() grid (75, 302)
+print(scf(ks).e_tot)                        # -75.146751...
 </code></pre>
-<p><code>run_ks</code> dispatches to RKS or UKS by the molecule's spin.</p>
+<p><code>KS(system, xc, *, grid=None, coulomb=None, spin=None)</code> builds the energy
+functional (every choice is a value, not a flag); <code>scf</code> / <code>minimize</code> solve it.
+Spin is inferred from the system: spin 0 runs closed-shell restricted, nonzero
+spin (or an explicit <code>spin=</code>) runs spin-polarized α/β channels.</p>
 <h2 id="where-to-next">Where to next</h2>
 <ul>
 <li><a href="tutorials/getting-started/">Getting started</a>: install, precision, a first calculation.</li>
-<li><a href="tutorials/drivers/">Drivers and functionals</a>: RKS/UKS, LDA/PBE/PBE0/B3LYP, DIIS vs direct min.</li>
+<li><a href="tutorials/drivers/">Build &amp; solve</a>: the <code>KS</code> builder, LDA/PBE/PBE0/B3LYP, <code>scf</code> vs <code>minimize</code>.</li>
 <li><a href="tutorials/coulomb-backends/">Coulomb backends</a>: exact ERIs, density fitting, streaming, screening.</li>
 <li><a href="tutorials/forces/">Forces</a>: analytic Pulay-free nuclear gradients.</li>
 <li><a href="tutorials/batched/">Batched evaluation</a>: <code>vmap</code> over many geometries.</li>

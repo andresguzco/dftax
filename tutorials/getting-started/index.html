@@ -426,7 +426,7 @@
   <span class="md-ellipsis">
     
   
-    Drivers & functionals
+    Build & solve
   
 
     
@@ -723,21 +723,25 @@ uv sync --extra test         # + pytest/PySCF (PySCF is a *test-only* reference 
 jax.config.update(&quot;jax_enable_x64&quot;, True)
 </code></pre>
 <h2 id="a-first-calculation">A first calculation</h2>
-<pre><code class="language-python">from dftax import run_ks
-from dftax.system import Molecule
+<pre><code class="language-python">from dftax import KS, Molecule, scf
 from dftax.energy.xc import PBE
 
 water = Molecule.from_xyz(&quot;O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043&quot;, &quot;sto-3g&quot;)
-result = run_ks(water, PBE())
+ks = KS(water, PBE())        # exact ERI + default becke() grid (75, 302)
+result = scf(ks)             # DIIS SCF -&gt; KSResult
 print(result.e_tot)          # -75.146751...
 </code></pre>
 <p><code>Molecule.from_xyz</code> takes a PySCF-style atom string (Ångström) and a basis-set name;
-coordinates are stored internally in Bohr. <code>run_ks</code> dispatches to restricted (RKS) or
-unrestricted (UKS) by the molecule's spin. The result carries <code>e_tot</code>, <code>e_elec</code>,
-<code>converged</code>, <code>n_iter</code>, <code>mo_energy</code>, <code>mo_coeff</code>, and the density matrix <code>P</code>.</p>
+coordinates are stored internally in Bohr. <code>KS(system, xc)</code> builds the differentiable
+energy functional (a closed shell runs restricted; a molecule with nonzero spin, or an
+explicit <code>spin=</code> argument, runs spin-polarized α/β channels), and <code>scf</code> solves it. The
+<code>KSResult</code> carries <code>e_tot</code>, <code>e_elec</code>, <code>converged</code>, <code>n_iter</code>, <code>nocc</code>, <code>mo_energy</code>,
+<code>mo_coeff</code>, and the density matrix <code>P</code>. Orbital and density fields are spin-stacked
+with a leading <code>nspin</code> axis: <code>result.P[0]</code> is the closed-shell density, and a
+spin-polarized run has <code>nspin = 2</code> (α = index 0, β = 1).</p>
 <h2 id="where-to-next">Where to next</h2>
 <ul>
-<li><a href="../drivers/">Drivers &amp; functionals</a>: RKS/UKS, LDA/PBE/PBE0/B3LYP, DIIS vs direct min.</li>
+<li><a href="../drivers/">Build &amp; solve</a>: the <code>KS</code> builder, LDA/PBE/PBE0/B3LYP, <code>scf</code> vs <code>minimize</code>.</li>
 <li><a href="../coulomb-backends/">Coulomb backends</a>: exact ERIs, density fitting, streaming, screening.</li>
 <li><a href="../forces/">Forces</a>: analytic Pulay-free nuclear gradients.</li>
 <li><a href="../batched/">Batched evaluation</a>: <code>vmap</code> over many geometries.</li>

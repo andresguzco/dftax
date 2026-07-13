@@ -198,7 +198,7 @@ def _eri3c_sizes(basis, aux_basis):
     The 3-center Hermite index per axis reaches ``(l_a + l_b) + l_c``, and the Boys
     order reaches the total angular momentum ``(l_a + l_b + l_c) ≤ 2·L_orb + L_aux``.
     Sizing to the molecule (like :mod:`eri4c`) is both correct and, for small bases,
-    cheaper than the old hardcoded ``_MAX_T=_MAX_M=9`` — which covered only total
+    cheaper than the old hardcoded ``_MAX_T=_MAX_M=9``, which covered only total
     order ≤ 8 (i.e. up to d-primary) and *silently truncated* f-primary DF integrals.
     ``mt`` here equals 9 exactly at the old design point ``(d,d,g)``.
     """

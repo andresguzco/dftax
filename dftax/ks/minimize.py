@@ -11,7 +11,7 @@ the KS energy.
 
 The projector is computed with ``solve`` rather than an eigendecomposition:
 at the orthonormal stationary point ``ZᵀSZ ≈ I`` is fully degenerate, where
-``eigh``'s derivative is ill-defined — the eigh path yields a gauge-dependent
+``eigh``'s derivative is ill-defined; the eigh path yields a gauge-dependent
 gradient that on GPU (cuSolver) non-deterministically NaNs the minimization.
 Mirrors :func:`dftax.ks.forces._density_from_Z`.
 
@@ -88,7 +88,7 @@ def minimize(
             ``optax.adam(0.3)``.
         max_steps: optimizer step budget.
         g_tol: stop when the global gradient norm falls below this.
-        Z0: optional initial coefficient guess — one ``(nao, nocc_σ)`` array
+        Z0: optional initial coefficient guess, one ``(nao, nocc_σ)`` array
             per channel (a bare array is accepted for a closed shell); default
             is the core-Hamiltonian guess.
         verbose: print per-step energy and gradient norm.
@@ -128,7 +128,7 @@ def minimize(
             break
 
     # Pack the result with the full canonical orbital set from the converged
-    # Fock (forward-only eigh — not differentiated), for parity with SCF. The
+    # Fock (forward-only eigh, not differentiated), for parity with SCF. The
     # occupied columns span the converged density only at an exactly-converged
     # aufbau minimum; P is the authoritative density (consumers that freeze
     # the density, e.g. forces, extract the occupied space from P).

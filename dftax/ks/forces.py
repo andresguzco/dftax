@@ -53,15 +53,15 @@ def _occupied_coefficients(result, S):
     """Per-channel occupied coefficients from a :class:`KSResult` (or accept
     an explicit tuple of arrays / a bare closed-shell array).
 
-    From a result, the coefficients are extracted from ``result.P`` — the
-    density the solver actually returned — not from the ``mo_coeff`` packing:
+    From a result, the coefficients are extracted from ``result.P`` (the
+    density the solver actually returned), not from the ``mo_coeff`` packing:
     minimize's aufbau-ordered canonical orbitals need not span ``P`` when the
     optimization stopped short of ``g_tol`` or settled at a non-aufbau /
     degenerate-frontier stationary point, and the envelope-theorem force
     identity requires the frozen projector to span the stationary density.
     The extraction (``_rik_occ_orbitals``) is a forward-only eigh of the
-    near-idempotent projector — its top-``nocc`` eigenvalues cluster at the
-    occupation weight, cleanly separated from the null space — and is never
+    near-idempotent projector (its top-``nocc`` eigenvalues cluster at the
+    occupation weight, cleanly separated from the null space) and is never
     differentiated (the coefficients are ``stop_gradient``-ed).
     """
     from dftax.ks.batched import BatchedResult
@@ -95,7 +95,7 @@ def forces(
     Args:
         mol: a native :class:`~dftax.system.molecule.Molecule` (the energy is
             rebuilt as a function of the nuclear coordinates, so the basis and
-            grid must be reconstructible — PySCF ``Mole`` objects are not
+            grid must be reconstructible; PySCF ``Mole`` objects are not
             supported here).
         xc: the exchange-correlation functional.
         result: the converged :class:`~dftax.ks.scf.KSResult` (from
@@ -105,11 +105,11 @@ def forces(
             :func:`_occupied_coefficients`), so the forces belong to exactly
             the density the solver returned.
         grid: Becke-grid quality (a :func:`~dftax.grid.becke` spec; match the
-            energy calculation — a ``chunk`` on the spec streams the XC grid
+            energy calculation; a ``chunk`` on the spec streams the XC grid
             here too). Explicit point grids cannot follow the nuclei, so only
             Becke specs are accepted.
         coulomb: :func:`~dftax.ks.terms.exact` (default) or a *materialized*
-            :func:`~dftax.ks.terms.df` — the streamed backends do not propagate
+            :func:`~dftax.ks.terms.df`; the streamed backends do not propagate
             geometry gradients (see :func:`dftax.ks.terms._streamed_df_rik`).
     """
     grid = becke() if grid is None else grid

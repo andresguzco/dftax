@@ -78,10 +78,10 @@ path is compile- and memory-bounded by scanning the bra primitive pair in the ER
 `KS(..., mesh=mesh())` shards the calculation across a 1-D device mesh (all
 local devices by default; pass `mesh(devices=[...])` to choose). The XC
 quadrature is sharded over grid points, and the density-fitted backend builds
-and holds its 3-center tensor in per-device aux slabs — no device ever
-materializes more than `naux/ndev` of it — with hybrid exact exchange computed
+and holds its 3-center tensor in per-device aux slabs (no device ever
+materializes more than `naux/ndev` of it), with hybrid exact exchange computed
 slab-wise. The dense nao² matrices (S, hcore, P, Fock) stay replicated, and
 every collective differentiates, so `scf`, `minimize`, and property workflows
 run unchanged. Not supported with `mesh=`: the streamed `df(chunk=...)` backend
-(the aux-sharded materialized backend covers that memory regime) — it raises at
+(the aux-sharded materialized backend covers that memory regime); it raises at
 build time. A one-device mesh is a no-op.

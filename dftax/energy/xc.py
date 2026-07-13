@@ -78,7 +78,7 @@ class PBEExchange(DensityFunctional):
     kappa: ClassVar[float] = 0.804
     # μ = β·π²/3 with β = 0.06672455060314922 (the PBE/PW92 β, cf. PBECorrelation.beta);
     # this is libxc's exact MU_PBE. The earlier 0.21951 truncation (rel. err 2.3e-5) was
-    # the *sole* source of the documented ~1e-5 Ha PBE/PBE0 gap vs libxc — full precision
+    # the *sole* source of the documented ~1e-5 Ha PBE/PBE0 gap vs libxc; full precision
     # restores machine-precision agreement (verified on water: 1.5e-5 → 2e-11 Ha).
     mu: ClassVar[float] = 0.2195149727645171
 

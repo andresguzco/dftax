@@ -23,14 +23,14 @@ usual sub-mHa RI error on top.
 
 Try `level_shift=0.3` (it damps oscillation without changing the fixed point),
 a better grid, or tighter `max_iter`. Some small-gap systems on *coarse* grids
-sit in genuine limit cycles — the commutator floor is set by grid noise, not by
+sit in genuine limit cycles; the commutator floor is set by grid noise, not by
 the solver. `minimize` is the robust fallback: first-order descent past the
 saddle points where DIIS rattles.
 
 ## Gradients are NaN on GPU but fine on CPU
 
 The classic cause is differentiating `jnp.linalg.eigh` of a symmetric matrix at
-(near-)degenerate eigenvalues — NaN on GPU (cuSolver), silently gauge-dependent
+(near-)degenerate eigenvalues: NaN on GPU (cuSolver), silently gauge-dependent
 on CPU. dftax's own gradient paths avoid eigh (solve-based projectors,
 `custom_jvp` metric inverse); if you hit this, look for an `eigh` in *your*
 code around symmetric molecules or orthonormal optima. Forward-only `eigh` is
@@ -39,7 +39,7 @@ fine.
 ## Why do property helpers run their own SCF?
 
 `dipole(mol, xc)`, `hessian(mol, xc)` etc. rebuild and re-solve at displaced
-geometries / under fields, so they own their SCFs by construction — you pass
+geometries / under fields, so they own their SCFs by construction: you pass
 the *specification* `(mol, xc, grid=becke(...))`, not a solved result.
 `forces` is the exception: it takes your converged `KSResult`.
 
@@ -47,10 +47,10 @@ the *specification* `(mol, xc, grid=becke(...))`, not a solved result.
 
 No. The compute path is pure JAX. PySCF appears in two optional places: as a
 test-time reference oracle, and as an *input* format (`KS` accepts a `Mole`
-for setup — basis parsing and geometry only).
+for setup, meaning basis parsing and geometry only).
 
 ## Can I take geometry gradients through the streamed backends?
 
-Streamed XC: yes. Streamed RI-K (hybrids with `df(chunk=...)`): no — its
+Streamed XC: yes. Streamed RI-K (hybrids with `df(chunk=...)`): no, since its
 `custom_vjp` supplies the exchange Fock w.r.t. the density only. `forces`
 enforces this: use the materialized `df(...)` for DF-surface forces.

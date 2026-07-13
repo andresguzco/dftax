@@ -2,8 +2,8 @@
 
 **A differentiable Kohn-Sham DFT engine in pure JAX.**
 
-dftax is built on a single idea: write all of Kohn-Sham DFT — integrals,
-quadrature grid, exchange-correlation functionals, the SCF loop — as one
+dftax is built on a single idea: write all of Kohn-Sham DFT (integrals,
+quadrature grid, exchange-correlation functionals, the SCF loop) as one
 differentiable JAX program, and every derivative in quantum chemistry becomes
 a call to autodiff. Forces (`−∂E/∂R`), Hessians, IR and Raman spectra,
 polarizabilities, and alchemical derivatives (`∂E/∂Z`) all come from the same
@@ -54,14 +54,14 @@ print(scf(ks).e_tot)                        # -75.146751...
 ```
 
 `KS(system, xc, *, grid=None, coulomb=None, spin=None)` assembles the energy
-functional — every choice is a value passed to the builder — and `scf` /
+functional (every choice is a value passed to the builder) and `scf` /
 `minimize` solve it. Spin is inferred from the system: spin 0 runs closed-shell
 restricted, nonzero spin (or an explicit `spin=`) runs spin-polarized α/β
 channels.
 
 ## Where to next
 
-Read [All of dftax](all-of-dftax.md) — one page, about fifteen minutes, the
+Read [All of dftax](all-of-dftax.md): one page, about fifteen minutes, the
 whole mental model. Then the [examples gallery](examples/water.ipynb)
 (introductory → advanced → features, all executed notebooks), or:
 

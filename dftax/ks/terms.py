@@ -132,7 +132,7 @@ def _metric_pinv(V: Float[Array, "naux naux"]) -> Float[Array, "naux naux"]:
     Wrapped in a ``custom_jvp`` so its derivative uses the matrix identity
     ``d(V⁺) = -V⁺ (dV) V⁺`` rather than differentiating the eigendecomposition. eigh's
     backward carries ``1/(wᵢ-wⱼ)`` terms that are ill-defined at the *degenerate* metric
-    eigenvalues of symmetric molecules (Td/Oh) — they NaN the density-fitted forces on
+    eigenvalues of symmetric molecules (Td/Oh); they NaN the density-fitted forces on
     GPU (cuSolver). The forward value is identical to the eigh pseudo-inverse.
     """
     w, U = jnp.linalg.eigh(V)
@@ -526,7 +526,7 @@ class ShardedDFCoulomb(CoulombTerm):
     builds only its own aux-slab of ``W`` (an all-to-all done as ``ndev``
     rounds of ``psum``, one per destination slab), contracts its slab's
     exchange partial against the replicated density, and the scalar partials
-    are ``psum``-reduced — per-device memory stays O(nao²·naux/ndev). Padded
+    are ``psum``-reduced; per-device memory stays O(nao²·naux/ndev). Padded
     aux rows are zero in ``int3c`` and null in the padded metric, so they
     contribute exactly nothing to J or K.
     """
@@ -576,7 +576,7 @@ class ShardedDFCoulomb(CoulombTerm):
             return e - 0.5 * ax * (tr_pkp(Pst[0]) + tr_pkp(Pst[1]))
 
         # check_rep=False: the static replication checker cannot prove the
-        # post-all_gather value is replicated (it is — every device computes
+        # post-all_gather value is replicated (it is; every device computes
         # the identical quadratic form after the gather).
         return shard_map(
             part, mesh=jmesh,
@@ -713,8 +713,8 @@ class ShardedGridXC(XCTerm):
     grid-axis arrays are padded to a multiple of the device count and laid out
     sharded over the mesh (see :func:`dftax.ks.shard._pad_shard_grid`). The
     energy runs each device's slice through the *unmodified* inner math under
-    ``shard_map`` — the density is replicated, the partial energies are
-    ``psum``-reduced — so the quadrature is exactly the single-device sum and
+    ``shard_map`` (the density is replicated, the partial energies are
+    ``psum``-reduced), so the quadrature is exactly the single-device sum and
     the collective differentiates natively (autodiff Fock, forces).
     """
 

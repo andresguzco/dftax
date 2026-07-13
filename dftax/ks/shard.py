@@ -7,8 +7,8 @@ Sharding is an execution policy chosen at build time, as a value:
 and it lives *inside* the energy terms (see
 :class:`~dftax.ks.terms.ShardedGridXC`): each sharded term runs a
 ``shard_map`` over the device mesh and ``psum``-reduces its partial energy,
-so everything above the terms — ``KS.electronic``, the SCF loop, the
-minimizer, autodiff Fock matrices and geometry forces — is unchanged and
+so everything above the terms (``KS.electronic``, the SCF loop, the
+minimizer, autodiff Fock matrices and geometry forces) is unchanged and
 differentiates through the collective natively. The dense nao² matrices
 (S, hcore, P, Fock) stay replicated; what shards is what actually scales:
 the quadrature grid (this module) and, next, the DF 3-center tensor.
@@ -91,7 +91,7 @@ def _slice_basis(basis, lo, hi):
 
 def _build_int3c_sharded(basis, aux_basis, devices):
     """Build the DF 3-center tensor directly in aux-axis shards, one slab per
-    device — no device ever materializes more than its (nao², naux/ndev) slice,
+    device; no device ever materializes more than its (nao², naux/ndev) slice,
     which is the whole capacity point.
 
     Returns ``(int3c, naux_pad)``: the globally-sharded ``(nao, nao, naux_pad)``

@@ -18,7 +18,7 @@ stops fitting; `mesh()` to spread the materialized tensors across GPUs. The
 
 ## Stream big grids
 
-`becke(..., chunk=20_000)` keeps XC memory at O(chunk·nao) — the materialized
+`becke(..., chunk=20_000)` keeps XC memory at O(chunk·nao); the materialized
 AO grid (and its jacobian, under `grad`) is usually the first thing to OOM on
 GPU for large systems. Forces honor the chunk too.
 
@@ -30,7 +30,7 @@ JAX preallocates on every visible GPU. Per run:
 CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 python run.py
 ```
 
-Use `mesh()` when you actually want all of them — a one-device mesh is a no-op.
+Use `mesh()` when you actually want all of them; a one-device mesh is a no-op.
 
 ## Batched runs: keep only what you need
 

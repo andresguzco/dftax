@@ -24,12 +24,12 @@ print("net |Σ F| =", np.abs(F.sum(0)).max())   # ~0 (translational invariance)
 ```
 
 `forces(mol, xc, res, *, grid=..., coulomb=None)` takes the converged `KSResult`
-(from `scf` or `minimize`) and slices the per-channel occupied orbitals itself —
+(from `scf` or `minimize`) and slices the per-channel occupied orbitals itself;
 open shells work through the same call (you can also pass the occupied coefficients
 directly). Pass the same `becke(...)` grid spec as the energy calculation; explicit
 point grids cannot follow the nuclei, so only Becke specs are accepted. With
 `coulomb=df("...")` the forces are for the density-fitted energy surface
-(materialized DF only — the streamed backends do not propagate geometry gradients).
+(materialized DF only; the streamed backends do not propagate geometry gradients).
 
 A finite-difference check (central difference of the energy) agrees with the analytic
 force to ~1e-9; see `examples/03_forces_h2.py`.

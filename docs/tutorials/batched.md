@@ -29,9 +29,9 @@ return_orbitals=False, mesh=None, ...)` takes coordinates of shape `(B, n_atom, 
 per-geometry arrays; with `forces=True` the `forces` field holds the analytic force
 tensor `(B, n_atom, 3)`. Orbital-sized fields (`P`, `mo_coeff`, `mo_energy`,
 O(B·nspin·nao²) device memory) are `None` unless you opt in with
-`return_orbitals=True`. `mesh=mesh()` shards the batch axis across a device mesh —
+`return_orbitals=True`. `mesh=mesh()` shards the batch axis across a device mesh:
 data parallelism over conformers, each device converging its slice independently.
-Open shells run through the same call — give the template molecule its spin, or pass
+Open shells run through the same call; give the template molecule its spin, or pass
 `spin=` explicitly (the usual `KS` rule).
 
 **Notes.** Forces are *not* taken by differentiating through the SCF (the `while_loop`

@@ -17,7 +17,7 @@ downstream as ``F_σ = sym(∂E/∂P_σ)`` (see :mod:`dftax.ks.scf`), so no
 exchange-correlation potential matrix is hand-coded.
 
 ``system`` may be a native :class:`~dftax.system.molecule.Molecule` (fully
-PySCF-free), a PySCF ``Mole`` (setup only — nothing PySCF enters the compute
+PySCF-free), a PySCF ``Mole`` (setup only; nothing PySCF enters the compute
 path), or a raw :class:`System` bundle of already-built basis + geometry (the
 low-level path used by forces, where the basis centers are traced). The spin
 structure is the static tuple ``nocc`` of per-channel occupied counts:
@@ -98,7 +98,7 @@ class System:
     """A raw, already-built system: basis + geometry + electron/spin counts.
 
     The low-level :class:`KS` input for callers that construct the basis
-    themselves — e.g. forces, which rebuild the energy as a function of traced
+    themselves, e.g. forces, which rebuild the energy as a function of traced
     nuclear coordinates via a ``tree_at``-recentered basis template. ``spin``
     (= 2S) is the system's default spin; the :class:`KS` builder's ``spin``
     argument overrides it.
@@ -295,11 +295,11 @@ class KS(eqx.Module):
             system: a :class:`~dftax.system.molecule.Molecule`, a PySCF
                 ``Mole`` (setup only), or a raw :class:`System`.
             xc: the exchange-correlation functional (e.g. ``PBE()``).
-            grid: quadrature choice — a :func:`~dftax.grid.becke` spec
+            grid: quadrature choice, a :func:`~dftax.grid.becke` spec
                 (default), an explicit ``(coords, weights)`` tuple, or a
                 :func:`~dftax.grid.points` spec (explicit grid + streaming
                 chunk).
-            coulomb: Coulomb/exchange backend — :func:`~dftax.ks.terms.exact`
+            coulomb: Coulomb/exchange backend, :func:`~dftax.ks.terms.exact`
                 (default) or :func:`~dftax.ks.terms.df`.
             spin: ``None`` infers from the system (closed shell → restricted);
                 an explicit ``spin`` (= 2S, including 0) requests
@@ -347,7 +347,7 @@ class KS(eqx.Module):
                 raise NotImplementedError(
                     "mesh= with a streamed df(chunk=...) backend is not "
                     "supported; the aux-sharded materialized backend covers "
-                    "that memory regime — use df(auxbasis) with mesh=."
+                    "that memory regime; use df(auxbasis) with mesh=."
                 )
         S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv = _build_integrals(
             basis, coords, charges, grid_coords, aux_basis,
@@ -360,7 +360,7 @@ class KS(eqx.Module):
         self.e_nn = e_nn
         self.basis = basis
         if shard_df:
-            # Built directly in per-device slabs: the capacity path — no
+            # Built directly in per-device slabs: the capacity path; no
             # device ever holds more than its naux/ndev slice of the
             # O(nao²·naux) tensor. The metric inverse is zero-padded to the
             # padded aux dimension (padded γ entries are exact zeros).

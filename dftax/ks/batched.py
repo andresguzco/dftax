@@ -91,7 +91,7 @@ def scf_batched(
 
     With ``forces=True`` the result carries the analytic force tensor
     ``(B, n_atom, 3)``; with ``return_orbitals=True`` it also carries
-    ``P``/``mo_coeff``/``mo_energy`` (O(B·nspin·nao²) memory — off by
+    ``P``/``mo_coeff``/``mo_energy`` (O(B·nspin·nao²) memory, off by
     default). ``mesh=`` shards the batch axis across a device mesh.
     """
     grid = becke() if grid is None else grid
@@ -158,7 +158,7 @@ def scf_batched(
             cb = jnp.concatenate([cb, jnp.tile(cb[-1:], (n_pad, 1, 1))])
         jmesh = jax.sharding.Mesh(np.asarray(devices), ("batch",))
         bspec = jax.sharding.PartitionSpec("batch")
-        # check_rep=False: pure data parallelism (no collectives) — the
+        # check_rep=False: pure data parallelism (no collectives); the
         # varying-axis analysis balks at scan carries whose init is mesh-
         # invariant (constants) while the loop makes them per-shard values.
         out = shard_map(

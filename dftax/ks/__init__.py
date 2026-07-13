@@ -2,7 +2,7 @@
 
 ``dftax.ks`` assembles the pieces in ``dftax.integrals`` and ``dftax.energy``
 into runnable calculations: the differentiable total-energy functional
-:class:`~dftax.ks.energy.KS` (built with choices-as-values — grid specs from
+:class:`~dftax.ks.energy.KS` (built with choices-as-values: grid specs from
 :mod:`dftax.grid`, Coulomb backends from :func:`~dftax.ks.terms.exact` /
 :func:`~dftax.ks.terms.df`), the solver verbs :func:`~dftax.ks.scf.scf`
 (autodiff-Fock DIIS) and :func:`~dftax.ks.minimize.minimize` (direct

@@ -100,7 +100,7 @@ def _solve_field(mol, xc, gc, gw, *, chunk=None, field=None,
         e_nuc_field = -jnp.dot(field, nuclear_dipole(mol, origin))
     res = scf(ks, **scf_kw)
     # Total density: sum the spin channels (a closed shell is the single
-    # channel; a spin-polarized system needs α+β — P[0] alone silently drops
+    # channel; a spin-polarized system needs α+β; P[0] alone silently drops
     # every β electron from Tr(D·P)).
     return jnp.sum(res.P, axis=0), float(res.e_tot) + float(e_nuc_field), basis
 
@@ -175,7 +175,7 @@ def _atomic_masses(symbols) -> np.ndarray:
 
 
 def _displaced(mol, coords) -> Molecule:
-    """The molecule at a displaced geometry — same electronic system: charge,
+    """The molecule at a displaced geometry, keeping the same electronic system: charge,
     spin, and AO convention must all survive the rebuild (dropping charge/spin
     evaluates a different molecule at every displacement)."""
     return Molecule(
@@ -341,7 +341,7 @@ def alchemical_deriv(
     ks = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk))
     res = scf(ks, **scf_kw)
     # Per-channel occupied coefficients spanning the converged density
-    # (closed shell: one doubly-occupied channel, w=2; polarized: unit w) —
+    # (closed shell: one doubly-occupied channel, w=2; polarized: unit w);
     # slicing only the α channel to nelec//2 columns would evaluate the
     # gradient at a density that is neither the converged one nor any valid
     # closed-shell one.

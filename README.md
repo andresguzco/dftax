@@ -12,8 +12,8 @@
 
 </div>
 
-dftax is built on a single idea: write all of Kohn-Sham DFT — integrals,
-quadrature grid, exchange-correlation functionals, the SCF loop — as one
+dftax is built on a single idea: write all of Kohn-Sham DFT (integrals,
+quadrature grid, exchange-correlation functionals, the SCF loop) as one
 differentiable JAX program, and every derivative in quantum chemistry becomes a
 call to autodiff. Forces are the gradient of the energy. The Fock matrix is
 `sym(∂E/∂P)`, so no exchange-correlation potential is hand-coded anywhere.
@@ -32,7 +32,7 @@ Derivatives of converged quantities come from implicit differentiation of the
 SCF fixed point (CPHF), so you can differentiate through a converged
 calculation without unrolling the solver. And because everything is ordinary
 JAX, the whole engine jits, vmaps over geometries, runs on GPU, and composes
-with the rest of a differentiable pipeline — fitting an exchange-correlation
+with the rest of a differentiable pipeline: fitting an exchange-correlation
 functional end to end, for example, or putting DFT inside a training loop.
 
 The runtime is also self-contained: pure JAX/Equinox, with no `libcint`,
@@ -127,7 +127,7 @@ rather than a precomputed result.
 
 ### Larger systems
 
-The exact 4-center ERI is O(N⁴) — fine for small systems, and the reference
+The exact 4-center ERI is O(N⁴): fine for small systems, and the reference
 everything else is validated against. From there, density fitting drops the
 Coulomb cost to O(N³), streaming removes the materialized tensors (O(N²)
 memory), and Schwarz screening cuts the per-iteration work further. Each
@@ -156,7 +156,7 @@ built and held in per-device auxiliary slabs, so no device ever materializes
 more than its `naux/ndev` slice; hybrid exact exchange runs slab-wise, and the
 dense nao² matrices stay replicated. Every collective differentiates, so SCF,
 direct minimization, and forces run unchanged. `scf_batched(mesh=mesh())`
-shards the batch axis instead — data parallelism over conformers.
+shards the batch axis instead, giving data parallelism over conformers.
 
 All of this works for hybrids (streamed RI-K via an exact `custom_vjp`) and
 for open shells, and combinations that would silently do nothing raise at the
@@ -176,8 +176,8 @@ Against PySCF on water / sto-3g (details in
 | PBE0  | 1.1e-5 |
 
 LDA and B3LYP reproduce libxc to machine precision. PBE and PBE0 sit at about
-1e-5 Ha — a known gap in the hand-rolled GGA enhancement factors, well within
-chemical accuracy (about 1.6e-3 Ha). Analytic forces match finite differences
+1e-5 Ha, a known gap in the hand-rolled GGA enhancement factors and still well
+within chemical accuracy (about 1.6e-3 Ha). Analytic forces match finite differences
 to about 4e-8 Ha/Bohr, the analytic (CPHF) polarizability matches finite-field
 to about 1e-4, and vibrational frequencies match PySCF to a few cm⁻¹.
 
@@ -202,7 +202,7 @@ Worth knowing up front:
 
 ## Documentation
 
-- Docs site: <https://andresguzco.github.io/dftax/> — tutorials, executed
+- Docs site: <https://andresguzco.github.io/dftax/>, with tutorials, executed
   example notebooks, and the API reference.
 - [`examples/`](examples/): the same examples as runnable scripts.
 - Records: [`scripts/gpu/GPU_VALIDATION.md`](scripts/gpu/GPU_VALIDATION.md)
@@ -250,7 +250,7 @@ PyTorch),
 
 **Conventional engines**:
 [PySCF](https://github.com/pyscf/pyscf) and
-[GPU4PySCF](https://github.com/pyscf/gpu4pyscf) — mature, feature-rich
+[GPU4PySCF](https://github.com/pyscf/gpu4pyscf), the mature, feature-rich
 references. dftax uses PySCF as its test-time oracle and aims to be a good
 neighbor to it, not a replacement.
 

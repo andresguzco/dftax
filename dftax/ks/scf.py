@@ -224,8 +224,13 @@ def scf(
         ```
     """
     X = canonical_orthonormalizer(ks.S, lindep_thresh)
+    # Tolerances ride along as traced arrays: under filter_jit a Python scalar
+    # is a static argument, so retrying with level_shift or a tighter e_tol
+    # would otherwise recompile the whole solve. diis_space (buffer shape) and
+    # verbose (Python branch) must stay static.
     e_tot, P, C, eps, converged, n_iter = _scf_solve(
-        ks, X, max_iter, e_tol, d_tol, diis_space, verbose, level_shift
+        ks, X, jnp.asarray(max_iter), jnp.asarray(e_tol), jnp.asarray(d_tol),
+        diis_space, verbose, jnp.asarray(level_shift)
     )
     result = KSResult(
         e_tot=float(e_tot),

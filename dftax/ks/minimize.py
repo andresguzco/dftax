@@ -28,6 +28,8 @@ minimization when end-to-end differentiability of the solve is what you need.
 
 from __future__ import annotations
 
+import warnings
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -77,6 +79,7 @@ def minimize(
     *,
     max_steps: int = 2000,
     g_tol: float = 1e-6,
+    check_every: int = 10,
     Z0: Array | tuple | None = None,
     verbose: bool = False,
 ) -> KSResult:
@@ -88,6 +91,10 @@ def minimize(
             ``optax.adam(0.3)``.
         max_steps: optimizer step budget.
         g_tol: stop when the global gradient norm falls below this.
+        check_every: host-side convergence checks happen every this many steps
+            (each check blocks on the device), so the reported ``n_iter`` can
+            overshoot the true crossing by up to ``check_every - 1`` steps.
+            ``verbose`` checks every step.
         Z0: optional initial coefficient guess, one ``(nao, nocc_σ)`` array
             per channel (a bare array is accepted for a closed shell); default
             is the core-Hamiltonian guess.
@@ -117,21 +124,31 @@ def minimize(
     n_iter = max_steps
     for step in range(max_steps):
         e, g = _value_and_grad(ks, Zs)
-        updates, state = opt.update(g, state)
+        updates, state = opt.update(g, state, Zs)
         Zs = optax.apply_updates(Zs, updates)
-        gnorm = float(jnp.sqrt(sum(jnp.sum(gi ** 2) for gi in g)))
-        if verbose:
-            print(f"  min {step:4d}: E={float(e):.10f}  |g|={gnorm:.2e}")
-        if gnorm < g_tol:
-            converged = True
-            n_iter = step + 1
-            break
+        # Pulling the gradient norm to the host blocks on the device, so only
+        # check at the cadence asked for; between checks the steps queue up.
+        if verbose or step % check_every == check_every - 1 or step == max_steps - 1:
+            gnorm = float(jnp.sqrt(sum(jnp.sum(gi ** 2) for gi in g)))
+            if verbose:
+                print(f"  min {step:4d}: E={float(e):.10f}  |g|={gnorm:.2e}")
+            if gnorm < g_tol:
+                converged = True
+                n_iter = step + 1
+                break
 
     # Pack the result with the full canonical orbital set from the converged
     # Fock (forward-only eigh, not differentiated), for parity with SCF. The
     # occupied columns span the converged density only at an exactly-converged
     # aufbau minimum; P is the authoritative density (consumers that freeze
     # the density, e.g. forces, extract the occupied space from P).
+    if not converged:
+        warnings.warn(
+            f"Direct minimization did NOT converge in {max_steps} steps "
+            f"(g_tol={g_tol}); the returned energy is unreliable. Increase "
+            f"max_steps or use a smaller learning rate.",
+            stacklevel=2,
+        )
     w = 2.0 if len(ks.nocc) == 1 else 1.0
     P = _density_stack(Zs, ks.S, w)
     e_tot = float(_total_energy(ks, P))

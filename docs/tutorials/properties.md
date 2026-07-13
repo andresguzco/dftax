@@ -2,7 +2,7 @@
 
 `dftax.ks.properties` is a PySCF-runtime-free property layer: dipole, polarizability,
 Hessian → vibrational frequencies → IR / Raman, and alchemical derivatives. The
-geometric quantities are finite differences of the **analytic** Pulay-free forces; the
+geometric quantities are finite differences of the analytic Pulay-free forces; the
 dipole and polarizability are exact (matrix trace and finite field). Everything is
 validated against PySCF and/or finite difference.
 

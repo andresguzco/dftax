@@ -2,7 +2,7 @@
 
 The two-electron Coulomb (and exact-exchange) term is the engine's cost center. dftax
 offers a ladder of backends with the same energy but different memory/compute
-trade-offs. Each backend is a **value** passed to the builder as `coulomb=`; invalid
+trade-offs. Each backend is a value passed to the builder as `coulomb=`; invalid
 combinations raise at the factory.
 
 ## Exact 4-center ERIs (default)

@@ -2,7 +2,7 @@
 
 # dftax
 
-**Gradients through DFT: a differentiable Kohn-Sham engine in pure JAX.**
+**A differentiable Kohn-Sham DFT engine in pure JAX.**
 
 [![PyPI](https://img.shields.io/pypi/v/dftax.svg)](https://pypi.org/project/dftax/)
 [![Python](https://img.shields.io/pypi/pyversions/dftax.svg)](https://pypi.org/project/dftax/)
@@ -12,47 +12,55 @@
 
 </div>
 
-`dftax` is a Kohn-Sham DFT engine in which **the entire calculation is differentiable**.
-The integrals, the SCF fixed point, the exchange-correlation functionals, and the
-real-space grid are all pure JAX, so you can take gradients straight *through* a DFT
-calculation and place that calculation inside a larger differentiable or
-machine-learning pipeline.
+dftax is built on a single idea: write all of Kohn-Sham DFT — integrals,
+quadrature grid, exchange-correlation functionals, the SCF loop — as one
+differentiable JAX program, and every derivative in quantum chemistry becomes a
+call to autodiff. Forces are the gradient of the energy. The Fock matrix is
+`sym(∂E/∂P)`, so no exchange-correlation potential is hand-coded anywhere.
+Polarizabilities, vibrational spectra, and alchemical derivatives are just
+higher derivatives of the same program:
 
 ```python
-# one autodiff engine, every derivative (illustrative API):
-forces(mol, xc, res)         # −∂E/∂R    Pulay-free nuclear forces
-hessian(mol, xc)             # ∂²E/∂R²   gives vibrational frequencies
+forces(mol, xc, res)         # −∂E/∂R    nuclear forces
+hessian(mol, xc)             # ∂²E/∂R²   vibrational frequencies
 ir_spectrum(mol, xc)         # IR frequencies and intensities
 polarizability(mol, xc)      # −∂²E/∂F²
 alchemical_deriv(mol, xc)    # ∂E/∂Z
 ```
 
-The Kohn-Sham Fock matrix is obtained as `F = sym(∂E/∂P)`, so no exchange-correlation
-potential is hand-coded. Gradients of *converged* quantities come from **implicit
-differentiation** of the SCF fixed point (CPHF). Because it is all JAX, the whole
-thing `jit`s, `vmap`s over geometries, and runs on GPU. That is the capability
-conventional fast GPU codes cannot give you: differentiating through, and learning
-through, the DFT calculation itself, for example to fit exchange-correlation
-functionals end to end.
+Derivatives of converged quantities come from implicit differentiation of the
+SCF fixed point (CPHF), so you can differentiate through a converged
+calculation without unrolling the solver. And because everything is ordinary
+JAX, the whole engine jits, vmaps over geometries, runs on GPU, and composes
+with the rest of a differentiable pipeline — fitting an exchange-correlation
+functional end to end, for example, or putting DFT inside a training loop.
 
-> It is also self-contained: pure JAX/Equinox with **no `libcint`, `libxc`, or Maple
-> at runtime**. Basis sets come from [Basis Set Exchange](https://www.basissetexchange.org/)
-> at setup, the grid is built natively, and PySCF is only a test-time reference oracle.
+The runtime is also self-contained: pure JAX/Equinox, with no `libcint`,
+`libxc`, or Maple. Basis sets come from the
+[Basis Set Exchange](https://www.basissetexchange.org/) at setup time, the
+molecular grid is built natively, and PySCF appears only as a test-time
+reference oracle.
 
-## What's in the box
+## Features
 
-| Area | What's included |
-|---|---|
-| **Methods** | Closed-shell (restricted) and open-shell (spin-polarized) KS-DFT through one spin-stacked `KS` functional |
-| **Functionals** | LDA (Slater + VWN5), PBE, PBE0, B3LYP, closed- and open-shell |
-| **Solvers** | On-device DIIS SCF (optional level-shifting) **and** differentiable direct minimization with any [optax](https://optax.readthedocs.io/) optimizer |
-| **Coulomb/exchange** | Exact 4-center ERI, RI density fitting (RI-J / RI-K), and memory-light **streamed, Schwarz-screened** paths for larger systems |
-| **Differentiation** | Analytic forces (autodiff, Pulay-free, FD-checked) plus implicit-diff SCF response (CPHF) for gradients of converged quantities |
-| **Properties** | Dipole, polarizability, Hessian, vibrational frequencies, IR/Raman, alchemical derivatives (∂E/∂Z) |
-| **Batching** | `vmap` over geometries: energies and forces for many conformers in one call |
-| **Hardware** | CPU and GPU (validated on an NVIDIA A100, where energies match CPU to machine precision) |
+- Closed-shell (restricted) and open-shell (spin-polarized) KS-DFT through one
+  spin-stacked `KS` functional; the two cases share a code path.
+- LDA (Slater + VWN5), PBE, PBE0, and B3LYP functionals.
+- Two solvers with a common result type: on-device DIIS SCF (optional level
+  shifting) and differentiable direct minimization with any
+  [optax](https://optax.readthedocs.io/) optimizer.
+- Coulomb/exchange backends: exact 4-center ERIs, RI density fitting
+  (RI-J / RI-K), and streamed, Schwarz-screened variants for larger systems.
+- Analytic nuclear forces (Pulay terms included via autodiff, checked against
+  finite differences) and implicit-diff SCF response (CPHF).
+- Properties: dipole, polarizability, Hessian, vibrational frequencies,
+  IR and Raman spectra, alchemical derivatives.
+- Batched energies and forces over many geometries in one vmapped call.
+- Multi-GPU execution: a single `mesh()` value shards the calculation across
+  a device mesh. Validated on A100s, where energies match CPU to machine
+  precision.
 
-## Install
+## Installation
 
 ```bash
 pip install dftax            # CPU
@@ -67,7 +75,7 @@ uv sync --extra cuda12   # + GPU
 uv sync --extra test     # + pytest/scipy/pyscf (test-only reference oracle)
 ```
 
-## Quickstart
+## Quick example
 
 ```python
 import jax
@@ -87,16 +95,17 @@ ch3 = Molecule.from_xyz("C 0 0 0; H 0 1.079 0; H 0.934 -0.539 0; H -0.934 -0.539
 print(scf(KS(ch3, PBE())).e_tot)    # spin-polarized α/β channels, inferred
 ```
 
-`KS(system, xc, *, grid=None, coulomb=None, spin=None)` builds the differentiable
-energy functional — every choice is a value, not a flag — and the solver verbs
-`scf` (DIIS) and `minimize` (direct minimization) run it. A closed-shell system
-(spin 0) runs restricted; a nonzero spin, or an explicit `spin=` (= 2S, including
-0), runs spin-polarized α/β channels.
+`KS(system, xc, *, grid=None, coulomb=None, spin=None)` assembles the
+differentiable energy functional; the solver verbs `scf` (DIIS) and `minimize`
+(direct minimization) run it. Every choice is a value passed to the builder
+rather than a flag. A closed-shell system runs restricted; a nonzero spin, or
+an explicit `spin=` (= 2S, including 0), runs spin-polarized α/β channels.
 
-> **0.2 API break**: the `run_ks`/`run_rks`/`run_uks` drivers, per-spin
-> solver/force functions, and the flag kwargs (`auxbasis=`, `df_chunk=`, …) are
-> replaced by the `KS` builder plus the verbs `scf`, `minimize`, `forces`,
-> `scf_batched`.
+> Upgrading from 0.1? The `run_ks`/`run_rks`/`run_uks` drivers, the per-spin
+> solver and force functions, and the flag kwargs (`auxbasis=`, `df_chunk=`, …)
+> were replaced in 0.2 by the `KS` builder plus the verbs `scf`, `minimize`,
+> `forces`, and `scf_batched`. See the
+> [changelog](CHANGELOG.md) for the mapping.
 
 ### Forces, properties, batching
 
@@ -112,16 +121,17 @@ ir    = ir_spectrum(mol, PBE())              # .frequencies (cm⁻¹), .intensit
 batch = scf_batched(mol, coords_batch, PBE(), forces=True)
 ```
 
-`forces` takes the converged `KSResult` (from `scf` or `minimize`). The property
-helpers run their own SCF internally, so pass the molecule and functional, not a
-precomputed result.
+`forces` takes the converged `KSResult` from `scf` or `minimize`. The property
+helpers run their own SCF internally, so they take the molecule and functional
+rather than a precomputed result.
 
-### Scale: density fitting, streaming, screening
+### Larger systems
 
-The exact 4-center ERI is O(N⁴), best for small systems and as the RI-free
-reference. Density fitting drops Coulomb to O(N³); streaming removes the
-materialized tensors (O(N²) memory), and Schwarz screening cuts the per-iteration
-cost toward roughly O(N²). Each backend is a value passed to the builder:
+The exact 4-center ERI is O(N⁴) — fine for small systems, and the reference
+everything else is validated against. From there, density fitting drops the
+Coulomb cost to O(N³), streaming removes the materialized tensors (O(N²)
+memory), and Schwarz screening cuts the per-iteration work further. Each
+backend is a value passed to the builder:
 
 ```python
 from dftax import KS, becke, df, exact, scf
@@ -133,7 +143,7 @@ scf(KS(mol, PBE(),
 scf(KS(mol, PBE(), coulomb=exact(stream=True)))               # exact J/K, O(N²) memory
 ```
 
-**Multi-GPU.** One more value shards the calculation across a device mesh:
+For multiple GPUs, one more value shards the calculation across a device mesh:
 
 ```python
 from dftax import mesh
@@ -141,34 +151,22 @@ from dftax import mesh
 scf(KS(mol, PBE0(), coulomb=df("def2-universal-jkfit"), mesh=mesh()))
 ```
 
-The quadrature grid is sharded over the devices and the DF 3-center tensor is
-*built and held* in per-device aux slabs (no device ever materializes more than
-its `naux/ndev` slice), with hybrid exact exchange running slab-wise; the dense
-nao² matrices stay replicated. Everything differentiates through the collectives,
-so SCF, direct minimization, and forces are unchanged. `scf_batched(mesh=mesh())`
-instead shards the *batch* axis — data parallelism over conformers.
+The quadrature grid is sharded over devices, and the DF 3-center tensor is
+built and held in per-device auxiliary slabs, so no device ever materializes
+more than its `naux/ndev` slice; hybrid exact exchange runs slab-wise, and the
+dense nao² matrices stay replicated. Every collective differentiates, so SCF,
+direct minimization, and forces run unchanged. `scf_batched(mesh=mesh())`
+shards the batch axis instead — data parallelism over conformers.
 
-All of this works for hybrids (streamed RI-K via an exact `custom_vjp`) and for
-open shells. Invalid combinations raise at the factory. See the
-[examples](examples/) and [documentation](https://andresguzco.github.io/dftax/)
-for the full API.
-
-## Where it fits
-
-dftax belongs with the **differentiable** quantum-chemistry engines (MESS, D4FT,
-DQC) rather than the fast conventional codes (PySCF, GPU4PySCF). Its niche among
-them is *breadth in one maintained JAX package*: closed- **and** open-shell KS with
-hybrids and density fitting, a real DIIS SCF **and** direct minimization, analytic forces,
-implicit-diff response, and a full properties suite, with a self-contained,
-dependency-light runtime as a bonus. It is **not** trying to be the fastest
-single-point GPU code. If you want raw throughput for conventional single points,
-reach for GPU4PySCF. If you need to *differentiate through* the calculation, whether
-for forces, response properties, sensitivity analysis, or learning across DFT,
-reach for dftax.
+All of this works for hybrids (streamed RI-K via an exact `custom_vjp`) and
+for open shells, and combinations that would silently do nothing raise at the
+factory instead. See the [examples](examples/) and the
+[documentation](https://andresguzco.github.io/dftax/) for the full API.
 
 ## Accuracy
 
-Vs PySCF on water / sto-3g (see [`scripts/bench/BENCHMARKS.md`](scripts/bench/BENCHMARKS.md)):
+Against PySCF on water / sto-3g (details in
+[`scripts/bench/BENCHMARKS.md`](scripts/bench/BENCHMARKS.md)):
 
 | functional | \|ΔE\| vs PySCF |
 |---|---|
@@ -178,34 +176,37 @@ Vs PySCF on water / sto-3g (see [`scripts/bench/BENCHMARKS.md`](scripts/bench/BE
 | PBE0  | 1.1e-5 |
 
 LDA and B3LYP reproduce libxc to machine precision. PBE and PBE0 sit at about
-1e-5 Ha, from the hand-rolled GGA enhancement factors, still well within chemical
-accuracy (about 1.6e-3 Ha). Analytic forces match finite differences to about
-4e-8 Ha/Bohr (net-force residual about 1e-15), the analytic (CPHF) polarizability
-matches finite-field to about 1e-4, and frequencies match PySCF to a few cm⁻¹.
+1e-5 Ha — a known gap in the hand-rolled GGA enhancement factors, well within
+chemical accuracy (about 1.6e-3 Ha). Analytic forces match finite differences
+to about 4e-8 Ha/Bohr, the analytic (CPHF) polarizability matches finite-field
+to about 1e-4, and vibrational frequencies match PySCF to a few cm⁻¹.
 
 ## Limitations
 
-We'd rather you know these up front:
+Worth knowing up front:
 
-- **Angular momentum up to g (l=4)** in S/T/V (cc-pVTZ/QZ level).
-- **PBE/PBE0** agree with libxc to about 1e-5 Ha. This is a functional-form gap, not
-  an SCF or integral error, since LDA and B3LYP agree to machine precision on the
-  same grid.
-- The **materialized exact-ERI path** has a GPU memory/compile ceiling (around nao 70,
-  and L≥2 such as cc-pVDZ is impractical), so use DF, streaming, and screening at
-  scale. Exact-exchange compute stays O(N⁴) intrinsically.
-- **GPU correctness is validated interactively** on an A100 (exact path; see
-  [`scripts/gpu/GPU_VALIDATION.md`](scripts/gpu/GPU_VALIDATION.md)), not in CPU CI.
-  The streamed and DF paths are numerically validated on CPU and designed for scale;
-  large-N GPU throughput is not yet benchmarked.
-- Per-FLOP shell-quartet kernel batching is out of scope. dftax optimizes for
-  *differentiability* and *memory-light scaling*, not fastest-per-FLOP kernels.
+- Angular momentum runs up to g (l=4) in the one-electron integrals
+  (cc-pVTZ/QZ level).
+- PBE/PBE0 agree with libxc to about 1e-5 Ha. This is a functional-form gap,
+  not an SCF or integral error: LDA and B3LYP agree to machine precision on
+  the same grid.
+- The materialized exact-ERI path hits a GPU memory/compile ceiling around
+  nao ≈ 70, so use density fitting, streaming, and screening at scale.
+  Exact-exchange compute stays O(N⁴) intrinsically.
+- GPU correctness is validated interactively on an A100 (see
+  [`scripts/gpu/GPU_VALIDATION.md`](scripts/gpu/GPU_VALIDATION.md)), not in
+  CPU CI. The streamed and DF paths are numerically validated on CPU; large-N
+  GPU throughput is not yet benchmarked.
+- Per-FLOP shell-quartet kernel batching is out of scope for now: the effort
+  goes into differentiability and memory-light scaling first.
 
 ## Documentation
 
-- **Docs site**: <https://andresguzco.github.io/dftax/> (tutorials and API reference).
-- **Examples**: [`examples/`](examples/), runnable scripts (closed/open shell, forces, DF, batching, properties).
-- **Records**: [`scripts/gpu/GPU_VALIDATION.md`](scripts/gpu/GPU_VALIDATION.md) and [`scripts/bench/BENCHMARKS.md`](scripts/bench/BENCHMARKS.md).
+- Docs site: <https://andresguzco.github.io/dftax/> — tutorials, executed
+  example notebooks, and the API reference.
+- [`examples/`](examples/): the same examples as runnable scripts.
+- Records: [`scripts/gpu/GPU_VALIDATION.md`](scripts/gpu/GPU_VALIDATION.md)
+  and [`scripts/bench/BENCHMARKS.md`](scripts/bench/BENCHMARKS.md).
 
 ## Repository layout
 
@@ -229,14 +230,38 @@ tests/         # PySCF-referenced unit tests
 uv run --extra test pytest tests/unit -q
 ```
 
-## Citing
+## See also
+
+Libraries that share ground with dftax, and that it happily builds on:
+
+**In the JAX ecosystem**:
+[Equinox](https://github.com/patrick-kidger/equinox) (dftax objects are
+Equinox modules),
+[Optax](https://github.com/google-deepmind/optax) (drives `minimize`),
+[jaxtyping](https://github.com/patrick-kidger/jaxtyping) (shape annotations
+throughout).
+
+**Differentiable electronic structure**:
+[MESS](https://github.com/graphcore-research/mess) and
+[D4FT](https://github.com/sail-sg/d4ft) (electronic structure in JAX),
+[DQC](https://github.com/diffqc/dqc) (differentiable quantum chemistry in
+PyTorch),
+[PySCFad](https://github.com/fishjojo/pyscfad) (autodiff on top of PySCF).
+
+**Conventional engines**:
+[PySCF](https://github.com/pyscf/pyscf) and
+[GPU4PySCF](https://github.com/pyscf/gpu4pyscf) — mature, feature-rich
+references. dftax uses PySCF as its test-time oracle and aims to be a good
+neighbor to it, not a replacement.
+
+## Citation
 
 ```bibtex
 @software{dftax,
-  author  = {Guzman-Cordero, Andres},
+  author  = {Guzm{\'a}n-Cordero, Andr{\'e}s},
   title   = {dftax: a differentiable Kohn-Sham DFT engine in JAX},
   url     = {https://github.com/andresguzco/dftax},
-  version = {0.1.0},
+  version = {0.2.0},
   year    = {2026},
 }
 ```

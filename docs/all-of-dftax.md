@@ -38,7 +38,8 @@ ks = KS(water, PBE0(),
 ```
 
 `KS(system, xc, *, grid=None, coulomb=None, spin=None, mesh=None)` assembles the
-differentiable energy functional once; every choice is a **value**, not a flag:
+differentiable energy functional once; every choice is a value passed to the
+builder:
 
 - **system** — a `Molecule`, a PySCF `Mole` (setup only; nothing PySCF enters the
   compute path), or a raw `System(basis, coords, charges, nelec, spin)` for
@@ -70,7 +71,7 @@ on device in one `lax.while_loop`. `level_shift` (Saunders-Hillier) damps
 oscillation on small-gap cases without changing the fixed point.
 
 The result is a `KSResult`: `e_tot`, `e_elec`, `converged`, `n_iter`, `nocc`,
-`mo_energy`, `mo_coeff`, `P`. Orbital and density fields are **spin-stacked**
+`mo_energy`, `mo_coeff`, `P`. Orbital and density fields are spin-stacked
 with a leading `nspin` axis: a closed shell has `nspin = 1` (`res.P[0]` is the
 doubly-occupied density), a spin-polarized run has `nspin = 2` (α = 0, β = 1),
 and `res.nocc` is the per-channel occupied count. Restricted and spin-polarized

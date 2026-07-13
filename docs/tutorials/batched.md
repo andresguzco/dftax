@@ -1,6 +1,6 @@
 # Batched evaluation (vmap over geometries)
 
-When the atoms and basis are fixed and only the **coordinates** vary (a conformer set, a
+When the atoms and basis are fixed and only the coordinates vary (a conformer set, a
 bond scan, an ML dataset), `scf_batched` evaluates the whole batch in one `vmap`ped
 call. Only `centers = coords[atom_index]` changes per geometry, on a shared basis
 template; the Becke grid moves with the nuclei and the SCF runs on-device.

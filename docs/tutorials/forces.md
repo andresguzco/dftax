@@ -5,8 +5,8 @@ total energy through the whole geometry-dependent pipeline: the basis centers fo
 their atoms, the integrals are differentiable in those centers, and the Becke grid moves
 with the nuclei. The density is held at the converged solution via a Löwdin
 parametrization, so at the SCF stationary point the gradient reduces to the explicit
-geometry derivative, capturing **both the Hellmann-Feynman and the Pulay terms** with no
-hand-coded integral derivatives. (This is the envelope theorem; differentiating *through*
+geometry derivative, capturing both the Hellmann-Feynman and the Pulay terms with no
+hand-coded integral derivatives. (This is the envelope theorem; differentiating through
 the SCF loop is unnecessary for forces.)
 
 ```python

@@ -1,5 +1,5 @@
 site_name: dftax
-site_description: Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox
+site_description: A differentiable Kohn-Sham DFT engine in pure JAX
 repo_url: https://github.com/andresguzco/dftax
 strict: true
 

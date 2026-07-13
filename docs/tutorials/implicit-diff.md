@@ -15,9 +15,9 @@ of the SCF fixed point:
   autodiff Fock), with the eigendecomposition's unstable derivative replaced by a stable
   occ-virt projector response.
 
-Because the backward differentiates the *assembled* functional, all Pulay / basis
-derivatives are supplied by the engine's own autodiff. Backward memory is **independent of
-the SCF iteration count**.
+Because the backward differentiates the assembled functional, all Pulay / basis
+derivatives are supplied by the engine's own autodiff. Backward memory is independent
+of the SCF iteration count.
 
 ## Analytic polarizability
 
@@ -42,7 +42,7 @@ forces to ~7e-9, and the analytic polarizability matches the finite-field tensor
 
 ## Analytic Hessian: status
 
-The analytic *geometry* Hessian is **not yet available**: `hessian` remains finite
+The analytic *geometry* Hessian is not yet available: `hessian` remains finite
 difference of the analytic forces (the validated default; water/sto-3g frequencies match
 PySCF to <5 cm⁻¹). The blocker is not the implicit machinery (the density response
 `dP*/dR` is well-behaved) but a NaN in the **second geometric derivative of the energy at

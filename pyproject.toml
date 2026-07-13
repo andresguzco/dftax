@@ -5,13 +5,13 @@ build-backend = "hatchling.build"
 [project]
 name = "dftax"
 version = "0.2.0"
-description = "Differentiable Kohn-Sham DFT in pure JAX/Equinox: Obara-Saika integrals, density fitting, XC functionals, native grids, autodiff Fock/forces; RKS + UKS, jit/vmap/grad-friendly, GPU-validated."
+description = "A differentiable Kohn-Sham DFT engine in pure JAX: autodiff Fock and forces, response properties, density fitting, native grids."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-authors = [{ name = "Andres Guzman-Cordero", email = "andres.guzman-cordero@mila.quebec" }]
-maintainers = [{ name = "Andres Guzman-Cordero", email = "andres.guzman-cordero@mila.quebec" }]
+authors = [{ name = "Andrés Guzmán-Cordero", email = "andres.guzman-cordero@mila.quebec" }]
+maintainers = [{ name = "Andrés Guzmán-Cordero", email = "andres.guzman-cordero@mila.quebec" }]
 keywords = [
     "density functional theory", "DFT", "Kohn-Sham", "quantum chemistry",
     "electronic structure", "JAX", "differentiable", "autodiff", "GPU",

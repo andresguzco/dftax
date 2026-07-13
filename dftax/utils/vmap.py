@@ -124,7 +124,7 @@ def vmap(
     >>> vmap_square = vmap(square)
     >>> x = jnp.array([1.0, 2.0, 3.0])
     >>> vmap_square(x)  # doctest: +SKIP
-    Array([1., 4., 9.], dtype=float32)
+    Array([1., 4., 9.], dtype=float64)
 
     Vectorizing functions with multiple arguments and selective batch axes:
 
@@ -134,7 +134,7 @@ def vmap(
     >>> x = jnp.array([1.0, 2.0, 3.0])
     >>> y = jnp.array(10.0)
     >>> vmap_add(x, y)  # doctest: +SKIP
-    Array([11., 12., 13.], dtype=float32)
+    Array([11., 12., 13.], dtype=float64)
 
     Memory-efficient processing of large batches with chunking:
 

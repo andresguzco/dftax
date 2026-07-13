@@ -82,8 +82,7 @@ def becke_grid(
     ang_w_full = jnp.asarray(4.0 * np.pi * ang_w)        # full surface weight
 
     points_blocks: list = []
-    raw_w_blocks: list = []
-    atom_of: list[int] = []
+    w_blocks: list = []
 
     for A, Z in enumerate(Zs):
         # Becke uses half the Bragg radius as the radial scale (H excepted).
@@ -92,16 +91,15 @@ def becke_grid(
         r = jnp.asarray(r)
         wr = jnp.asarray(wr)
         pts = coords[A][None, None, :] + r[:, None, None] * ang_pts[None, :, :]
-        w = (wr[:, None] * ang_w_full[None, :]).reshape(-1)
-        points_blocks.append(pts.reshape(-1, 3))
-        raw_w_blocks.append(w)
-        atom_of.extend([A] * (r.shape[0] * ang_pts.shape[0]))
+        pts = pts.reshape(-1, 3)                         # depends on coords
+        raw_w = (wr[:, None] * ang_w_full[None, :]).reshape(-1)
+        # Fuzzy-Voronoi weights per atom block: the partition transient is
+        # (ng_A, n_atom, n_atom) here instead of (ng, n_atom, n_atom) for the
+        # whole grid at once, an n_atom-fold smaller peak.
+        P = becke_partition(pts, coords, Zs)             # (ng_A, n_atom)
+        w_blocks.append(raw_w * P[:, A] / P.sum(axis=1))
+        points_blocks.append(pts)
 
-    points = jnp.concatenate(points_blocks, axis=0)      # (ng, 3), depends on coords
-    raw_w = jnp.concatenate(raw_w_blocks, axis=0)        # (ng,) constants
-    atom_of = jnp.asarray(atom_of)
-
-    P = becke_partition(points, coords, Zs)              # (ng, n_atom)
-    w_cell = P[jnp.arange(points.shape[0]), atom_of] / P.sum(axis=1)
-    weights = raw_w * w_cell
+    points = jnp.concatenate(points_blocks, axis=0)      # (ng, 3)
+    weights = jnp.concatenate(w_blocks, axis=0)
     return points, weights

@@ -30,6 +30,11 @@ BRAGG_BOHR = np.array(
 
 def bragg_radius(Z: int) -> float:
     """Bragg-Slater radius (Bohr) for atomic number ``Z``."""
+    if not 0 < Z < len(BRAGG_BOHR):
+        raise ValueError(
+            f"Becke grid radii are tabulated up to Xe (Z={len(BRAGG_BOHR) - 1}); "
+            f"got Z={Z}."
+        )
     return float(BRAGG_BOHR[Z])
 
 
@@ -59,7 +64,7 @@ def becke_partition(points, coords, Zs):
     """
     coords = jnp.asarray(coords)
     n_atom = coords.shape[0]
-    bragg = jnp.asarray([BRAGG_BOHR[Z] for Z in Zs])
+    bragg = jnp.asarray([bragg_radius(Z) for Z in Zs])
 
     # Distances via squared-norm + sqrt; never call norm() on a possibly-zero
     # vector (its gradient is 0/0 = NaN, which leaks even through masking).

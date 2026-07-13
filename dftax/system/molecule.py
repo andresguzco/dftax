@@ -63,6 +63,15 @@ class Molecule:
         self.spherical = bool(spherical)
         if len(self.symbols) != self.coords.shape[0]:
             raise ValueError("symbols and coords length mismatch")
+        # Fail at construction, not at the KS build: nα/nβ must be integers.
+        nelec = self.nelectron
+        if (nelec + self.spin) % 2 != 0:
+            raise ValueError(
+                f"Inconsistent (nelec={nelec}, spin={self.spin}): nelec+spin "
+                f"must be even; give the molecule its actual spin (= 2S)."
+            )
+        if nelec - self.spin < 0:
+            raise ValueError(f"spin={self.spin} too large for nelec={nelec} (nβ<0).")
 
     @classmethod
     def from_xyz(

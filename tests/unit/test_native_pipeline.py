@@ -84,3 +84,12 @@ class TestFullyPyscfFree:
         res = scf(KS(nmol, xc_cls(), grid=(coords, weights)))
         assert res.converged
         assert abs(res.e_tot - e_ref) < 5e-5
+
+
+def test_bragg_radius_beyond_xe_raises():
+    from dftax.grid.becke import bragg_radius
+
+    with pytest.raises(ValueError, match="Xe"):
+        bragg_radius(55)
+    with pytest.raises(ValueError, match="Xe"):
+        bragg_radius(0)                                   # ghost placeholder

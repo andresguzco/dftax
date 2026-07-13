@@ -38,6 +38,7 @@ The Coulomb/exchange backend is a value from :func:`~dftax.ks.terms.exact` /
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import jax
@@ -316,6 +317,13 @@ class KS(eqx.Module):
                     coulomb=df("def2-universal-jkfit"))
             ```
         """
+        if not jax.config.read("jax_enable_x64"):
+            warnings.warn(
+                "jax_enable_x64 is off: DFT energies in float32 are chemically "
+                "meaningless. Run jax.config.update('jax_enable_x64', True) "
+                "before building any arrays.",
+                stacklevel=2,
+            )
         basis, coords, charges, nelec, sys_spin, symbols = _resolve_system(system)
         if spin is None:
             if sys_spin == 0:

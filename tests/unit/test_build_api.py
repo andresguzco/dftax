@@ -107,3 +107,23 @@ def test_spec_factories_reject_inert_combinations():
         df(AUX, screen=1e-10)                              # screen needs chunk
     with pytest.raises(TypeError):
         KS("not a system", LDA())
+
+
+def test_ks_warns_without_x64():
+    """Building in float32 mode must warn: the energies are not chemistry."""
+    mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.74", "sto-3g")
+    jax.config.update("jax_enable_x64", False)
+    try:
+        with pytest.warns(UserWarning, match="jax_enable_x64"):
+            KS(mol, LDA(), grid=becke(20, 50))
+    finally:
+        jax.config.update("jax_enable_x64", True)
+
+
+def test_molecule_rejects_inconsistent_spin():
+    """Spin/electron-count mismatches fail at construction, not at the KS build."""
+    with pytest.raises(ValueError, match="nelec.spin"):
+        Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043",
+                          "sto-3g", spin=1)               # 10 electrons, odd 2S
+    with pytest.raises(ValueError, match="too large"):
+        Molecule.from_xyz("H 0 0 0; H 0 0 0.74", "sto-3g", spin=4)

@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1458,8 +1458,8 @@ total energy through the whole geometry-dependent pipeline: the basis centers fo
 their atoms, the integrals are differentiable in those centers, and the Becke grid moves
 with the nuclei. The density is held at the converged solution via a Löwdin
 parametrization, so at the SCF stationary point the gradient reduces to the explicit
-geometry derivative, capturing <strong>both the Hellmann-Feynman and the Pulay terms</strong> with no
-hand-coded integral derivatives. (This is the envelope theorem; differentiating <em>through</em>
+geometry derivative, capturing both the Hellmann-Feynman and the Pulay terms with no
+hand-coded integral derivatives. (This is the envelope theorem; differentiating through
 the SCF loop is unnecessary for forces.)</p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="p">;</span> <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_enable_x64&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
@@ -1474,12 +1474,12 @@ the SCF loop is unnecessary for forces.)</p>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;net |Σ F| =&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">F</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>   <span class="c1"># ~0 (translational invariance)</span>
 </code></pre></div>
 <p><code>forces(mol, xc, res, *, grid=..., coulomb=None)</code> takes the converged <code>KSResult</code>
-(from <code>scf</code> or <code>minimize</code>) and slices the per-channel occupied orbitals itself —
+(from <code>scf</code> or <code>minimize</code>) and slices the per-channel occupied orbitals itself;
 open shells work through the same call (you can also pass the occupied coefficients
 directly). Pass the same <code>becke(...)</code> grid spec as the energy calculation; explicit
 point grids cannot follow the nuclei, so only Becke specs are accepted. With
 <code>coulomb=df("...")</code> the forces are for the density-fitted energy surface
-(materialized DF only — the streamed backends do not propagate geometry gradients).</p>
+(materialized DF only; the streamed backends do not propagate geometry gradients).</p>
 <p>A finite-difference check (central difference of the energy) agrees with the analytic
 force to ~1e-9; see <code>examples/03_forces_h2.py</code>.</p>
 <p>For forces over <strong>many geometries at once</strong>, see <a href="../batched/">batched evaluation</a>.</p>

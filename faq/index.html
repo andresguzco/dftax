@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1583,27 +1583,27 @@ usual sub-mHa RI error on top.</p>
 <h2 id="the-scf-wont-converge-oscillates">The SCF won't converge / oscillates<a class="headerlink" href="#the-scf-wont-converge-oscillates" title="Permanent link">¤</a></h2>
 <p>Try <code>level_shift=0.3</code> (it damps oscillation without changing the fixed point),
 a better grid, or tighter <code>max_iter</code>. Some small-gap systems on <em>coarse</em> grids
-sit in genuine limit cycles — the commutator floor is set by grid noise, not by
+sit in genuine limit cycles; the commutator floor is set by grid noise, not by
 the solver. <code>minimize</code> is the robust fallback: first-order descent past the
 saddle points where DIIS rattles.</p>
 <h2 id="gradients-are-nan-on-gpu-but-fine-on-cpu">Gradients are NaN on GPU but fine on CPU<a class="headerlink" href="#gradients-are-nan-on-gpu-but-fine-on-cpu" title="Permanent link">¤</a></h2>
 <p>The classic cause is differentiating <code>jnp.linalg.eigh</code> of a symmetric matrix at
-(near-)degenerate eigenvalues — NaN on GPU (cuSolver), silently gauge-dependent
+(near-)degenerate eigenvalues: NaN on GPU (cuSolver), silently gauge-dependent
 on CPU. dftax's own gradient paths avoid eigh (solve-based projectors,
 <code>custom_jvp</code> metric inverse); if you hit this, look for an <code>eigh</code> in <em>your</em>
 code around symmetric molecules or orthonormal optima. Forward-only <code>eigh</code> is
 fine.</p>
 <h2 id="why-do-property-helpers-run-their-own-scf">Why do property helpers run their own SCF?<a class="headerlink" href="#why-do-property-helpers-run-their-own-scf" title="Permanent link">¤</a></h2>
 <p><code>dipole(mol, xc)</code>, <code>hessian(mol, xc)</code> etc. rebuild and re-solve at displaced
-geometries / under fields, so they own their SCFs by construction — you pass
+geometries / under fields, so they own their SCFs by construction: you pass
 the <em>specification</em> <code>(mol, xc, grid=becke(...))</code>, not a solved result.
 <code>forces</code> is the exception: it takes your converged <code>KSResult</code>.</p>
 <h2 id="do-i-need-pyscf">Do I need PySCF?<a class="headerlink" href="#do-i-need-pyscf" title="Permanent link">¤</a></h2>
 <p>No. The compute path is pure JAX. PySCF appears in two optional places: as a
 test-time reference oracle, and as an <em>input</em> format (<code>KS</code> accepts a <code>Mole</code>
-for setup — basis parsing and geometry only).</p>
+for setup, meaning basis parsing and geometry only).</p>
 <h2 id="can-i-take-geometry-gradients-through-the-streamed-backends">Can I take geometry gradients through the streamed backends?<a class="headerlink" href="#can-i-take-geometry-gradients-through-the-streamed-backends" title="Permanent link">¤</a></h2>
-<p>Streamed XC: yes. Streamed RI-K (hybrids with <code>df(chunk=...)</code>): no — its
+<p>Streamed XC: yes. Streamed RI-K (hybrids with <code>df(chunk=...)</code>): no, since its
 <code>custom_vjp</code> supplies the exchange Fock w.r.t. the density only. <code>forces</code>
 enforces this: use the materialized <code>df(...)</code> for DF-surface forces.</p>
 

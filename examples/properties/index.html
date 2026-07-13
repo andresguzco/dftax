@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1452,7 +1452,7 @@
 
 
 <h1 id="properties-dipole-to-ir">Properties: dipole to IR<a class="headerlink" href="#properties-dipole-to-ir" title="Permanent link">¤</a></h1>
-<p>The response-property layer: dipole, polarizability, harmonic frequencies and IR intensities, and alchemical derivatives — all from the same autodiff engine.</p>
+<p>The response-property layer: dipole, polarizability, harmonic frequencies and IR intensities, and alchemical derivatives, all from the same autodiff engine.</p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="p">;</span> <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_enable_x64&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">Molecule</span><span class="p">,</span> <span class="n">becke</span><span class="p">,</span> <span class="n">dipole</span><span class="p">,</span> <span class="n">polarizability</span><span class="p">,</span> <span class="n">ir_spectrum</span><span class="p">,</span> <span class="n">alchemical_deriv</span>

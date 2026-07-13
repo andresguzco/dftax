@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1503,7 +1503,7 @@
 <h1 id="response-properties">Response properties<a class="headerlink" href="#response-properties" title="Permanent link">¤</a></h1>
 <p><code>dftax.ks.properties</code> is a PySCF-runtime-free property layer: dipole, polarizability,
 Hessian → vibrational frequencies → IR / Raman, and alchemical derivatives. The
-geometric quantities are finite differences of the <strong>analytic</strong> Pulay-free forces; the
+geometric quantities are finite differences of the analytic Pulay-free forces; the
 dipole and polarizability are exact (matrix trace and finite field). Everything is
 validated against PySCF and/or finite difference.</p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="p">;</span> <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_enable_x64&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>

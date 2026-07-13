@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1536,7 +1536,7 @@
 <h1 id="multi-device-execution">Multi-device execution<a class="headerlink" href="#multi-device-execution" title="Permanent link">¤</a></h1>
 <p>Sharding is a build-time value. The mesh spec shards the XC quadrature over
 grid points and the DF 3-center tensor over auxiliary slabs; the sharded
-terms are listed for reference — they are constructed by the builder, not by
+terms are listed for reference; they are constructed by the builder, not by
 hand.</p>
 
 
@@ -2033,8 +2033,8 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 grid-axis arrays are padded to a multiple of the device count and laid out
 sharded over the mesh (see :func:<code>dftax.ks.shard._pad_shard_grid</code>). The
 energy runs each device's slice through the <em>unmodified</em> inner math under
-<code>shard_map</code> — the density is replicated, the partial energies are
-<code>psum</code>-reduced — so the quadrature is exactly the single-device sum and
+<code>shard_map</code> (the density is replicated, the partial energies are
+<code>psum</code>-reduced), so the quadrature is exactly the single-device sum and
 the collective differentiates natively (autodiff Fock, forces).</p>
 
 
@@ -2424,7 +2424,7 @@ single-device value bit-for-bit up to summation order.</p>
 builds only its own aux-slab of <code>W</code> (an all-to-all done as <code>ndev</code>
 rounds of <code>psum</code>, one per destination slab), contracts its slab's
 exchange partial against the replicated density, and the scalar partials
-are <code>psum</code>-reduced — per-device memory stays O(nao²·naux/ndev). Padded
+are <code>psum</code>-reduced; per-device memory stays O(nao²·naux/ndev). Padded
 aux rows are zero in <code>int3c</code> and null in the padded metric, so they
 contribute exactly nothing to J or K.</p>
 

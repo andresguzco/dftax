@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1453,7 +1453,7 @@
 
 
 <h1 id="batched-evaluation-vmap-over-geometries">Batched evaluation (vmap over geometries)<a class="headerlink" href="#batched-evaluation-vmap-over-geometries" title="Permanent link">¤</a></h1>
-<p>When the atoms and basis are fixed and only the <strong>coordinates</strong> vary (a conformer set, a
+<p>When the atoms and basis are fixed and only the coordinates vary (a conformer set, a
 bond scan, an ML dataset), <code>scf_batched</code> evaluates the whole batch in one <code>vmap</code>ped
 call. Only <code>centers = coords[atom_index]</code> changes per geometry, on a shared basis
 template; the Becke grid moves with the nuclei and the SCF runs on-device.</p>
@@ -1479,9 +1479,9 @@ return_orbitals=False, mesh=None, ...)</code> takes coordinates of shape <code>(
 per-geometry arrays; with <code>forces=True</code> the <code>forces</code> field holds the analytic force
 tensor <code>(B, n_atom, 3)</code>. Orbital-sized fields (<code>P</code>, <code>mo_coeff</code>, <code>mo_energy</code>,
 O(B·nspin·nao²) device memory) are <code>None</code> unless you opt in with
-<code>return_orbitals=True</code>. <code>mesh=mesh()</code> shards the batch axis across a device mesh —
+<code>return_orbitals=True</code>. <code>mesh=mesh()</code> shards the batch axis across a device mesh:
 data parallelism over conformers, each device converging its slice independently.
-Open shells run through the same call — give the template molecule its spin, or pass
+Open shells run through the same call; give the template molecule its spin, or pass
 <code>spin=</code> explicitly (the usual <code>KS</code> rule).</p>
 <p><strong>Notes.</strong> Forces are <em>not</em> taken by differentiating through the SCF (the <code>while_loop</code>
 solve isn't reverse-differentiable). Instead they reuse the analytic Pulay-free force

@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1590,7 +1590,7 @@ It assumes a working install (see <a href="../">Home</a>) and one global setting
 </code></pre></div>
 <p><code>Molecule.from_xyz</code> takes a PySCF-style atom string (Ångström by default) and a
 basis-set name; coordinates are stored in Bohr. <code>charge</code>, <code>spin</code> (= 2S) and
-<code>spherical</code> (spherical-harmonic AOs — required to match spherical references for
+<code>spherical</code> (spherical-harmonic AOs, required to match spherical references for
 l ≥ 2 bases like cc-pVXZ/def2) live on the molecule, because they are properties
 of the system, not of any one calculation.</p>
 <h2 id="2-building-a-calculation-choices-as-values">2. Building a calculation: choices as values<a class="headerlink" href="#2-building-a-calculation-choices-as-values" title="Permanent link">¤</a></h2>
@@ -1604,22 +1604,23 @@ of the system, not of any one calculation.</p>
         <span class="n">mesh</span>    <span class="o">=</span> <span class="n">mesh</span><span class="p">())</span>                            <span class="c1"># shard across local devices</span>
 </code></pre></div>
 <p><code>KS(system, xc, *, grid=None, coulomb=None, spin=None, mesh=None)</code> assembles the
-differentiable energy functional once; every choice is a <strong>value</strong>, not a flag:</p>
+differentiable energy functional once; every choice is a value passed to the
+builder:</p>
 <ul>
-<li><strong>system</strong> — a <code>Molecule</code>, a PySCF <code>Mole</code> (setup only; nothing PySCF enters the
+<li><strong>system</strong>: a <code>Molecule</code>, a PySCF <code>Mole</code> (setup only; nothing PySCF enters the
   compute path), or a raw <code>System(basis, coords, charges, nelec, spin)</code> for
   advanced differentiable rebuilds.</li>
-<li><strong>xc</strong> — <code>LDA()</code>, <code>PBE()</code>, or the hybrids <code>PBE0()</code> / <code>B3LYP()</code>. Functionals are
+<li><strong>xc</strong>: <code>LDA()</code>, <code>PBE()</code>, or the hybrids <code>PBE0()</code> / <code>B3LYP()</code>. Functionals are
   Equinox modules; hybrids simply carry an exact-exchange coefficient.</li>
-<li><strong>grid</strong> — <code>becke(n_radial, lebedev, chunk=...)</code> (default 75×302), an explicit
+<li><strong>grid</strong>: <code>becke(n_radial, lebedev, chunk=...)</code> (default 75×302), an explicit
   <code>(coords, weights)</code> tuple, or <code>points(coords, weights, chunk=...)</code>. A <code>chunk</code>
   streams the XC integral (O(chunk·nao) memory).</li>
-<li><strong>coulomb</strong> — <code>exact(screen=..., stream=...)</code> (default) or
+<li><strong>coulomb</strong>: <code>exact(screen=..., stream=...)</code> (default) or
   <code>df(auxbasis, chunk=..., screen=...)</code>. Each knob lives on the backend it
   configures; combinations that would do nothing raise at the factory.</li>
-<li><strong>spin</strong> — <code>None</code> infers from the system (spin 0 → one closed-shell channel);
+<li><strong>spin</strong>: <code>None</code> infers from the system (spin 0 → one closed-shell channel);
   an explicit value (= 2S, <em>including</em> 0) forces spin-polarized α/β channels.</li>
-<li><strong>mesh</strong> — <code>mesh()</code> shards the calculation across a device mesh
+<li><strong>mesh</strong>: <code>mesh()</code> shards the calculation across a device mesh
   (see <a href="../tutorials/coulomb-backends/#multi-gpu-mesh">Coulomb backends</a>).</li>
 </ul>
 <h2 id="3-solving-scf">3. Solving: <code>scf</code><a class="headerlink" href="#3-solving-scf" title="Permanent link">¤</a></h2>
@@ -1628,11 +1629,11 @@ differentiable energy functional once; every choice is a <strong>value</strong>,
 <span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">e_tol</span><span class="o">=</span><span class="mf">1e-8</span><span class="p">,</span> <span class="n">d_tol</span><span class="o">=</span><span class="mf">1e-6</span><span class="p">,</span> <span class="n">level_shift</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
 <span class="n">res</span><span class="o">.</span><span class="n">e_tot</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">n_iter</span>
 </code></pre></div>
-<p><code>scf</code> is Pulay DIIS with an autodiff Fock — the whole self-consistency loop runs
+<p><code>scf</code> is Pulay DIIS with an autodiff Fock; the whole self-consistency loop runs
 on device in one <code>lax.while_loop</code>. <code>level_shift</code> (Saunders-Hillier) damps
 oscillation on small-gap cases without changing the fixed point.</p>
 <p>The result is a <code>KSResult</code>: <code>e_tot</code>, <code>e_elec</code>, <code>converged</code>, <code>n_iter</code>, <code>nocc</code>,
-<code>mo_energy</code>, <code>mo_coeff</code>, <code>P</code>. Orbital and density fields are <strong>spin-stacked</strong>
+<code>mo_energy</code>, <code>mo_coeff</code>, <code>P</code>. Orbital and density fields are spin-stacked
 with a leading <code>nspin</code> axis: a closed shell has <code>nspin = 1</code> (<code>res.P[0]</code> is the
 doubly-occupied density), a spin-polarized run has <code>nspin = 2</code> (α = 0, β = 1),
 and <code>res.nocc</code> is the per-channel occupied count. Restricted and spin-polarized
@@ -1646,9 +1647,9 @@ calculations are literally the same code path.</p>
                <span class="n">max_steps</span><span class="o">=</span><span class="mi">5000</span><span class="p">,</span> <span class="n">g_tol</span><span class="o">=</span><span class="mf">1e-7</span><span class="p">)</span>
 </code></pre></div>
 <p><code>minimize</code> optimizes the energy directly over orthonormalized orbital
-coefficients — no eigensolver in the optimization path, so the <em>entire solve</em>
-is differentiable end-to-end (the property that lets a DFT calculation sit
-inside a learning pipeline). The optimizer is any
+coefficients, with no eigensolver in the optimization path, so the <em>entire
+solve</em> is differentiable end-to-end (the property that lets a DFT calculation
+sit inside a learning pipeline). The optimizer is any
 <code>optax.GradientTransformation</code>. Both solvers return the same <code>KSResult</code>, so
 everything downstream is solver-agnostic.</p>
 <h2 id="5-forces">5. Forces<a class="headerlink" href="#5-forces" title="Permanent link">¤</a></h2>
@@ -1658,20 +1659,20 @@ everything downstream is solver-agnostic.</p>
 </code></pre></div>
 <p>Analytic, Pulay-free nuclear gradients in one reverse-mode pass: the energy is
 rebuilt as a function of the coordinates (basis centers and grid follow their
-atoms) at the converged density — which is taken from <code>res.P</code>, the authoritative
+atoms) at the converged density, which is taken from <code>res.P</code>, the authoritative
 density, whatever solver produced it. Match the <code>grid</code> (and any <code>coulomb=df(...)</code>)
 to the energy calculation.</p>
 <h2 id="6-everything-differentiates">6. Everything differentiates<a class="headerlink" href="#6-everything-differentiates" title="Permanent link">¤</a></h2>
 <p>The design premise: the Fock matrix is <code>F = sym(∂E/∂P)</code> by automatic
-differentiation — no hand-coded XC potential — and every ingredient (integrals,
+differentiation (no hand-coded XC potential), and every ingredient (integrals,
 grid, functionals) is pure JAX. Consequences:</p>
 <ul>
 <li>Geometry, field, and alchemical (<code>∂E/∂Z</code>) derivatives all come from the same
   autodiff engine (<a href="../tutorials/properties/">properties</a>).</li>
 <li>Gradients of <em>converged</em> quantities come from implicit differentiation of the
-  SCF fixed point — CPHF as a <code>custom_vjp</code>
+  SCF fixed point, CPHF as a <code>custom_vjp</code>
   (<a href="../tutorials/implicit-diff/">implicit differentiation</a>).</li>
-<li>A <code>KS</code> object is an Equinox module — a pytree of arrays — so it composes with
+<li>A <code>KS</code> object is an Equinox module (a pytree of arrays), so it composes with
   <code>jit</code>, <code>vmap</code> (<a href="../tutorials/batched/">batched evaluation</a>), <code>grad</code>, and
   <code>shard_map</code> (the multi-GPU path) without special cases.</li>
 </ul>

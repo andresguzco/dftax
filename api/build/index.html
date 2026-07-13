@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1934,7 +1934,7 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>quadrature choice — a :func:<code>~dftax.grid.becke</code> spec
+                <p>quadrature choice, a :func:<code>~dftax.grid.becke</code> spec
 (default), an explicit <code>(coords, weights)</code> tuple, or a
 :func:<code>~dftax.grid.points</code> spec (explicit grid + streaming
 chunk).</p>
@@ -1953,7 +1953,7 @@ chunk).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Coulomb/exchange backend — :func:<code>~dftax.ks.terms.exact</code>
+                <p>Coulomb/exchange backend, :func:<code>~dftax.ks.terms.exact</code>
 (default) or :func:<code>~dftax.ks.terms.df</code>.</p>
               </div>
             </td>
@@ -2422,7 +2422,7 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 
         <p>A raw, already-built system: basis + geometry + electron/spin counts.</p>
 <p>The low-level :class:<code>KS</code> input for callers that construct the basis
-themselves — e.g. forces, which rebuild the energy as a function of traced
+themselves, e.g. forces, which rebuild the energy as a function of traced
 nuclear coordinates via a <code>tree_at</code>-recentered basis template. <code>spin</code>
 (= 2S) is the system's default spin; the :class:<code>KS</code> builder's <code>spin</code>
 argument overrides it.</p>

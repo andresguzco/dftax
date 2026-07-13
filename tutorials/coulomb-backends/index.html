@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1558,7 +1558,7 @@
 <h1 id="coulomb-backends-exact-density-fitted-streamed-screened">Coulomb backends: exact, density-fitted, streamed, screened<a class="headerlink" href="#coulomb-backends-exact-density-fitted-streamed-screened" title="Permanent link">¤</a></h1>
 <p>The two-electron Coulomb (and exact-exchange) term is the engine's cost center. dftax
 offers a ladder of backends with the same energy but different memory/compute
-trade-offs. Each backend is a <strong>value</strong> passed to the builder as <code>coulomb=</code>; invalid
+trade-offs. Each backend is a value passed to the builder as <code>coulomb=</code>; invalid
 combinations raise at the factory.</p>
 <h2 id="exact-4-center-eris-default">Exact 4-center ERIs (default)<a class="headerlink" href="#exact-4-center-eris-default" title="Permanent link">¤</a></h2>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">KS</span><span class="p">,</span> <span class="n">Molecule</span><span class="p">,</span> <span class="n">exact</span><span class="p">,</span> <span class="n">scf</span>
@@ -1633,12 +1633,12 @@ path is compile- and memory-bounded by scanning the bra primitive pair in the ER
 <p><code>KS(..., mesh=mesh())</code> shards the calculation across a 1-D device mesh (all
 local devices by default; pass <code>mesh(devices=[...])</code> to choose). The XC
 quadrature is sharded over grid points, and the density-fitted backend builds
-and holds its 3-center tensor in per-device aux slabs — no device ever
-materializes more than <code>naux/ndev</code> of it — with hybrid exact exchange computed
+and holds its 3-center tensor in per-device aux slabs (no device ever
+materializes more than <code>naux/ndev</code> of it), with hybrid exact exchange computed
 slab-wise. The dense nao² matrices (S, hcore, P, Fock) stay replicated, and
 every collective differentiates, so <code>scf</code>, <code>minimize</code>, and property workflows
 run unchanged. Not supported with <code>mesh=</code>: the streamed <code>df(chunk=...)</code> backend
-(the aux-sharded materialized backend covers that memory regime) — it raises at
+(the aux-sharded materialized backend covers that memory regime); it raises at
 build time. A one-device mesh is a no-op.</p>
 
 

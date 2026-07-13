@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1526,9 +1526,9 @@ of the SCF fixed point:</p>
   autodiff Fock), with the eigendecomposition's unstable derivative replaced by a stable
   occ-virt projector response.</li>
 </ul>
-<p>Because the backward differentiates the <em>assembled</em> functional, all Pulay / basis
-derivatives are supplied by the engine's own autodiff. Backward memory is <strong>independent of
-the SCF iteration count</strong>.</p>
+<p>Because the backward differentiates the assembled functional, all Pulay / basis
+derivatives are supplied by the engine's own autodiff. Backward memory is independent
+of the SCF iteration count.</p>
 <h2 id="analytic-polarizability">Analytic polarizability<a class="headerlink" href="#analytic-polarizability" title="Permanent link">¤</a></h2>
 <p>The headline use is the exact coupled-perturbed-KS polarizability, a single
 <code>jax.jacobian</code> of the dipole through the converged density, no field stepping:</p>
@@ -1546,7 +1546,7 @@ the SCF iteration count</strong>.</p>
 forces to ~7e-9, and the analytic polarizability matches the finite-field tensor to
 ~2e-6.</p>
 <h2 id="analytic-hessian-status">Analytic Hessian: status<a class="headerlink" href="#analytic-hessian-status" title="Permanent link">¤</a></h2>
-<p>The analytic <em>geometry</em> Hessian is <strong>not yet available</strong>: <code>hessian</code> remains finite
+<p>The analytic <em>geometry</em> Hessian is not yet available: <code>hessian</code> remains finite
 difference of the analytic forces (the validated default; water/sto-3g frequencies match
 PySCF to &lt;5 cm⁻¹). The blocker is not the implicit machinery (the density response
 <code>dP*/dR</code> is well-behaved) but a NaN in the <strong>second geometric derivative of the energy at

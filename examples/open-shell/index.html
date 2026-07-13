@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1452,7 +1452,7 @@
 
 
 <h1 id="an-open-shell-radical-ch3">An open-shell radical: CH₃<a class="headerlink" href="#an-open-shell-radical-ch3" title="Permanent link">¤</a></h1>
-<p>A doublet runs spin-polarized automatically — give the molecule its spin (= 2S) and everything else is the same code path.</p>
+<p>A doublet runs spin-polarized automatically: give the molecule its spin (= 2S) and everything else is the same code path.</p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="p">;</span> <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_enable_x64&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">KS</span><span class="p">,</span> <span class="n">Molecule</span><span class="p">,</span> <span class="n">scf</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dftax.energy.xc</span><span class="w"> </span><span class="kn">import</span> <span class="n">PBE</span><span class="p">,</span> <span class="n">B3LYP</span>

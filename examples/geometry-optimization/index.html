@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1453,7 +1453,7 @@
 
 <h1 id="geometry-optimization">Geometry optimization<a class="headerlink" href="#geometry-optimization" title="Permanent link">¤</a></h1>
 <p>Relax a geometry by descending the analytic forces with an optax optimizer.
-The forces come from one reverse-mode pass at each step's converged density —
+The forces come from one reverse-mode pass at each step's converged density;
 this is the envelope-theorem gradient, so no differentiation through the SCF
 loop is needed.</p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="p">;</span> <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_enable_x64&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>

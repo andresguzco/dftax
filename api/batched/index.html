@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1533,7 +1533,7 @@ the coordinates vary. <code>spin</code> follows the :class:<code>~dftax.ks.energ
 rule (None → infer from <code>mol</code>; explicit → polarized channels).</p>
 <p>With <code>forces=True</code> the result carries the analytic force tensor
 <code>(B, n_atom, 3)</code>; with <code>return_orbitals=True</code> it also carries
-<code>P</code>/<code>mo_coeff</code>/<code>mo_energy</code> (O(B·nspin·nao²) memory — off by
+<code>P</code>/<code>mo_coeff</code>/<code>mo_energy</code> (O(B·nspin·nao²) memory, off by
 default). <code>mesh=</code> shards the batch axis across a device mesh.</p>
 
 

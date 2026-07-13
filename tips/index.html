@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1565,14 +1565,14 @@ few dozen atoms; add <code>chunk=</code> (and <code>screen=1e-10</code>) when th
 stops fitting; <code>mesh()</code> to spread the materialized tensors across GPUs. The
 <a href="../tutorials/coulomb-backends/">backend table</a> has the crossovers.</p>
 <h2 id="stream-big-grids">Stream big grids<a class="headerlink" href="#stream-big-grids" title="Permanent link">¤</a></h2>
-<p><code>becke(..., chunk=20_000)</code> keeps XC memory at O(chunk·nao) — the materialized
+<p><code>becke(..., chunk=20_000)</code> keeps XC memory at O(chunk·nao); the materialized
 AO grid (and its jacobian, under <code>grad</code>) is usually the first thing to OOM on
 GPU for large systems. Forces honor the chunk too.</p>
 <h2 id="gpus-pin-devices-and-memory">GPUs: pin devices and memory<a class="headerlink" href="#gpus-pin-devices-and-memory" title="Permanent link">¤</a></h2>
 <p>JAX preallocates on every visible GPU. Per run:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">CUDA_VISIBLE_DEVICES</span><span class="o">=</span><span class="m">0</span><span class="w"> </span><span class="nv">XLA_PYTHON_CLIENT_MEM_FRACTION</span><span class="o">=</span><span class="m">0</span>.5<span class="w"> </span>python<span class="w"> </span>run.py
 </code></pre></div>
-<p>Use <code>mesh()</code> when you actually want all of them — a one-device mesh is a no-op.</p>
+<p>Use <code>mesh()</code> when you actually want all of them; a one-device mesh is a no-op.</p>
 <h2 id="batched-runs-keep-only-what-you-need">Batched runs: keep only what you need<a class="headerlink" href="#batched-runs-keep-only-what-you-need" title="Permanent link">¤</a></h2>
 <p><code>scf_batched</code> returns energies/forces by default; orbital-sized fields are
 O(B·nspin·nao²) device memory and opt-in via <code>return_orbitals=True</code>. With

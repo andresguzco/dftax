@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -335,10 +335,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#install" class="md-nav__link">
+  <a href="#installation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Install
+        Installation
       
     </span>
   </a>
@@ -346,10 +346,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#quickstart" class="md-nav__link">
+  <a href="#quick-example" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Quickstart
+        Quick example
       
     </span>
   </a>
@@ -1530,39 +1530,40 @@
 
 
 <h1 id="dftax">dftax<a class="headerlink" href="#dftax" title="Permanent link">¤</a></h1>
-<p><strong>Gradients through DFT: a differentiable Kohn-Sham engine in pure JAX.</strong></p>
-<p><code>dftax</code> is a Kohn-Sham DFT engine in which the <em>entire calculation is differentiable</em>.
-The integrals, the SCF fixed point, the exchange-correlation functionals, and the
-real-space grid are all pure JAX, so you can take gradients straight through a DFT
-calculation. Forces (<code>−∂E/∂R</code>), Hessians, IR/Raman, polarizabilities, and alchemical
-derivatives (<code>∂E/∂Z</code>) all come from one autodiff engine, and the calculation drops
-inside a larger differentiable or machine-learning pipeline. The Kohn-Sham Fock
-matrix is <code>F = sym(∂E/∂P)</code>, so no XC potential is hand-coded, and gradients of
-<em>converged</em> quantities come from implicit differentiation of the SCF fixed point
-(CPHF).</p>
-<p>It is also self-contained: pure JAX/Equinox with no <code>libcint</code>, <code>libxc</code>, or Maple at
-runtime (PySCF is only a test-time reference oracle).</p>
+<p><strong>A differentiable Kohn-Sham DFT engine in pure JAX.</strong></p>
+<p>dftax is built on a single idea: write all of Kohn-Sham DFT (integrals,
+quadrature grid, exchange-correlation functionals, the SCF loop) as one
+differentiable JAX program, and every derivative in quantum chemistry becomes
+a call to autodiff. Forces (<code>−∂E/∂R</code>), Hessians, IR and Raman spectra,
+polarizabilities, and alchemical derivatives (<code>∂E/∂Z</code>) all come from the same
+engine. The Kohn-Sham Fock matrix is <code>F = sym(∂E/∂P)</code>, so no
+exchange-correlation potential is hand-coded, and derivatives of converged
+quantities come from implicit differentiation of the SCF fixed point (CPHF).
+Because it is ordinary JAX, a DFT calculation can sit inside a larger
+differentiable or machine-learning pipeline.</p>
+<p>The runtime is self-contained: pure JAX/Equinox, with no <code>libcint</code>, <code>libxc</code>,
+or Maple. PySCF appears only as a test-time reference oracle.</p>
 <h2 id="highlights">Highlights<a class="headerlink" href="#highlights" title="Permanent link">¤</a></h2>
 <ul>
-<li><strong>Closed- and open-shell</strong> (spin-polarized) DFT through one spin-stacked <code>KS</code>
-  functional; <strong>LDA, PBE, PBE0, B3LYP</strong>.</li>
-<li><strong>Solvers</strong>: on-device DIIS SCF (optional level-shifting) and differentiable
+<li>Closed- and open-shell (spin-polarized) DFT through one spin-stacked <code>KS</code>
+  functional; LDA, PBE, PBE0, B3LYP.</li>
+<li>Two solvers: on-device DIIS SCF (optional level shifting) and differentiable
   direct minimization with any <a href="https://optax.readthedocs.io/">optax</a> optimizer.</li>
-<li><strong>Coulomb/exchange</strong>: exact 4-center ERI, RI density fitting (RI-J / RI-K), and
-  memory-light <strong>streamed, Schwarz-screened</strong> paths for larger systems.</li>
-<li><strong>Gradients and properties</strong>: analytic forces (Pulay-free), implicit-diff SCF
-  response (CPHF), dipole, polarizability, Hessian, frequencies, IR/Raman, and
-  alchemical derivatives.</li>
-<li><strong>Batched</strong> energies and forces over many geometries via <code>vmap</code>.</li>
-<li><strong>Multi-GPU</strong>: one <code>mesh()</code> value shards the quadrature and the DF tensors
-  across a device mesh — capacity and throughput, still fully differentiable.</li>
-<li><strong>GPU-validated</strong> on A100s, where energies match CPU to machine precision.</li>
+<li>Coulomb/exchange backends: exact 4-center ERIs, RI density fitting
+  (RI-J / RI-K), and streamed, Schwarz-screened paths for larger systems.</li>
+<li>Analytic forces (Pulay terms included), implicit-diff SCF response (CPHF),
+  dipole, polarizability, Hessian, frequencies, IR/Raman, and alchemical
+  derivatives.</li>
+<li>Batched energies and forces over many geometries via <code>vmap</code>.</li>
+<li>Multi-GPU: one <code>mesh()</code> value shards the quadrature and the DF tensors
+  across a device mesh, still fully differentiable.</li>
+<li>GPU-validated on A100s, where energies match CPU to machine precision.</li>
 </ul>
-<h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">¤</a></h2>
+<h2 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">¤</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>dftax<span class="w">            </span><span class="c1"># CPU</span>
 pip<span class="w"> </span>install<span class="w"> </span>dftax<span class="o">[</span>cuda12<span class="o">]</span><span class="w">    </span><span class="c1"># + CUDA 12 jaxlib (Linux GPU)</span>
 </code></pre></div>
-<h2 id="quickstart">Quickstart<a class="headerlink" href="#quickstart" title="Permanent link">¤</a></h2>
+<h2 id="quick-example">Quick example<a class="headerlink" href="#quick-example" title="Permanent link">¤</a></h2>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
 <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_enable_x64&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>   <span class="c1"># DFT energies want float64</span>
 
@@ -1573,17 +1574,18 @@ pip<span class="w"> </span>install<span class="w"> </span>dftax<span class="o">[
 <span class="n">ks</span>  <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">water</span><span class="p">,</span> <span class="n">PBE</span><span class="p">())</span>                      <span class="c1"># exact ERI + default becke() grid (75, 302)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">)</span><span class="o">.</span><span class="n">e_tot</span><span class="p">)</span>                        <span class="c1"># -75.146751...</span>
 </code></pre></div>
-<p><code>KS(system, xc, *, grid=None, coulomb=None, spin=None)</code> builds the energy
-functional (every choice is a value, not a flag); <code>scf</code> / <code>minimize</code> solve it.
-Spin is inferred from the system: spin 0 runs closed-shell restricted, nonzero
-spin (or an explicit <code>spin=</code>) runs spin-polarized α/β channels.</p>
+<p><code>KS(system, xc, *, grid=None, coulomb=None, spin=None)</code> assembles the energy
+functional (every choice is a value passed to the builder) and <code>scf</code> /
+<code>minimize</code> solve it. Spin is inferred from the system: spin 0 runs closed-shell
+restricted, nonzero spin (or an explicit <code>spin=</code>) runs spin-polarized α/β
+channels.</p>
 <h2 id="where-to-next">Where to next<a class="headerlink" href="#where-to-next" title="Permanent link">¤</a></h2>
-<p>Read <a href="all-of-dftax/">All of dftax</a> — one page, ~15 minutes, the whole mental
-model. Then the <a href="examples/water/">examples gallery</a> (introductory →
-advanced → features, all executed notebooks), or:</p>
+<p>Read <a href="all-of-dftax/">All of dftax</a>: one page, about fifteen minutes, the
+whole mental model. Then the <a href="examples/water/">examples gallery</a>
+(introductory → advanced → features, all executed notebooks), or:</p>
 <ul>
 <li><a href="tutorials/coulomb-backends/">Coulomb backends</a>: exact ERIs, density fitting, streaming, multi-GPU.</li>
-<li><a href="tutorials/forces/">Forces</a>: analytic Pulay-free nuclear gradients.</li>
+<li><a href="tutorials/forces/">Forces</a>: analytic nuclear gradients.</li>
 <li><a href="tutorials/batched/">Batched evaluation</a>: <code>vmap</code> over many geometries.</li>
 <li><a href="tutorials/properties/">Properties</a>: dipole, polarizability, IR/Raman, alchemy.</li>
 <li><a href="tutorials/implicit-diff/">Implicit differentiation</a>: CPHF response, analytic polarizability.</li>

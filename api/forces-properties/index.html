@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Differentiable, PySCF-free Kohn-Sham DFT in pure JAX/Equinox">
+        <meta name="description" content="A differentiable Kohn-Sham DFT engine in pure JAX">
       
       
       
@@ -1651,7 +1651,7 @@ their own SCF from <code>(mol, xc)</code> and take a <code>grid=becke(...)</code
               <div class="doc-md-description">
                 <p>a native :class:<code>~dftax.system.molecule.Molecule</code> (the energy is
 rebuilt as a function of the nuclear coordinates, so the basis and
-grid must be reconstructible — PySCF <code>Mole</code> objects are not
+grid must be reconstructible; PySCF <code>Mole</code> objects are not
 supported here).</p>
               </div>
             </td>
@@ -1706,7 +1706,7 @@ the density the solver returned.</p>
             <td>
               <div class="doc-md-description">
                 <p>Becke-grid quality (a :func:<code>~dftax.grid.becke</code> spec; match the
-energy calculation — a <code>chunk</code> on the spec streams the XC grid
+energy calculation; a <code>chunk</code> on the spec streams the XC grid
 here too). Explicit point grids cannot follow the nuclei, so only
 Becke specs are accepted.</p>
               </div>
@@ -1725,7 +1725,7 @@ Becke specs are accepted.</p>
             <td>
               <div class="doc-md-description">
                 <p>:func:<code>~dftax.ks.terms.exact</code> (default) or a <em>materialized</em>
-:func:<code>~dftax.ks.terms.df</code> — the streamed backends do not propagate
+:func:<code>~dftax.ks.terms.df</code>; the streamed backends do not propagate
 geometry gradients (see :func:<code>dftax.ks.terms._streamed_df_rik</code>).</p>
               </div>
             </td>

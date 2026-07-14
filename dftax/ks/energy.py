@@ -41,6 +41,7 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 
+import numpy as np
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -147,12 +148,38 @@ def _resolve_system(system):
     )
 
 
+# Element budget for the materialized AO grid values, ao (ng, nao) plus dao
+# (ng, nao, 3), i.e. 4·ng·nao doubles (~1 GiB at 2^27). Above it the
+# ``chunk="auto"`` policy streams the XC integral instead of materializing
+# (same budget pattern as ``eri3c._DF_BRA_BUDGET``).
+_AO_GRID_BUDGET = 2**27
+# Per-chunk element budget when streaming (~32 MiB of AO values per chunk).
+_AO_CHUNK_BUDGET = 2**22
+
+
+def _resolve_chunk(chunk, ng: int, nao: int):
+    """Resolve a spec's chunk policy to a concrete value.
+
+    ``"auto"`` materializes the AO grid when it fits ``_AO_GRID_BUDGET`` and
+    otherwise streams with a budget-derived chunk; ``None`` forces the
+    materialized grid; an int streams with exactly that chunk.
+    """
+    if chunk == "auto":
+        if 4 * ng * nao <= _AO_GRID_BUDGET:
+            return None
+        return max(512, _AO_CHUNK_BUDGET // (4 * nao))
+    return chunk
+
+
 def _resolve_grid(grid, symbols, coords):
     """Resolve a grid input to ``(coords, weights, chunk)``.
 
     Accepts a :class:`~dftax.grid.Becke` spec (default), an explicit
     ``(coords, weights)`` tuple, or a :class:`~dftax.grid.Points` spec (an
-    explicit grid with a streaming chunk).
+    explicit grid with a streaming chunk). For a Becke spec, points whose
+    quadrature weight falls below ``spec.cutoff`` are dropped (this path is
+    always eager, so the value-dependent compression is legal here; the
+    traced grid rebuilds in forces/batched keep static shapes and skip it).
     """
     if grid is None:
         grid = becke()
@@ -162,7 +189,14 @@ def _resolve_grid(grid, symbols, coords):
                 "a Becke grid needs element symbols; pass an explicit "
                 "(coords, weights) grid when building from a raw System."
             )
-        gc, gw = becke_grid(symbols, coords, grid.n_radial, grid.lebedev)
+        gc, gw = becke_grid(
+            symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max
+        )
+        if grid.cutoff is not None:
+            keep = np.abs(np.asarray(gw)) > grid.cutoff
+            if not keep.all():
+                idx = jnp.asarray(np.where(keep)[0])
+                gc, gw = gc[idx], gw[idx]
         return gc, gw, grid.chunk
     if isinstance(grid, Points):
         return grid.coords, grid.weights, grid.chunk
@@ -351,6 +385,18 @@ class KS(eqx.Module):
         weights = jnp.asarray(grid_weights)
 
         devices = _resolve_mesh(mesh)
+        # Resolve the "auto" streaming policy against the per-device grid
+        # slice and the final AO count (the materialized AO grid is the
+        # dominant XC memory).
+        nao_final = (
+            basis.cart2sph.shape[1]
+            if basis.cart2sph is not None
+            else basis.centers.shape[0]
+        )
+        ndev = 1 if devices is None else len(devices)
+        grid_chunk = _resolve_chunk(
+            grid_chunk, -(-grid_coords.shape[0] // ndev), nao_final
+        )
         quartets, qof, pairs = _resolve_screening(spec, basis)
         is_df = isinstance(spec, DFSpec)
         aux_basis = spec.auxbasis if is_df else None

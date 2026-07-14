@@ -27,7 +27,7 @@ _SLOW_MODULES = {
     "test_uks", "test_minimize", "test_forces", "test_df", "test_df_streaming",
     "test_grid_streaming", "test_implicit", "test_properties", "test_level_shift",
     "test_screening", "test_eri4c_compile", "test_batched", "test_native_pipeline",
-    "test_guess",
+    "test_guess", "test_grid_pruning",
     # thorough integral-vs-PySCF builds (full matrices, batched, high-l, spherical):
     # slow per-element kernels; the PR smoke exercises the integrals via energy.
     "test_eri", "test_integrals", "test_integrals_batched", "test_jax_df_integrals",

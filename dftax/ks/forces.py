@@ -21,9 +21,9 @@ from jaxtyping import Array, Float
 
 from dftax.energy.xc import XCFunctional
 from dftax.basis.loader import build_basis_data
-from dftax.grid import Becke, becke, becke_grid, points
+from dftax.grid import Becke, becke, becke_grid, becke_grid_size, points
 from dftax.integrals import overlap_matrix
-from dftax.ks.energy import KS, System
+from dftax.ks.energy import KS, System, _resolve_chunk
 from dftax.ks.scf import KSResult
 from dftax.ks.terms import DFSpec, ExactSpec, _rik_occ_orbitals, df
 from dftax.system.molecule import Molecule
@@ -155,20 +155,35 @@ def forces(
         )
         aux_atom_idx = jnp.asarray(a_idx)
 
+    # Resolve the "auto" XC streaming policy eagerly: the grid is rebuilt with
+    # traced coordinates inside `energy`, but its size is static per spec.
+    nao_final = (
+        basis_t.cart2sph.shape[1]
+        if basis_t.cart2sph is not None
+        else basis_t.centers.shape[0]
+    )
+    xc_chunk = _resolve_chunk(
+        grid.chunk,
+        becke_grid_size(symbols, grid.n_radial, grid.lebedev, grid.prune, grid.r_max),
+        nao_final,
+    )
+
     def energy(coords: Float[Array, "n_atom 3"]) -> Array:
         basis = eqx.tree_at(lambda b: b.centers, basis_t, coords[atom_idx])
         spec = None
         if aux_t is not None:
             aux_basis = eqx.tree_at(lambda b: b.centers, aux_t, coords[aux_atom_idx])
             spec = df(aux_basis)                          # materialized DF
-        gc, gw = becke_grid(symbols, coords, grid.n_radial, grid.lebedev)
-        # points(..., chunk=...) keeps the spec's XC streaming: silently
+        gc, gw = becke_grid(
+            symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max
+        )
+        # points(..., chunk=...) keeps the resolved XC streaming: silently
         # materializing the AO grid here would OOM exactly the systems the
         # chunk was chosen for.
         ks = KS(
             System(basis=basis, coords=coords, charges=charges,
                    nelec=nelec, spin=0 if spin is None else spin),
-            xc, grid=points(gc, gw, chunk=grid.chunk), coulomb=spec, spin=spin,
+            xc, grid=points(gc, gw, chunk=xc_chunk), coulomb=spec, spin=spin,
         )
         P = jnp.stack([w * (Z @ jnp.linalg.solve(Z.T @ ks.S @ Z, Z.T)) for Z in Zs])
         return ks.total(P)

@@ -6,6 +6,28 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed (numerically visible)
+- **The native Becke grid is pruned by default.** `becke()` now applies the
+  standard NWChem angular pruning (per radial region of `r/R_bragg`, ported
+  one-to-one from PySCF), drops radial shells beyond `r_max=45` Bohr (the
+  Chebyshev mapping otherwise emits tail points at r ~ 10³ Bohr), and, on the
+  eager KS build path, drops points with quadrature weight below
+  `cutoff=1e-15`. Water (75, 302): 67,950 → ~37,600 points at an energy shift
+  of ~6e-9 Ha. `becke(prune=None, r_max=None, cutoff=None)` recovers the old
+  full product grid.
+- **XC streaming is automatic.** `chunk="auto"` (the new default on `becke()`
+  and `points()`) materializes the AO grid values only when `ao + dao` fit a
+  ~1 GiB budget and otherwise streams the XC integral over budget-derived
+  grid chunks, so large systems no longer OOM by default. `chunk=None` now
+  means "force materialize"; an int is an explicit chunk, as before.
+
+### Performance
+- The Becke fuzzy-Voronoi partition evaluates in budget-derived point chunks
+  (bounded `(chunk, natom, natom)` transient, checkpointed for the backward
+  pass), so large molecules no longer materialize the full cubic tensor.
+- The vendored Lebedev tables now cover the full standard ladder (6 … 770,
+  18 orders); `scripts/gen_lebedev.py` regenerates them.
+
 ### Added
 - **Initial guesses as composable values.** `scf`, `minimize` and
   `scf_batched` take `guess=`: `core()` (the previous behavior, still the

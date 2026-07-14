@@ -36,9 +36,9 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from dftax.basis.loader import build_basis_data
-from dftax.grid import Becke, becke, becke_grid, points
+from dftax.grid import Becke, becke, becke_grid, becke_grid_size, points
 from dftax.integrals import nuclear_repulsion
-from dftax.ks.energy import KS, System, _spin_counts
+from dftax.ks.energy import KS, System, _resolve_chunk, _spin_counts
 from dftax.ks.guess import _SPECS, CoreSpec, _initial_density, _resolve_guess
 from dftax.ks.shard import MeshSpec, _resolve_mesh
 from dftax.ks.scf import _scf_solve
@@ -126,13 +126,28 @@ def scf_batched(
         symbols, template, jnp.asarray(mol.atom_coords()),
     )
 
+    # Resolve the "auto" XC streaming policy eagerly (the per-geometry grid is
+    # built traced inside `_build`, but its size is static per spec).
+    nao_final = (
+        template.cart2sph.shape[1]
+        if template.cart2sph is not None
+        else template.centers.shape[0]
+    )
+    xc_chunk = _resolve_chunk(
+        grid.chunk,
+        becke_grid_size(symbols, grid.n_radial, grid.lebedev, grid.prune, grid.r_max),
+        nao_final,
+    )
+
     def _build(coords):
         basis = eqx.tree_at(lambda b: b.centers, template, coords[atom_idx])
-        gc, gw = becke_grid(symbols, coords, grid.n_radial, grid.lebedev)
+        gc, gw = becke_grid(
+            symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max
+        )
         return KS(
             System(basis=basis, coords=coords, charges=charges,
                    nelec=nelec, spin=sys_spin),
-            xc, grid=points(gc, gw, chunk=grid.chunk), spin=spin,
+            xc, grid=points(gc, gw, chunk=xc_chunk), spin=spin,
         )
 
     def single(coords):

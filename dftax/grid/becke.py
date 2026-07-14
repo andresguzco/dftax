@@ -9,6 +9,15 @@ from __future__ import annotations
 import numpy as np
 import jax.numpy as jnp
 
+from dftax.utils.vmap import vmap as _chunked_vmap
+
+# Element budget for the per-point Becke partition transient (chunk, A, B):
+# grid points are processed in chunks of ``budget // natom²`` so the peak is
+# ~128 MiB in float64 regardless of molecule size (same budget pattern as
+# ``eri3c._DF_BRA_BUDGET``). For small molecules the chunk covers the whole
+# block, so nothing changes there.
+_PARTITION_BUDGET = 2**24
+
 # Bragg-Slater atomic radii in Bohr, indexed by atomic number Z (index 0 is a
 # placeholder "ghost"). Standard values (as used for Becke partitioning).
 BRAGG_BOHR = np.array(
@@ -60,32 +69,40 @@ def becke_partition(points, coords, Zs):
     """Unnormalized Becke cell functions ``P_A(point)``, shape (n_grid, n_atom).
 
     Vectorized JAX (differentiable w.r.t. ``coords``); includes the heteronuclear
-    Bragg-radii size adjustment (Becke 1988, App. A).
+    Bragg-radii size adjustment (Becke 1988, App. A). Points are processed in
+    budget-derived chunks so the per-point ``(chunk, A, B)`` transient stays
+    bounded for large molecules (checkpointed, so the backward pass used by the
+    forces rematerializes each chunk instead of storing them all).
     """
     coords = jnp.asarray(coords)
     n_atom = coords.shape[0]
     bragg = jnp.asarray([bragg_radius(Z) for Z in Zs])
 
-    # Distances via squared-norm + sqrt; never call norm() on a possibly-zero
-    # vector (its gradient is 0/0 = NaN, which leaks even through masking).
-    dpA = points[:, None, :] - coords[None, :, :]
-    rA = jnp.sqrt(jnp.sum(dpA * dpA, axis=2) + 1e-30)            # (ng, A)
+    # Pair quantities, computed once (natom²).
     dAB = coords[:, None, :] - coords[None, :, :]
     # +eye makes the diagonal sqrt(1) with a finite (zero) gradient; the
     # diagonal entries are masked out of the product below.
     RAB = jnp.sqrt(jnp.sum(dAB * dAB, axis=2) + jnp.eye(n_atom))
-
-    mu = (rA[:, :, None] - rA[:, None, :]) / RAB[None, :, :]  # (ng, A, B)
     chi = bragg[:, None] / bragg[None, :]
     u = (chi - 1.0) / (chi + 1.0)
     a = jnp.clip(u / (u * u - 1.0), -0.45, 0.45)
-    nu = mu + a[None, :, :] * (1.0 - mu * mu)
-
-    f = nu
-    for _ in range(3):
-        f = 1.5 * f - 0.5 * f**3
-    s = 0.5 * (1.0 - f)
-    # Diagonal (A == B) plays no role: set s_AA = 1 so the product over B leaves it out.
     eye = jnp.eye(n_atom, dtype=bool)
-    s = jnp.where(eye[None, :, :], 1.0, s)
-    return jnp.prod(s, axis=2)  # P_A = Π_{B≠A} s(ν_AB)
+
+    def cell(p):
+        # Distances via squared-norm + sqrt; never call norm() on a possibly-
+        # zero vector (its gradient is 0/0 = NaN, which leaks even through
+        # masking).
+        dpA = p[None, :] - coords
+        rA = jnp.sqrt(jnp.sum(dpA * dpA, axis=1) + 1e-30)     # (A,)
+        mu = (rA[:, None] - rA[None, :]) / RAB                # (A, B)
+        nu = mu + a * (1.0 - mu * mu)
+        f = nu
+        for _ in range(3):
+            f = 1.5 * f - 0.5 * f**3
+        s = 0.5 * (1.0 - f)
+        # Diagonal (A == B) plays no role: s_AA = 1 leaves it out of the product.
+        s = jnp.where(eye, 1.0, s)
+        return jnp.prod(s, axis=1)                            # P_A = Π_{B≠A} s(ν_AB)
+
+    chunk = max(1, _PARTITION_BUDGET // (n_atom * n_atom))
+    return _chunked_vmap(cell, chunk_size=chunk, checkpoint=True)(points)

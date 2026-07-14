@@ -6,10 +6,12 @@ partition. The Lebedev angular grids are vendored numeric tables (under
 ``data/``); the radial scheme and partition are computed natively.
 """
 
-from dftax.grid.grid import Becke, Points, becke, becke_grid, points
+from dftax.grid.grid import (
+    Becke, Points, becke, becke_grid, becke_grid_size, points,
+)
 from dftax.grid.lebedev import lebedev_grid, available_lebedev
 
 __all__ = [
     "Becke", "Points", "becke", "points",
-    "becke_grid", "lebedev_grid", "available_lebedev",
+    "becke_grid", "becke_grid_size", "lebedev_grid", "available_lebedev",
 ]

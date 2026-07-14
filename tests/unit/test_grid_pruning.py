@@ -102,7 +102,10 @@ def test_pruned_energy_matches_full_grid():
 
 @pytest.mark.pyscf
 def test_pruned_energy_vs_pyscf_reference(water_mol, water_ks):
-    ks = KS(water_mol, PBE())                                    # pruned default
+    from dftax import exact
+
+    # exact Coulomb: the PySCF reference is exact-ERI, tighter than RI error.
+    ks = KS(water_mol, PBE(), coulomb=exact())                   # pruned default
     res = scf(ks)
     assert res.converged
     assert abs(res.e_tot - water_ks.e_tot) < 5e-5
@@ -127,7 +130,7 @@ def test_partition_chunking_is_exact(monkeypatch):
     # factory on the package, so resolve it explicitly.
     becke_mod = importlib.import_module("dftax.grid.becke")
     mol = Molecule.from_xyz(WATER, "sto-3g")
-    syms, coords = mol.symbols, jnp.asarray(mol.atom_coords())
+    coords = jnp.asarray(mol.atom_coords())
     Zs = [8, 1, 1]
     pts = jnp.asarray(np.random.default_rng(0).normal(size=(1000, 3)) * 2.0)
     P_big = becke_partition(pts, coords, Zs)                     # one chunk

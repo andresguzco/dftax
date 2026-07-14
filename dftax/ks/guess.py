@@ -157,6 +157,10 @@ def sap(fit: str = "sap_helfem_large", *, grid: Becke | None = None) -> SAPSpec:
 
 _SPECS = (CoreSpec, SADSpec, MinAOSpec, SAPSpec)
 
+# Public union for solver signatures (`guess=` also accepts a raw density
+# array or None; see `density_from_guess`).
+GuessSpec = CoreSpec | SADSpec | MinAOSpec | SAPSpec
+
 
 # ---------------------------------------------------------------------------
 # Ground-state electron configurations (spherically averaged occupations)

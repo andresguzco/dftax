@@ -30,7 +30,7 @@ from jax import lax
 from jaxtyping import Array, Float
 
 from dftax.ks.energy import KS
-from dftax.ks.guess import density_from_guess
+from dftax.ks.guess import GuessSpec, density_from_guess
 
 
 @eqx.filter_jit
@@ -208,7 +208,7 @@ def scf(
     diis_space: int = 8,
     lindep_thresh: float = 1e-7,
     level_shift: float = 0.0,
-    guess=None,
+    guess: GuessSpec | Array | None = None,
     verbose: bool = False,
 ) -> KSResult:
     """Run KS SCF to self-consistency (restricted and spin-polarized alike).

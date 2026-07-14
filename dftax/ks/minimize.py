@@ -37,7 +37,7 @@ import optax
 from jaxtyping import Array, Float
 
 from dftax.ks.energy import KS
-from dftax.ks.guess import density_from_guess
+from dftax.ks.guess import GuessSpec, density_from_guess
 from dftax.ks.scf import (
     KSResult,
     _fock_stacked,
@@ -94,7 +94,7 @@ def minimize(
     g_tol: float = 1e-6,
     check_every: int = 10,
     Z0: Array | tuple | None = None,
-    guess=None,
+    guess: GuessSpec | Array | None = None,
     verbose: bool = False,
 ) -> KSResult:
     """Minimize the KS energy directly over orthonormalized coefficients.

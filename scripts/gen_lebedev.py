@@ -41,7 +41,7 @@ def main() -> int:
         # Quadrature sanity: exact for low-order polynomials on the sphere
         # (the 6-point grid has polynomial precision 3, so degree-4 monomials
         # are only exact from n=14 up).
-        x, y, z = g[:, 0], g[:, 1], g[:, 2]
+        x, y = g[:, 0], g[:, 1]
         assert abs(np.sum(w * x**2) - 1.0 / 3.0) < 1e-12
         if n >= 14:
             assert abs(np.sum(w * x**2 * y**2) - 1.0 / 15.0) < 1e-12

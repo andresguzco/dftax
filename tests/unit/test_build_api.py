@@ -23,8 +23,11 @@ AUX = "def2-universal-jkfit"
 
 
 def _solve(ks):
+    from dftax.ks.guess import density_from_guess
+
     X = canonical_orthonormalizer(ks.S)
-    e, *_ , conv, _ = _scf_solve(ks, X, 128, 1e-9, 1e-6, 8, False, 0.0)
+    P0 = density_from_guess(ks, None, X)
+    e, *_ , conv, _ = _scf_solve(ks, X, P0, 128, 1e-9, 1e-6, 8, False, 0.0)
     return float(e), bool(conv)
 
 

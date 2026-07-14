@@ -235,6 +235,40 @@ def overlap_matrix(basis: BasisData) -> Float[Array, "nao nao"]:
     return S_cart
 
 
+def cross_overlap_matrix(
+    basis_a: BasisData, basis_b: BasisData
+) -> Float[Array, "nao_a nao_b"]:
+    """Overlap block ⟨μ_A|ν_B⟩ between two *different* AO bases.
+
+    Rows run over ``basis_a``, columns over ``basis_b``; each side's
+    ``cart2sph`` (when present) is applied to its own index. The two bases may
+    have different primitive padding. Used by the projection initial guesses
+    (see :mod:`dftax.ks.guess`), which project minimal-basis atomic densities
+    onto the computational basis.
+    """
+    def _element(i, j):
+        return _contracted_integral(
+            basis_a.exponents[i], basis_a.coefficients[i],
+            basis_a.centers[i], basis_a.angular[i],
+            basis_b.exponents[j], basis_b.coefficients[j],
+            basis_b.centers[j], basis_b.angular[j],
+            _overlap_primitive_3d,
+        )
+
+    idx_b = jnp.arange(basis_b.centers.shape[0])
+
+    def _row(i):
+        return jax.vmap(_element, in_axes=(None, 0))(i, idx_b)
+
+    S = chunked_vmap(_row, chunk_size=32)(jnp.arange(basis_a.centers.shape[0]))
+
+    if basis_a.cart2sph is not None:
+        S = basis_a.cart2sph.T @ S
+    if basis_b.cart2sph is not None:
+        S = S @ basis_b.cart2sph
+    return S
+
+
 def kinetic_matrix(basis: BasisData) -> Float[Array, "nao nao"]:
     """Compute the kinetic energy matrix T_μν in the AO basis.
 

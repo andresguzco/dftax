@@ -124,11 +124,13 @@ def implicit_density(ks: KS):
     """Converged closed-shell density ``P*`` for the assembled functional ``ks``,
     differentiable w.r.t. ``ks`` (and hence anything it was assembled from) by implicit
     differentiation of the SCF fixed point. Restricted (closed-shell) only."""
+    from dftax.ks.guess import density_from_guess
     from dftax.ks.scf import _scf_solve, canonical_orthonormalizer
     if len(ks.nocc) != 1:
         raise NotImplementedError("implicit_density supports closed shells only.")
     X = canonical_orthonormalizer(ks.S)
-    _, P, _, _, _, _ = _scf_solve(ks, X, 128, 1e-10, 1e-8, 8, False, 0.0)
+    P0 = density_from_guess(ks, None, X)
+    _, P, _, _, _, _ = _scf_solve(ks, X, P0, 128, 1e-10, 1e-8, 8, False, 0.0)
     return P[0]
 
 

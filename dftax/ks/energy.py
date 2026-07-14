@@ -277,8 +277,13 @@ class KS(eqx.Module):
     basis: BasisData
     coulomb: CoulombTerm
     xc_term: XCTerm
+    # System metadata for the solver-side initial guesses (dftax.ks.guess):
+    # element symbols (None when built from a raw System, which carries no
+    # identities) and the nuclear coordinates in Bohr.
+    atom_coords: Float[Array, "natom 3"]
     nelec: int = eqx.field(static=True)
     nocc: tuple[int, ...] = eqx.field(static=True)
+    symbols: tuple[str, ...] | None = eqx.field(static=True)
 
     def __init__(
         self,
@@ -407,8 +412,10 @@ class KS(eqx.Module):
                 basis=basis, grid_coords=grid_coords, weights=weights,
                 chunk=grid_chunk, xc=xc,
             )
+        self.atom_coords = coords
         self.nelec = nelec
         self.nocc = nocc
+        self.symbols = tuple(symbols) if symbols is not None else None
 
     def e_xc(self, P: Float[Array, "nspin nao nao"]) -> Scalar:
         """Exchange-correlation energy ``∫ ε_xc ρ`` (DFT part only)."""

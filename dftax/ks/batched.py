@@ -39,6 +39,7 @@ from dftax.basis.loader import build_basis_data
 from dftax.grid import Becke, becke, becke_grid, points
 from dftax.integrals import nuclear_repulsion
 from dftax.ks.energy import KS, System, _spin_counts
+from dftax.ks.guess import _SPECS, CoreSpec, _initial_density, _resolve_guess
 from dftax.ks.shard import MeshSpec, _resolve_mesh
 from dftax.ks.scf import _scf_solve
 
@@ -83,6 +84,7 @@ def scf_batched(
     mesh: MeshSpec | None = None,
     max_iter: int = 128, e_tol: float = 1e-8, d_tol: float = 1e-6,
     diis_space: int = 8, level_shift: float = 0.0,
+    guess=None,
 ) -> BatchedResult:
     """KS SCF over a batch of geometries ``coords_batch`` of shape
     ``(B, n_atom, 3)`` (Bohr). ``mol`` supplies the (fixed) atoms + basis; only
@@ -93,6 +95,10 @@ def scf_batched(
     ``(B, n_atom, 3)``; with ``return_orbitals=True`` it also carries
     ``P``/``mo_coeff``/``mo_energy`` (O(B·nspin·nao²) memory, off by
     default). ``mesh=`` shards the batch axis across a device mesh.
+
+    ``guess`` is a spec from :mod:`dftax.ks.guess` (``core``/``sad``/``minao``/
+    ``sap``); it is resolved once (SAD/MinAO atomic densities are
+    geometry-independent) and applied per geometry inside the solve.
     """
     grid = becke() if grid is None else grid
     if not isinstance(grid, Becke):
@@ -108,6 +114,17 @@ def scf_batched(
     symbols = mol.symbols
     coords_batch = jnp.asarray(coords_batch)
     B = coords_batch.shape[0]
+    if guess is not None and not isinstance(guess, _SPECS):
+        raise TypeError(
+            "scf_batched takes a guess spec (core/sad/minao/sap), not a "
+            "density array; per-geometry densities would need the batch axis."
+        )
+    # Resolved once, eagerly: SAD/MinAO blocks are geometry-independent, and
+    # the SAP tables are applied traced per geometry inside `single`.
+    resolved_guess = _resolve_guess(
+        guess if guess is not None else CoreSpec(),
+        symbols, template, jnp.asarray(mol.atom_coords()),
+    )
 
     def _build(coords):
         basis = eqx.tree_at(lambda b: b.centers, template, coords[atom_idx])
@@ -120,8 +137,10 @@ def scf_batched(
 
     def single(coords):
         ks = _build(coords)
+        X = _lowdin(ks.S)
+        P0 = _initial_density(resolved_guess, ks, X)
         e, P, C, eps, conv, n = _scf_solve(
-            ks, _lowdin(ks.S), max_iter, e_tol, d_tol, diis_space, False, level_shift
+            ks, X, P0, max_iter, e_tol, d_tol, diis_space, False, level_shift
         )
         out = {"e": e, "conv": conv, "n": n}
         if forces:

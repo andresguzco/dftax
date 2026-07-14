@@ -4,6 +4,23 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Initial guesses as composable values.** `scf`, `minimize` and
+  `scf_batched` take `guess=`: `core()` (the previous behavior, still the
+  default), `minao(basis="sto-3g")` (projected minimal-basis atomic
+  densities), `sad()` (spherically-averaged atomic HF solved per element in
+  the molecule's own basis), and `sap(fit="sap_helfem_large")` (superposition
+  of Gaussian-fitted atomic potentials, `F0 = T + V_SAP`). An explicit
+  `(nspin, nao, nao)` density array is also accepted (warm restarts from a
+  previous `KSResult.P`). The guess never changes the converged fixed point,
+  only the iteration count.
+- `cross_overlap_matrix(basis_a, basis_b)`: the overlap block between two
+  different AO bases (used by the projection guesses).
+- `KS` now records `symbols` and `atom_coords`, so guesses resolve against
+  the built functional without re-passing the molecule.
+
 ## [0.2.0] - 2026-07-11
 
 A breaking release: the public API is rebuilt in the Equinox/Optax style

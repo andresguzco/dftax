@@ -30,6 +30,7 @@ from jax import lax
 from jaxtyping import Array, Float
 
 from dftax.ks.energy import KS
+from dftax.ks.guess import density_from_guess
 
 
 @eqx.filter_jit
@@ -117,8 +118,11 @@ def _diis_extrapolate(dF, dErr, count, m):
 
 
 @eqx.filter_jit
-def _scf_solve(ks: KS, X, max_iter, e_tol, d_tol, m, verbose, level_shift):
+def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift):
     """On-device SCF: autodiff Fock + DIIS in a single while_loop (spin-stacked).
+
+    ``P0`` is the initial spin-stacked density (see :mod:`dftax.ks.guess`);
+    the loop body starts by building the Fock from it.
 
     ``level_shift`` (Saunders-Hillier) adds ``b·(S − S C_occ C_occᵀ S)`` per channel
     to the Fock before diagonalization, raising the virtual orbital energies by
@@ -149,9 +153,11 @@ def _scf_solve(ks: KS, X, max_iter, e_tol, d_tol, m, verbose, level_shift):
         P = jnp.einsum("smi,si,sni->smn", Co, f, Co)     # aufbau fill
         return P, C, eps
 
-    F0 = jnp.broadcast_to(ks.hcore, (nspin, nao, nao))
-    P0, C0, eps0 = make_density(F0)                      # core-Hamiltonian guess
     e0 = ks.total(P0)
+    # C/eps placeholders: the body always runs at least one iteration
+    # (``converged`` starts False), which overwrites them.
+    C0 = jnp.zeros((nspin, nao, nmo))
+    eps0 = jnp.zeros((nspin, nmo))
     # Channel-stacked DIIS buffers. The Fock is nao×nao per channel, but the
     # commutator error err = Xᵀ(FPS−SPF)X is nmo×nmo, and nmo = X.shape[1] < nao
     # whenever the canonical orthonormalizer drops linearly-dependent columns, so
@@ -202,6 +208,7 @@ def scf(
     diis_space: int = 8,
     lindep_thresh: float = 1e-7,
     level_shift: float = 0.0,
+    guess=None,
     verbose: bool = False,
 ) -> KSResult:
     """Run KS SCF to self-consistency (restricted and spin-polarized alike).
@@ -214,22 +221,29 @@ def scf(
         diis_space: DIIS history depth (fixed buffer size).
         lindep_thresh: overlap-eigenvalue cutoff for canonical orthonormalization.
         level_shift: Saunders-Hillier virtual level shift (Ha).
+        guess: initial density, a spec from :func:`~dftax.ks.guess.core` /
+            :func:`~dftax.ks.guess.sad` / :func:`~dftax.ks.guess.minao` /
+            :func:`~dftax.ks.guess.sap`, or an explicit ``(nspin, nao, nao)``
+            density array (warm restart). ``None`` is the core-Hamiltonian
+            guess.
         verbose: print per-iteration energy / error (via jax.debug.print).
 
     Example:
         ```python
         ks = KS(mol, PBE())
         res = scf(ks, e_tol=1e-9)
+        res = scf(ks, guess=sad())               # fewer iterations
         res.e_tot, res.converged, res.P[0]       # P is spin-stacked
         ```
     """
     X = canonical_orthonormalizer(ks.S, lindep_thresh)
+    P0 = density_from_guess(ks, guess, X)
     # Tolerances ride along as traced arrays: under filter_jit a Python scalar
     # is a static argument, so retrying with level_shift or a tighter e_tol
     # would otherwise recompile the whole solve. diis_space (buffer shape) and
     # verbose (Python branch) must stay static.
     e_tot, P, C, eps, converged, n_iter = _scf_solve(
-        ks, X, jnp.asarray(max_iter), jnp.asarray(e_tol), jnp.asarray(d_tol),
+        ks, X, P0, jnp.asarray(max_iter), jnp.asarray(e_tol), jnp.asarray(d_tol),
         diis_space, verbose, jnp.asarray(level_shift)
     )
     result = KSResult(

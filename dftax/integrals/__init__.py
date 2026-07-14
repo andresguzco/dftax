@@ -7,6 +7,7 @@ fully differentiable and compatible with jit/vmap.
 
 from dftax.integrals.overlap import (
     overlap_matrix,
+    cross_overlap_matrix,
     kinetic_matrix,
     overlap_matrix_batched,
     kinetic_matrix_batched,
@@ -22,6 +23,7 @@ from dftax.integrals.multipole import dipole_matrices
 
 __all__ = [
     "overlap_matrix",
+    "cross_overlap_matrix",
     "kinetic_matrix",
     "nuclear_attraction_matrix",
     "nuclear_repulsion",

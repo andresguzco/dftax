@@ -23,6 +23,7 @@ The canonical flow::
     ks  = KS(mol, PBE(), grid=becke(75, 302),   # or: choices as values
              coulomb=df("def2-universal-jkfit"))
     res = scf(ks)                               # DIIS; res.e_tot, res.P, ...
+    res = scf(ks, guess=sad())                  # better start, fewer iterations
 
 The most common entry points are re-exported here; import the submodules
 directly for the full surface.
@@ -40,6 +41,7 @@ from dftax.integrals import (
 )
 from dftax.ks import (
     KS, System, exact, df, mesh,
+    core, sad, minao, sap,
     scf, minimize, forces, scf_batched, KSResult, BatchedResult,
     dipole, polarizability, hessian, vibrations, ir_spectrum, raman_spectrum,
     alchemical_deriv, implicit_density,
@@ -58,6 +60,8 @@ __all__ = [
     "__version__",
     # build: system + choices-as-values
     "KS", "System", "Molecule", "exact", "df", "becke", "points", "mesh",
+    # initial guesses (the guess= argument of the solvers)
+    "core", "sad", "minao", "sap",
     # run: solver verbs + result
     "scf", "minimize", "forces", "scf_batched", "KSResult", "BatchedResult",
     # response properties

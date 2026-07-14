@@ -37,6 +37,7 @@ import optax
 from jaxtyping import Array, Float
 
 from dftax.ks.energy import KS
+from dftax.ks.guess import density_from_guess
 from dftax.ks.scf import (
     KSResult,
     _fock_stacked,
@@ -64,6 +65,18 @@ def _core_guess(ks: KS) -> tuple[Float[Array, "nao nocc"], ...]:
     return tuple(C[:, :n] for n in ks.nocc)
 
 
+def _guess_orbitals(ks: KS, guess) -> tuple[Float[Array, "nao nocc"], ...]:
+    """Occupied orbitals from a guess density: one Fock build at ``P0``,
+    then the per-channel aufbau eigenvectors (the standard way to turn a
+    density-based guess, e.g. non-idempotent SAD, into orbitals)."""
+    X = canonical_orthonormalizer(ks.S)
+    P0 = density_from_guess(ks, guess, X)
+    F = _fock_stacked(ks, P0)                       # (nspin, nao, nao)
+    _, Cp = jnp.linalg.eigh(X.T @ F @ X)
+    C = X @ Cp                                       # (nspin, nao, nmo)
+    return tuple(C[s][:, :n] for s, n in enumerate(ks.nocc))
+
+
 @eqx.filter_jit
 def _value_and_grad(ks: KS, Zs):
     """Energy and dE/dZ per channel (ks arrays traced, not baked as constants)."""
@@ -81,6 +94,7 @@ def minimize(
     g_tol: float = 1e-6,
     check_every: int = 10,
     Z0: Array | tuple | None = None,
+    guess=None,
     verbose: bool = False,
 ) -> KSResult:
     """Minimize the KS energy directly over orthonormalized coefficients.
@@ -98,6 +112,11 @@ def minimize(
         Z0: optional initial coefficient guess, one ``(nao, nocc_σ)`` array
             per channel (a bare array is accepted for a closed shell); default
             is the core-Hamiltonian guess.
+        guess: alternative to ``Z0``: a spec from
+            :func:`~dftax.ks.guess.core` / :func:`~dftax.ks.guess.sad` /
+            :func:`~dftax.ks.guess.minao` / :func:`~dftax.ks.guess.sap` or an
+            explicit ``(nspin, nao, nao)`` density; the starting orbitals are
+            the aufbau eigenvectors of the Fock built at that density.
         verbose: print per-step energy and gradient norm.
 
     Example:
@@ -107,8 +126,10 @@ def minimize(
             optax.clip_by_global_norm(1.0), optax.adam(0.1)), g_tol=1e-7)
         ```
     """
+    if Z0 is not None and guess is not None:
+        raise ValueError("pass either Z0 (explicit orbitals) or guess, not both.")
     if Z0 is None:
-        Zs = _core_guess(ks)
+        Zs = _core_guess(ks) if guess is None else _guess_orbitals(ks, guess)
     elif isinstance(Z0, (tuple, list)):
         Zs = tuple(jnp.asarray(Z) for Z in Z0)
     else:

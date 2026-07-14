@@ -1175,6 +1175,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#dftax.grid.becke_grid_size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;becke_grid_size
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1524,8 +1535,12 @@
 
 <h1 id="grid-specs">Grid specs<a class="headerlink" href="#grid-specs" title="Permanent link">¤</a></h1>
 <p>Quadrature choices for the XC integral. <code>becke</code> is the default atom-centered
-grid; <code>points</code> wraps an explicit grid; a <code>chunk</code> on either streams the XC
-integral in O(chunk·nao) memory.</p>
+grid: NWChem-pruned per radial region (<code>prune=None</code> for the full product
+grid), tail shells cut at <code>r_max</code>, and negligible-weight points dropped at
+build time (<code>cutoff</code>). <code>points</code> wraps an explicit grid. <code>chunk</code> controls XC
+streaming on either spec: <code>"auto"</code> (default) materializes the AO grid values
+only when they fit a memory budget and otherwise streams in O(chunk·nao)
+memory; <code>None</code> forces the materialized grid; an int streams with that chunk.</p>
 
 
 <div class="doc doc-object doc-module">
@@ -1970,7 +1985,10 @@ errors defaults to 'strict'.</p>
 
         <p>Unnormalized Becke cell functions <code>P_A(point)</code>, shape (n_grid, n_atom).</p>
 <p>Vectorized JAX (differentiable w.r.t. <code>coords</code>); includes the heteronuclear
-Bragg-radii size adjustment (Becke 1988, App. A).</p>
+Bragg-radii size adjustment (Becke 1988, App. A). Points are processed in
+budget-derived chunks so the per-point <code>(chunk, A, B)</code> transient stays
+bounded for large molecules (checkpointed, so the backward pass used by the
+forces rematerializes each chunk instead of storing them all).</p>
 
 
     </div>
@@ -1989,7 +2007,7 @@ Bragg-radii size adjustment (Becke 1988, App. A).</p>
 
 
 <h4 id="dftax.grid.points" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">points</span><span class="p">(</span><span class="n">coords</span><span class="p">,</span> <span class="n">weights</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Points</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">points</span><span class="p">(</span><span class="n">coords</span><span class="p">,</span> <span class="n">weights</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">&#39;auto&#39;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Points</span></code>
 
 <a href="#dftax.grid.points" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -1997,7 +2015,8 @@ Bragg-radii size adjustment (Becke 1988, App. A).</p>
     <div class="doc doc-contents first">
 
         <p>An explicit quadrature grid <code>(coords, weights)</code> (e.g. from PySCF).</p>
-<p><code>chunk</code> streams the XC integral over grid chunks (see :func:<code>becke</code>).</p>
+<p><code>chunk</code> streams the XC integral over grid chunks (see :func:<code>becke</code>);
+<code>"auto"</code> picks materialized vs streamed by memory budget.</p>
 
 
     </div>
@@ -2008,7 +2027,7 @@ Bragg-radii size adjustment (Becke 1988, App. A).</p>
 
 
 <h4 id="dftax.grid.becke_grid" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">becke_grid</span><span class="p">(</span><span class="n">symbols</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">coords_bohr</span><span class="p">,</span> <span class="n">n_radial</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">75</span><span class="p">,</span> <span class="n">lebedev</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">302</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">becke_grid</span><span class="p">(</span><span class="n">symbols</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">coords_bohr</span><span class="p">,</span> <span class="n">n_radial</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">75</span><span class="p">,</span> <span class="n">lebedev</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">302</span><span class="p">,</span> <span class="n">prune</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">&#39;nwchem&#39;</span><span class="p">,</span> <span class="n">r_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mf">45.0</span><span class="p">)</span></code>
 
 <a href="#dftax.grid.becke_grid" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -2017,10 +2036,33 @@ Bragg-radii size adjustment (Becke 1988, App. A).</p>
 
         <p>Build a molecular quadrature grid (points in Bohr, weights).</p>
 <p>Each atom contributes <code>n_radial</code> Becke radial shells times a Lebedev
-angular grid of <code>lebedev</code> points; the per-atom grids are merged with
-Becke's fuzzy-Voronoi partition.</p>
+angular grid whose order is pruned per radial region (see :func:<code>becke</code>);
+the per-atom grids are merged with Becke's fuzzy-Voronoi partition.</p>
 <p>Returns <code>(coords, weights)</code> as JAX arrays of shape <code>(n_grid, 3)</code> and
-<code>(n_grid,)</code>, differentiable w.r.t. <code>coords_bohr</code>.</p>
+<code>(n_grid,)</code>, differentiable w.r.t. <code>coords_bohr</code>. Shapes depend only
+on <code>symbols</code> and the spec constants, so this can run under <code>jit</code> /
+<code>vmap</code> with traced coordinates.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.grid.becke_grid_size" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">becke_grid_size</span><span class="p">(</span><span class="n">symbols</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">n_radial</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">75</span><span class="p">,</span> <span class="n">lebedev</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">302</span><span class="p">,</span> <span class="n">prune</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">&#39;nwchem&#39;</span><span class="p">,</span> <span class="n">r_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mf">45.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span></code>
+
+<a href="#dftax.grid.becke_grid_size" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Number of grid points :func:<code>becke_grid</code> will emit (static per spec).</p>
+<p>Lets callers that build the grid under <code>jit</code>/<code>vmap</code> (forces, the
+batched solver) make eager, shape-dependent decisions, e.g. resolving the
+<code>chunk="auto"</code> streaming policy.</p>
 
 
     </div>

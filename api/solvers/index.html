@@ -1242,6 +1242,67 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#initial-guesses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Initial guesses
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Initial guesses">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dftax.ks.guess.core" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;core
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dftax.ks.guess.sad" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;sad
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dftax.ks.guess.minao" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;minao
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dftax.ks.guess.sap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;sap
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1537,13 +1598,17 @@
 <p>Two verbs over one built functional, one result type. <code>implicit_density</code>
 exposes the converged density as a differentiable function of the functional
 (CPHF via <code>custom_vjp</code>).</p>
+<p>Both solvers (and <code>scf_batched</code>) take a <code>guess=</code>: an initial-density spec
+from <code>core</code> / <code>sad</code> / <code>minao</code> / <code>sap</code>, or an explicit <code>(nspin, nao, nao)</code>
+density array for warm restarts. The guess changes the iteration count, never
+the converged fixed point.</p>
 
 
 <div class="doc doc-object doc-function">
 
 
 <h4 id="dftax.ks.scf.scf" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">scf</span><span class="o">.</span><span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">:</span> <span class="n">KS</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">max_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span><span class="p">,</span> <span class="n">e_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-08</span><span class="p">,</span> <span class="n">d_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-06</span><span class="p">,</span> <span class="n">diis_space</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8</span><span class="p">,</span> <span class="n">lindep_thresh</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-07</span><span class="p">,</span> <span class="n">level_shift</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KSResult</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">scf</span><span class="o">.</span><span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">:</span> <span class="n">KS</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">max_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span><span class="p">,</span> <span class="n">e_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-08</span><span class="p">,</span> <span class="n">d_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-06</span><span class="p">,</span> <span class="n">diis_space</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8</span><span class="p">,</span> <span class="n">lindep_thresh</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-07</span><span class="p">,</span> <span class="n">level_shift</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">guess</span><span class="p">:</span> <span class="n">GuessSpec</span> <span class="o">|</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KSResult</span></code>
 
 <a href="#dftax.ks.scf.scf" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -1678,6 +1743,26 @@ exposes the converged density as a differentiable function of the functional
           </tr>
           <tr class="doc-section-item">
             <td>
+                <code>guess</code>
+            </td>
+            <td>
+                  <code><span title="dftax.ks.scf.GuessSpec">GuessSpec</span> | <span title="builtins.Array">Array</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>initial density, a spec from :func:<code>~dftax.ks.guess.core</code> /
+:func:<code>~dftax.ks.guess.sad</code> / :func:<code>~dftax.ks.guess.minao</code> /
+:func:<code>~dftax.ks.guess.sap</code>, or an explicit <code>(nspin, nao, nao)</code>
+density array (warm restart). <code>None</code> is the core-Hamiltonian
+guess.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
                 <code>verbose</code>
             </td>
             <td>
@@ -1700,6 +1785,7 @@ exposes the converged density as a differentiable function of the functional
   <summary>Example</summary>
   <div class="highlight"><pre><span></span><code><span class="n">ks</span> <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">())</span>
 <span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">e_tol</span><span class="o">=</span><span class="mf">1e-9</span><span class="p">)</span>
+<span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">guess</span><span class="o">=</span><span class="n">sad</span><span class="p">())</span>               <span class="c1"># fewer iterations</span>
 <span class="n">res</span><span class="o">.</span><span class="n">e_tot</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">P</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>       <span class="c1"># P is spin-stacked</span>
 </code></pre></div>
 </details>
@@ -1712,7 +1798,7 @@ exposes the converged density as a differentiable function of the functional
 
 
 <h4 id="dftax.ks.minimize.minimize" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">minimize</span><span class="o">.</span><span class="n">minimize</span><span class="p">(</span><span class="n">ks</span><span class="p">:</span> <span class="n">KS</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">:</span> <span class="n">optax</span><span class="o">.</span><span class="n">GradientTransformation</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">max_steps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2000</span><span class="p">,</span> <span class="n">g_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-06</span><span class="p">,</span> <span class="n">check_every</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">10</span><span class="p">,</span> <span class="n">Z0</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KSResult</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">minimize</span><span class="o">.</span><span class="n">minimize</span><span class="p">(</span><span class="n">ks</span><span class="p">:</span> <span class="n">KS</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">:</span> <span class="n">optax</span><span class="o">.</span><span class="n">GradientTransformation</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">max_steps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2000</span><span class="p">,</span> <span class="n">g_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-06</span><span class="p">,</span> <span class="n">check_every</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">10</span><span class="p">,</span> <span class="n">Z0</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">guess</span><span class="p">:</span> <span class="n">GuessSpec</span> <span class="o">|</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KSResult</span></code>
 
 <a href="#dftax.ks.minimize.minimize" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -1829,6 +1915,26 @@ overshoot the true crossing by up to <code>check_every - 1</code> steps.
                 <p>optional initial coefficient guess, one <code>(nao, nocc_σ)</code> array
 per channel (a bare array is accepted for a closed shell); default
 is the core-Hamiltonian guess.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>guess</code>
+            </td>
+            <td>
+                  <code><span title="dftax.ks.minimize.GuessSpec">GuessSpec</span> | <span title="builtins.Array">Array</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>alternative to <code>Z0</code>: a spec from
+:func:<code>~dftax.ks.guess.core</code> / :func:<code>~dftax.ks.guess.sad</code> /
+:func:<code>~dftax.ks.guess.minao</code> / :func:<code>~dftax.ks.guess.sap</code> or an
+explicit <code>(nspin, nao, nao)</code> density; the starting orbitals are
+the aufbau eigenvectors of the Fock built at that density.</p>
               </div>
             </td>
             <td>
@@ -2253,6 +2359,177 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
         <p>Converged closed-shell density <code>P*</code> for the assembled functional <code>ks</code>,
 differentiable w.r.t. <code>ks</code> (and hence anything it was assembled from) by implicit
 differentiation of the SCF fixed point. Restricted (closed-shell) only.</p>
+
+
+    </div>
+
+</div><h2 id="initial-guesses">Initial guesses<a class="headerlink" href="#initial-guesses" title="Permanent link">¤</a></h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.guess.core" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">guess</span><span class="o">.</span><span class="n">core</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">CoreSpec</span></code>
+
+<a href="#dftax.ks.guess.core" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Core-Hamiltonian guess: aufbau fill of the <code>hcore</code> eigenvectors.</p>
+<p>The dftax default (<code>guess=None</code>); ignores electron repulsion, so it is
+the weakest standard guess: fine for small closed-shell systems, slow to
+converge (or saddle-prone under :func:<code>~dftax.ks.minimize.minimize</code>) for
+larger ones.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.guess.sad" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">guess</span><span class="o">.</span><span class="n">sad</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">SADSpec</span></code>
+
+<a href="#dftax.ks.guess.sad" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Superposition of atomic densities from solved atoms.</p>
+<p>Per unique element, a spherically-averaged (fractional-occupation) atomic
+Hartree-Fock is converged in the molecule's own basis, and the atomic
+densities are assembled block-diagonally. The strongest density-based
+guess here; the per-element solves are tiny and cached.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.guess.minao" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">guess</span><span class="o">.</span><span class="n">minao</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;sto-3g&#39;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MinAOSpec</span></code>
+
+<a href="#dftax.ks.guess.minao" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Superposition of atomic densities projected from a minimal basis.</p>
+<p>Per unique element, tabulated ground-state occupations are placed on the
+minimal-basis AOs and projected onto the computational basis through the
+cross overlap. Cheaper than :func:<code>sad</code> (no atomic solves), nearly as good.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>basis</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>minimal basis holding the atomic ground states, any Basis Set
+Exchange name with one shell per occupied <code>(n, l)</code>
+(<code>"sto-3g"</code>, <code>"mini"</code>, <code>"ano-rcc-mb"</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;sto-3g&#39;</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.guess.sap" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">guess</span><span class="o">.</span><span class="n">sap</span><span class="p">(</span><span class="n">fit</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;sap_helfem_large&#39;</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">grid</span><span class="p">:</span> <span class="n">Becke</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">SAPSpec</span></code>
+
+<a href="#dftax.ks.guess.sap" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Superposition of atomic potentials: <code>F0 = T + V_SAP</code>.</p>
+<p>A potential-based guess (no density superposition): the screened effective
+potential of each atom, Gaussian-fitted, summed over atoms and integrated
+on a Becke grid. Robust and cheap; the only guess here whose quality does
+not depend on a converged atomic density.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>fit</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the Gaussian potential fit, a Basis Set Exchange name
+(<code>"sap_helfem_large"</code>, <code>"sap_helfem_small"</code>,
+<code>"sap_grasp_large"</code>, <code>"sap_grasp_small"</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;sap_helfem_large&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>grid</code>
+            </td>
+            <td>
+                  <code><span title="dftax.grid.grid.Becke">Becke</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>quadrature for the potential matrix, a
+:func:<code>~dftax.grid.becke</code> spec; <code>None</code> uses the default grid.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
 
 
     </div>

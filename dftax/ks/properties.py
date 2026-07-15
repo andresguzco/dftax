@@ -32,6 +32,7 @@ from dftax.integrals.multipole import dipole_matrices
 from dftax.ks.energy import KS, System
 from dftax.ks.scf import scf
 from dftax.ks.forces import forces
+from dftax.ks.terms import DFSpec, ExactSpec, exact
 from dftax.system.molecule import Molecule
 
 # atomic-unit dipole (e·a0) to Debye
@@ -86,11 +87,11 @@ def _grid(mol, grid):
 
 
 def _solve_field(mol, xc, gc, gw, *, chunk=None, field=None,
-                 origin=(0.0, 0.0, 0.0), **scf_kw):
+                 origin=(0.0, 0.0, 0.0), coulomb=None, **scf_kw):
     """Run KS, optionally under a uniform external field. Returns ``(P, e, basis)``
     where the energy includes the nuclear ``−E·μ_nuc`` term so ``e`` is the full
     field-dependent total energy (``μ = −de/dfield``)."""
-    ks = KS(mol, xc, grid=points(gc, gw, chunk=chunk))
+    ks = KS(mol, xc, grid=points(gc, gw, chunk=chunk), coulomb=coulomb)
     basis = ks.basis
     e_nuc_field = 0.0
     if field is not None:
@@ -108,14 +109,16 @@ def _solve_field(mol, xc, gc, gw, *, chunk=None, field=None,
 def dipole(
     mol, xc: XCFunctional, *,
     origin=(0.0, 0.0, 0.0), debye: bool = False,
-    grid: Becke | None = None, **scf_kw,
+    grid: Becke | None = None, coulomb: ExactSpec | DFSpec | None = None,
+    **scf_kw,
 ) -> Float[Array, "3"]:
     """Permanent electric dipole moment ``μ`` (atomic units, or Debye if ``debye``).
 
     ``μ = Σ_A Z_A (R_A − origin) − Tr(P · r)`` from the converged density. For a
     neutral molecule the result is independent of ``origin``."""
     (gc, gw), g = _grid(mol, grid)
-    P, _, basis = _solve_field(mol, xc, gc, gw, chunk=g.chunk, origin=origin, **scf_kw)
+    P, _, basis = _solve_field(mol, xc, gc, gw, chunk=g.chunk, origin=origin,
+                               coulomb=coulomb, **scf_kw)
     D = dipole_matrices(basis, origin)
     mu = nuclear_dipole(mol, origin) - jnp.einsum("ipq,pq->i", D, P)
     return mu * AU_TO_DEBYE if debye else mu
@@ -124,7 +127,8 @@ def dipole(
 def polarizability(
     mol, xc: XCFunctional, *,
     method: str = "fd", field: float = 2e-3, origin=(0.0, 0.0, 0.0),
-    grid: Becke | None = None, **scf_kw,
+    grid: Becke | None = None, coulomb: ExactSpec | DFSpec | None = None,
+    **scf_kw,
 ) -> Float[Array, "3 3"]:
     """Static dipole polarizability tensor ``α_ij = ∂μ_i/∂E_j`` (atomic units).
 
@@ -134,7 +138,7 @@ def polarizability(
     point (:func:`~dftax.ks.implicit.implicit_density`), a single ``jax.jacobian``
     through the converged density, no field stepping. Returned symmetrized."""
     (gc, gw), g = _grid(mol, grid)
-    ks0 = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk))
+    ks0 = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
     D = dipole_matrices(ks0.basis, origin)
     nuc = nuclear_dipole(mol, origin)
 
@@ -151,7 +155,7 @@ def polarizability(
 
     def mu_at(f):
         P, _, _ = _solve_field(mol, xc, gc, gw, chunk=g.chunk, field=f,
-                               origin=origin, **scf_kw)
+                               origin=origin, coulomb=coulomb, **scf_kw)
         return nuc - jnp.einsum("ipq,pq->i", D, P)
 
     cols = []
@@ -185,20 +189,20 @@ def _displaced(mol, coords) -> Molecule:
     )
 
 
-def _eval_at(mol, xc, coords, origin, g, scf_kw):
+def _eval_at(mol, xc, coords, origin, g, scf_kw, coulomb=None):
     """Analytic forces ``(n_atom,3)`` and dipole ``(3,)`` at a geometry."""
     m = _displaced(mol, coords)
     gc, gw = becke_grid(m.symbols, m.atom_coords(), g.n_radial, g.lebedev)
-    ks = KS(m, xc, grid=points(gc, gw, chunk=g.chunk))
+    ks = KS(m, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
     res = scf(ks, **scf_kw)
-    F = forces(m, xc, res, grid=g)
+    F = forces(m, xc, res, grid=g, coulomb=coulomb)
     mu = nuclear_dipole(m, origin) - jnp.einsum(
         "ipq,pq->i", dipole_matrices(ks.basis, origin), jnp.sum(res.P, axis=0)
     )
     return np.asarray(F), np.asarray(mu)
 
 
-def _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw):
+def _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw, coulomb=None):
     """Hessian ``H = -dF/dR`` ``(3N,3N)`` and dipole derivatives ``dμ/dR`` ``(3,3N)``
     by central finite difference of the analytic forces / dipole."""
     coords0 = np.asarray(mol.atom_coords())
@@ -211,8 +215,8 @@ def _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw):
             c = 3 * a + k
             cp = coords0.copy(); cp[a, k] += step
             cm = coords0.copy(); cm[a, k] -= step
-            Fp, mup = _eval_at(mol, xc, cp, origin, g, scf_kw)
-            Fm, mum = _eval_at(mol, xc, cm, origin, g, scf_kw)
+            Fp, mup = _eval_at(mol, xc, cp, origin, g, scf_kw, coulomb=coulomb)
+            Fm, mum = _eval_at(mol, xc, cm, origin, g, scf_kw, coulomb=coulomb)
             H[:, c] = (-(Fp - Fm) / (2.0 * step)).reshape(-1)
             dmu[:, c] = (mup - mum) / (2.0 * step)
     return 0.5 * (H + H.T), dmu
@@ -258,18 +262,22 @@ def _harmonic(H, mol):
 
 
 def hessian(mol, xc, *, step: float = 1e-3, origin=(0.0, 0.0, 0.0),
-            grid: Becke | None = None, **scf_kw) -> Float[Array, "n n"]:
+            grid: Becke | None = None,
+            coulomb: ExactSpec | DFSpec | None = None,
+            **scf_kw) -> Float[Array, "n n"]:
     """Nuclear Hessian ``∂²E/∂R_A∂R_B`` (Ha/Bohr², shape ``(3N, 3N)``) by central
     finite difference of the analytic Pulay-free forces."""
     g = _becke_spec(grid)   # spec only: the FD legs build their own per-geometry grids
-    H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw)
+    H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw, coulomb=coulomb)
     return jnp.asarray(H)
 
 
 def vibrations(mol, xc, *, hess=None, step: float = 1e-3,
-               grid: Becke | None = None, **scf_kw) -> Vibrations:
+               grid: Becke | None = None,
+               coulomb: ExactSpec | DFSpec | None = None,
+               **scf_kw) -> Vibrations:
     """Harmonic vibrational analysis (see :class:`Vibrations`)."""
-    H = np.asarray(hessian(mol, xc, step=step, grid=grid, **scf_kw)) \
+    H = np.asarray(hessian(mol, xc, step=step, grid=grid, coulomb=coulomb, **scf_kw)) \
         if hess is None else np.asarray(hess)
     freq, V, m3 = _harmonic(H, mol)
     cart = V / np.sqrt(m3)[:, None]
@@ -279,10 +287,12 @@ def vibrations(mol, xc, *, hess=None, step: float = 1e-3,
 
 
 def ir_spectrum(mol, xc, *, step: float = 1e-3, origin=(0.0, 0.0, 0.0),
-                grid: Becke | None = None, **scf_kw) -> IRSpectrum:
+                grid: Becke | None = None,
+                coulomb: ExactSpec | DFSpec | None = None,
+                **scf_kw) -> IRSpectrum:
     """Harmonic IR spectrum from ``A_k ∝ |dμ/dQ_k|²`` (see :class:`IRSpectrum`)."""
     g = _becke_spec(grid)   # spec only: the FD legs build their own per-geometry grids
-    H, dmu = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw)
+    H, dmu = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw, coulomb=coulomb)
     freq, V, m3 = _harmonic(H, mol)
     dmu_dQ = dmu @ (V / np.sqrt(m3)[:, None])            # (3, n_modes)
     intens = IR_AU_TO_KM_MOL * np.sum(dmu_dQ ** 2, axis=0)
@@ -291,6 +301,7 @@ def ir_spectrum(mol, xc, *, step: float = 1e-3, origin=(0.0, 0.0, 0.0),
 
 def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
                    origin=(0.0, 0.0, 0.0), grid: Becke | None = None,
+                   coulomb: ExactSpec | DFSpec | None = None,
                    **scf_kw) -> RamanSpectrum:
     """Harmonic Raman activities (Å⁴/amu, up to the usual constant) from the
     polarizability derivatives ``dα/dQ``. Expensive: a polarizability (field FD)
@@ -298,7 +309,7 @@ def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
     coords0 = np.asarray(mol.atom_coords())
     N = len(coords0); n = 3 * N
     g = _becke_spec(grid)   # spec only: the FD legs build their own per-geometry grids
-    H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw)
+    H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw, coulomb=coulomb)
     freq, V, m3 = _harmonic(H, mol)
 
     dalpha = np.zeros((n, 3, 3))
@@ -308,10 +319,10 @@ def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
             cm = coords0.copy(); cm[a, k] -= step
             ap = np.asarray(polarizability(
                 _displaced(mol, cp), xc, field=field, origin=origin,
-                grid=g, **scf_kw))
+                grid=g, coulomb=coulomb, **scf_kw))
             am = np.asarray(polarizability(
                 _displaced(mol, cm), xc, field=field, origin=origin,
-                grid=g, **scf_kw))
+                grid=g, coulomb=coulomb, **scf_kw))
             dalpha[3 * a + k] = (ap - am) / (2.0 * step)
 
     L = V / np.sqrt(m3)[:, None]                          # (n, n_modes)
@@ -329,16 +340,23 @@ def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
 
 def alchemical_deriv(
     mol, xc: XCFunctional, *,
-    grid: Becke | None = None, **scf_kw,
+    grid: Becke | None = None, coulomb: ExactSpec | DFSpec | None = None,
+    **scf_kw,
 ) -> Float[Array, "n_atom"]:
     """Alchemical gradient ``∂E/∂Z_A`` at fixed electron count (Ha per unit charge).
 
     Hellmann-Feynman: the converged density (every spin channel, held fixed via
     its solve-based projector) and the energy is differentiated w.r.t. the
     nuclear charges, which enter only the nuclear-attraction and
-    nuclear-repulsion terms."""
+    nuclear-repulsion terms.
+
+    ``coulomb=None`` resolves to :func:`~dftax.ks.terms.exact` here (not the DF
+    default): the charge closure rebuilds through a raw :class:`System`, which
+    has no element symbols to resolve an auxiliary basis, and both legs of the
+    Hellmann-Feynman derivative must use the same Coulomb backend."""
     (gc, gw), g = _grid(mol, grid)
-    ks = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk))
+    coulomb = exact() if coulomb is None else coulomb
+    ks = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
     res = scf(ks, **scf_kw)
     # Per-channel occupied coefficients spanning the converged density
     # (closed shell: one doubly-occupied channel, w=2; polarized: unit w);
@@ -358,7 +376,7 @@ def alchemical_deriv(
     def energy(charges):
         k = KS(System(basis=basis, coords=coords, charges=charges,
                       nelec=mol.nelectron, spin=spin), xc,
-               grid=points(gc, gw, chunk=g.chunk))
+               grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
         P = jnp.stack(
             [w * (Z @ jnp.linalg.solve(Z.T @ k.S @ Z, Z.T)) for Z in Zs]
         )

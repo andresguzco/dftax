@@ -15,7 +15,13 @@ to [Semantic Versioning](https://semver.org/).
   a `chunk="auto"` memory policy (materialize the nao²×naux tensor within a
   ~2 GiB budget, stream RI-J/RI-K past it); `forces` and `scf_batched` follow
   the same default (`scf_batched` gained `coulomb=`, with the auxiliary basis
-  re-centered per geometry).
+  re-centered per geometry). The property layer (`dipole`, `polarizability`,
+  `hessian`, `vibrations`, `ir_spectrum`, `raman_spectrum`) threads the same
+  `coulomb=` choice through every internal solve. `alchemical_deriv` is the
+  one deliberate exception: its `coulomb=None` resolves to `exact()`, because
+  the charge closure rebuilds through a raw `System` (no element symbols, so
+  no auxiliary basis) and both legs of the Hellmann-Feynman derivative must
+  share one backend.
 
 ### Added (methods)
 - **Range-separated hybrids: CAM-B3LYP and ωB97X.** The 2-/3-/4-center

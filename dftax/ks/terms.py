@@ -140,6 +140,19 @@ def _metric_pinv(V: Float[Array, "naux naux"]) -> Float[Array, "naux naux"]:
     """Symmetric pseudo-inverse of the RI Coulomb metric, dropping directions below a
     1e-7 relative eigenvalue cutoff (see the caller in ``_build_integrals``).
 
+    The hard cutoff is deliberate; smooth spectral filters were measured and
+    rejected. Comparisons of density-fitted forces across independently
+    converged solves differ at ~2e-6 Ha/Bohr (GPU vs CPU, batched vs serial);
+    that is d_tol-level density difference amplified through the
+    ill-conditioned auxiliary directions, not filter noise: at a matched
+    density the paths agree to 5e-15. Tikhonov filters w/(w² + σ²) trade
+    strictly worse: σ = 1e-7·w_max damps the fit-relevant band of a redundant
+    h/i auxiliary metric (Fe/jkfit RI error 1.7 -> 16 mHa), σ = 1e-9·w_max
+    lets the Schwarz-screening perturbation through (screened-vs-dense RI-J
+    1.5e-8 Ha), and the σ = 1e-8·w_max middle ground degrades cross-backend
+    force reproducibility 126x (3.3e-6 -> 4.2e-4) by re-admitting near-null
+    modes whose eigenvectors rotate under backend rounding.
+
     Wrapped in a ``custom_jvp`` so its derivative uses the matrix identity
     ``d(V⁺) = -V⁺ (dV) V⁺`` rather than differentiating the eigendecomposition. eigh's
     backward carries ``1/(wᵢ-wⱼ)`` terms that are ill-defined at the *degenerate* metric

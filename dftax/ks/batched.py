@@ -43,6 +43,7 @@ from dftax.ks.guess import _SPECS, CoreSpec, _initial_density, _resolve_guess
 from dftax.ks.shard import MeshSpec, _resolve_mesh
 from dftax.ks.scf import _scf_solve
 from dftax.ks.terms import DFSpec, ExactSpec, df
+from dftax.utils.vmap import vmap as _chunked_vmap
 
 
 def _lowdin(S, eps: float = 1e-9):
@@ -234,7 +235,16 @@ def scf_batched(
             out.update(P=P, C=C, eps=eps)
         return out
 
-    vmapped = jax.vmap(single)
+    if forces and aux_t is not None:
+        # The eri3c-rebuild VJP inside the force gradient materializes a
+        # per-geometry Hermite table of O(GiB); under a plain vmap those
+        # tables coexist batch-wide (31.6 GiB at batch=16 water/sto-3g on
+        # A100). lax.map one geometry at a time bounds the peak at the
+        # serial-forces footprint; the SCF solves it serializes are a small
+        # fraction of the force-gradient cost.
+        vmapped = _chunked_vmap(single, chunk_size=1)
+    else:
+        vmapped = jax.vmap(single)
     devices = _resolve_mesh(mesh)
     if devices is None:
         out = vmapped(coords_batch)

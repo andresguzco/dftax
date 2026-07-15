@@ -59,6 +59,21 @@ to [Semantic Versioning](https://semver.org/).
   the full def2-universal-jkfit set (previously capped at g, which made DF
   unusable past Ca). Validated against PySCF `int2c2e`/`int3c2e` at 1e-10.
 
+### Fixed
+- **Batched density-fitted forces no longer OOM.** ``scf_batched(...,
+  forces=True)`` with a DF backend evaluates geometries through a chunked
+  ``lax.map`` instead of one ``vmap``: the eri3c-rebuild VJP materializes a
+  per-geometry Hermite table of O(GiB), and the vmapped build held every
+  table at once (31.6 GiB at batch=16 water/sto-3g). Peak memory is now
+  bounded near the serial-forces footprint; exact-Coulomb and energies-only
+  batches keep the fully vectorized path. The batched force path is exact:
+  at a matched density it agrees with the serial ``forces`` to 5e-15.
+  Note that density-fitted *forces* amplify density error through the
+  ill-conditioned auxiliary directions of the RI metric: two independently
+  converged solves (``d_tol=1e-6``) can disagree by ~1e-5 Ha/Bohr in their
+  DF forces while agreeing to ~1e-9 with exact Coulomb. Compare DF forces at
+  a matched density (``return_orbitals=True``) or at tight ``d_tol``.
+
 ### Changed (numerically visible, grids)
 - **The native Becke grid is pruned by default.** `becke()` now applies the
   standard NWChem angular pruning (per radial region of `r/R_bragg`, ported

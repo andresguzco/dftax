@@ -7,6 +7,40 @@ PYTHONPATH=$PWD uv run --extra test python scripts/gpu/validate_gpu.py          
 PYTHONPATH=$PWD uv run --extra test python scripts/gpu/validate_gpu.py --probe    # + probes
 ```
 
+## Update 2026-07-15 (df-chemistry: DF by default, RSH, r2SCAN, D3)
+
+4x A100-SXM4-80GB (Mila), JAX/jaxlib 0.10.2 CUDA 12, float64. The gate now
+pins `coulomb=exact()` at every site (DF became the KS default and the PySCF
+oracle uses exact ERIs). **GATE PASS**, and the branch's full-precision PBE mu
+brings the PBE/PBE0 oracle agreement from ~1e-5 (below) to ~2e-11:
+
+| system | xc | E_gpu (Ha) | \|dE\| gpu-cpu | \|dE\| gpu-pyscf | conv |
+|---|---|---:|---:|---:|:--:|
+| water (RKS) | LDA  | -74.6525480882 | 8.5e-14 | 2.2e-11 | ok |
+| water (RKS) | PBE  | -75.1467524766 | 2.8e-14 | 2.2e-11 | ok |
+| water (RKS) | PBE0 | -75.1666510951 | 5.7e-14 | 1.6e-11 | ok |
+| CH3 (UKS)   | LDA  | -38.9246835773 | 7.8e-14 | 2.8e-11 | ok |
+| CH3 (UKS)   | PBE  | -39.2745962966 | 5.7e-14 | 2.8e-11 | ok |
+| CH3 (UKS)   | PBE0 | -39.2919046330 | 7.1e-15 | 2.0e-11 | ok |
+
+New-surface checks (GPU==CPU device consistency unless noted; suite oracles
+anchor correctness):
+
+- Default DF resolution: ethanol/def2-SVP resolves to `DFCoulomb`
+  (`chunk="auto"` picks materialized, correctly per budget), E_tot
+  -154.7208093549, converged; water/def2-SVP GPU==CPU 1.8e-9.
+- RSH SCF: CAM-B3LYP 2.2e-9, wB97X 1.8e-9; both converged (10 / 8 iters).
+- r2SCAN: RKS water 1.3e-9, UKS CH3 5.5e-10; streamed==materialized XC
+  6.6e-11 / 4.0e-10.
+- D3(BJ): E_disp = -3.583e-4 Ha (water, PBE); the D3 force component is
+  backend-exact (4e-16); the dispersion gradient is carried through autodiff.
+- DF budgets on this hardware: `_DF_BUDGET`/`_DF_CHUNK_BUDGET` (2.0 / 0.125
+  GiB f64) are 2.9% / 0.18% of the 68 GiB XLA pool; a device-aware policy is
+  an open follow-up.
+- Full suite on this node: 336 tests green (three single-GPU shards plus the
+  4-GPU `test_sharded`). DF force comparisons across independently converged
+  solves need matched densities or tight `d_tol` (see `_metric_pinv`).
+
 ## Environment
 
 | | |

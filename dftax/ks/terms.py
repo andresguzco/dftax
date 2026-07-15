@@ -606,7 +606,7 @@ class ShardedDFCoulomb(CoulombTerm):
 
     def energy(self, P, S, nocc):
         import numpy as np
-        from jax.experimental.shard_map import shard_map
+        from jax import shard_map
 
         jmesh = jax.sharding.Mesh(np.asarray(self.devices), ("aux",))
         spec = jax.sharding.PartitionSpec
@@ -643,13 +643,13 @@ class ShardedDFCoulomb(CoulombTerm):
                 return e - 0.25 * ax * tr_pkp(Pst[0])
             return e - 0.5 * ax * (tr_pkp(Pst[0]) + tr_pkp(Pst[1]))
 
-        # check_rep=False: the static replication checker cannot prove the
+        # check_vma=False: the static replication checker cannot prove the
         # post-all_gather value is replicated (it is; every device computes
         # the identical quadratic form after the gather).
         return shard_map(
             part, mesh=jmesh,
             in_specs=(spec(None, None, "aux"), spec(), spec(), spec()),
-            out_specs=spec(), check_rep=False,
+            out_specs=spec(), check_vma=False,
         )(self.int3c, self.int2c_inv, Lf, P)
 
 
@@ -811,7 +811,7 @@ class ShardedGridXC(XCTerm):
 
     def energy(self, P):
         import numpy as np
-        from jax.experimental.shard_map import shard_map
+        from jax import shard_map
 
         jmesh = jax.sharding.Mesh(np.asarray(self.devices), ("grid",))
         spec = jax.sharding.PartitionSpec

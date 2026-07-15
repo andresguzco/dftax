@@ -74,6 +74,11 @@ to [Semantic Versioning](https://semver.org/).
   DF forces while agreeing to ~1e-9 with exact Coulomb. Compare DF forces at
   a matched density (``return_orbitals=True``) or at tight ``d_tol``.
 
+### Internal
+- ``shard_map`` is imported from the stable ``jax.shard_map`` API
+  (``jax.experimental.shard_map`` is deprecated in JAX 0.8); the
+  ``check_rep=False`` call sites follow the rename to ``check_vma=False``.
+
 ### Changed (numerically visible, grids)
 - **The native Becke grid is pruned by default.** `becke()` now applies the
   standard NWChem angular pruning (per radial region of `r/R_bragg`, ported

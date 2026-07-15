@@ -253,7 +253,7 @@ def scf_batched(
         # each device its slice, and let per-device while_loops converge
         # independently (no cross-device sync per iteration).
         import numpy as np
-        from jax.experimental.shard_map import shard_map
+        from jax import shard_map
 
         n_pad = (-B) % len(devices)
         cb = coords_batch
@@ -261,13 +261,13 @@ def scf_batched(
             cb = jnp.concatenate([cb, jnp.tile(cb[-1:], (n_pad, 1, 1))])
         jmesh = jax.sharding.Mesh(np.asarray(devices), ("batch",))
         bspec = jax.sharding.PartitionSpec("batch")
-        # check_rep=False: pure data parallelism (no collectives); the
+        # check_vma=False: pure data parallelism (no collectives); the
         # varying-axis analysis balks at scan carries whose init is mesh-
         # invariant (constants) while the loop makes them per-shard values.
         out = shard_map(
             vmapped, mesh=jmesh, in_specs=(bspec,),
             out_specs=jax.tree.map(lambda _: bspec, jax.eval_shape(vmapped, cb)),
-            check_rep=False,
+            check_vma=False,
         )(cb)
         out = jax.tree.map(lambda o: o[:B], out)
 

@@ -17,7 +17,7 @@ from dftax.energy.xc import PBE
 from dftax.system.molecule import Molecule
 from dftax.basis.loader import build_basis_data
 from dftax.grid import becke_grid
-from dftax import KS, System, becke, scf, forces
+from dftax import KS, System, becke, exact, scf, forces
 from dftax.ks.implicit import implicit_density, _proj_from_fock
 from dftax.ks.properties import polarizability
 
@@ -66,9 +66,12 @@ class TestImplicit:
 
         F_impl = -jax.grad(energy)(coords0)
         gc, gw = becke_grid(mol.symbols, mol.atom_coords(), NR, LEB)
-        ks0 = KS(mol, PBE(), grid=(gc, gw))
+        # coulomb=exact() on both sides: the implicit path goes through a raw
+        # System (no symbols, exact fallback), so the analytic reference must
+        # not pick up the DF default.
+        ks0 = KS(mol, PBE(), grid=(gc, gw), coulomb=exact())
         C = scf(ks0, e_tol=1e-10, d_tol=1e-9).mo_coeff[0][:, :nocc]
-        F_ana = forces(mol, PBE(), (C,), grid=becke(NR, LEB))
+        F_ana = forces(mol, PBE(), (C,), grid=becke(NR, LEB), coulomb=exact())
         assert float(jnp.max(jnp.abs(F_impl - F_ana))) < 1e-6
 
     def test_analytic_polarizability_matches_fd(self):

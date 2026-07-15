@@ -51,7 +51,11 @@ def test_screened_scf_matches_unscreened(water_mol):
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
 
-    e_unscr = float(scf(KS(water_mol, LDA(), grid=(grid[0], grid[1]))).e_tot)
+    # coulomb=exact(): the screened side is exact, and the default is now DF;
+    # an unpinned build would compare DF vs exact (RI error, not screening).
+    e_unscr = float(
+        scf(KS(water_mol, LDA(), grid=(grid[0], grid[1]), coulomb=exact())).e_tot
+    )
     res = scf(
         KS(water_mol, LDA(), grid=(grid[0], grid[1]), coulomb=exact(screen=1e-10))
     )

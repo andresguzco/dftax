@@ -59,7 +59,10 @@ def test_builder_scf_energy_matches_across_grid_spellings():
     gc, gw = becke_grid(mol.symbols, mol.atom_coords(), 35, 50)
     e_expl, conv_expl = _solve(KS(mol, LDA(), grid=(gc, gw)))
     assert conv_spec and conv_expl
-    assert e_spec == pytest.approx(e_expl, abs=1e-10)
+    # 5e-9: the two spellings hand XLA distinct (bitwise-identical) buffers,
+    # and GPU reductions are not bit-reproducible across programs; the SCF
+    # amplifies that to a few 1e-10.
+    assert e_spec == pytest.approx(e_expl, abs=5e-9)
 
 
 @pytest.mark.float64

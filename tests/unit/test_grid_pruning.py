@@ -172,7 +172,9 @@ def test_auto_chunk_selects_backend(monkeypatch):
     assert isinstance(ks_s.xc_term, StreamedGridXC)
     e_s = scf(ks_s).e_tot
     monkeypatch.undo()
-    assert abs(e_s - scf(KS(mol, PBE())).e_tot) < 1e-10
+    # 5e-9: streamed and materialized XC accumulate in different orders, and
+    # GPU reductions are not bit-reproducible; the paths agree to SCF noise.
+    assert abs(e_s - scf(KS(mol, PBE())).e_tot) < 5e-9
 
 
 # ---------------------------------------------------------------------------

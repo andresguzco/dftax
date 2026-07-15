@@ -13,7 +13,7 @@ import pytest
 from pyscf import dft
 
 from dftax.energy.xc import LDA, PBE, PBE0, B3LYP
-from dftax import KS, scf
+from dftax import KS, scf, exact
 from dftax.ks.scf import canonical_orthonormalizer
 
 # Functional under test paired with the matching PySCF xc string.
@@ -42,14 +42,14 @@ class TestRKSEnergyMatchesPyscf:
     def test_water(self, water_mol, key):
         xc_obj, pyscf_xc = FUNCTIONALS[key]
         e_ref, grid = _pyscf_ref(water_mol, pyscf_xc)
-        res = scf(KS(water_mol, xc_obj, grid=grid))
+        res = scf(KS(water_mol, xc_obj, grid=grid, coulomb=exact()))
         assert res.converged
         assert abs(res.e_tot - e_ref) < 5e-5, f"{key}: {res.e_tot} vs {e_ref}"
 
     def test_h2_pbe(self, h2_mol):
         xc_obj, pyscf_xc = FUNCTIONALS["pbe"]
         e_ref, grid = _pyscf_ref(h2_mol, pyscf_xc)
-        res = scf(KS(h2_mol, xc_obj, grid=grid))
+        res = scf(KS(h2_mol, xc_obj, grid=grid, coulomb=exact()))
         assert res.converged
         assert abs(res.e_tot - e_ref) < 5e-5
 

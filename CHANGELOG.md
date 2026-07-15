@@ -7,6 +7,53 @@ to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed (numerically visible)
+- **Density fitting is the default Coulomb backend.** `KS(mol, xc)` now uses
+  `df()` (`def2-universal-jkfit`, robust Dunlap fit) instead of the exact
+  O(N⁴) ERI tensor; energies shift by the RI error (~1e-4 Ha for small
+  systems, sub-mHa relative). `coulomb=exact()` recovers the old behavior; a
+  raw `System` (no element symbols) still falls back to exact. `df()` gained
+  a `chunk="auto"` memory policy (materialize the nao²×naux tensor within a
+  ~2 GiB budget, stream RI-J/RI-K past it); `forces` and `scf_batched` follow
+  the same default (`scf_batched` gained `coulomb=`, with the auxiliary basis
+  re-centered per geometry).
+
+### Added (methods)
+- **Range-separated hybrids: CAM-B3LYP and ωB97X.** The 2-/3-/4-center
+  Coulomb engines accept an ``omega`` for the long-range ``erf(ω·r₁₂)/r₁₂``
+  kernel (one attenuation change point in the shared Hermite/Boys ladder,
+  validated against PySCF ``with_range_coulomb`` at 1e-12); functionals
+  declare ``(hf_coeff, hf_coeff_lr, omega)`` and the exact/DF backends build
+  the split ``K = hf_coeff·K + hf_coeff_lr·K_lr``. The new functional pieces
+  (ITYH short-range B88, PW92, the wB97X B97 power series over SR-LDA with
+  Stoll-partitioned correlation) match libxc pointwise to machine precision;
+  water SCF agrees with PySCF to 1e-9 (CAM-B3LYP) / 2e-11 (ωB97X). Streamed
+  and mesh-sharded backends reject RSH functionals with a clear error.
+
+- **meta-GGA support and r2SCAN.** The XC layer carries the kinetic-energy
+  density τ (materialized, streamed, and spin-polarized grid paths;
+  ``xc(rho, grad_rho, tau)`` call convention), and ``R2SCAN`` is ported from
+  the libxc maple sources with every branch validated pointwise to machine
+  precision; water RKS matches PySCF to 2e-12, UKS to 4e-9. The Fock, forces
+  and properties need no new code (autodiff of the energy).
+
+- **JAX-native D3(BJ) dispersion.** ``KS(mol, xc, dispersion=d3bj())`` adds
+  the two-body Grimme D3 correction with Becke-Johnson damping (parameters
+  resolved from the functional name; pbe/pbe0/b3lyp/cam-b3lyp/r2scan
+  vendored). Pure JAX and smooth, so forces and Hessians carry the
+  dispersion gradient by autodiff; ``forces`` and ``scf_batched`` take the
+  same ``dispersion=``. Energies match the tad-dftd3 reference to ~1e-16;
+  tables vendored via ``scripts/gen_d3_data.py`` (Apache-2.0 source, torch
+  used only at generation time). The three-body ATM term is not included
+  (matching common D3(BJ) defaults).
+
+### Added (engine)
+- **Auxiliary bases up to i functions (l=6).** The 2- and 3-center Coulomb
+  engines size their recursions to the basis and accept h/i auxiliaries, so
+  density fitting now works for transition metals and heavy main group with
+  the full def2-universal-jkfit set (previously capped at g, which made DF
+  unusable past Ca). Validated against PySCF `int2c2e`/`int3c2e` at 1e-10.
+
+### Changed (numerically visible, grids)
 - **The native Becke grid is pruned by default.** `becke()` now applies the
   standard NWChem angular pruning (per radial region of `r/R_bragg`, ported
   one-to-one from PySCF), drops radial shells beyond `r_max=45` Bohr (the

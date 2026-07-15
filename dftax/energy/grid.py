@@ -13,12 +13,14 @@ def xc_energy(
     weights: Float[Array, "n"],          # type: ignore
     chunk_size: int | None = None,
     grad_rho: Float[Array, "n 3"] | None = None,  # type: ignore
+    tau: Float[Array, "n"] | None = None,         # type: ignore
     rho_thresh: float = 1e-10,
 ) -> Scalar:
-    """Exchange-correlation energy ``∫ ε_xc(ρ, ∇ρ) ρ dr`` on a quadrature grid.
+    """Exchange-correlation energy ``∫ ε_xc(ρ, ∇ρ, τ) ρ dr`` on a quadrature grid.
 
-    ``rho``/``grad_rho`` are the density (and, for GGA, its gradient) sampled at
-    the grid points; ``weights`` are the quadrature weights.
+    ``rho``/``grad_rho``/``tau`` are the density (and, for GGA+, its gradient;
+    for meta-GGA, the kinetic-energy density) sampled at the grid points;
+    ``weights`` are the quadrature weights.
 
     Grid points with ``ρ < rho_thresh`` are masked out with a nan-safe
     double-``where``: the functional is evaluated on a clamped density and the
@@ -28,7 +30,12 @@ def xc_energy(
     """
     mask = rho > rho_thresh
     safe_rho = jnp.where(mask, rho, 1.0)
-    if xc.xc_type == "GGA" and grad_rho is not None:
+    if xc.xc_type == "MGGA":
+        safe_grad = jnp.where(mask[:, None], grad_rho, 0.0)
+        safe_tau = jnp.where(mask, tau, 1.0)
+        eps = xc_potential(xc, safe_rho, chunk_size, grad_rho=safe_grad,
+                           tau=safe_tau)
+    elif xc.xc_type == "GGA" and grad_rho is not None:
         safe_grad = jnp.where(mask[:, None], grad_rho, 0.0)
         eps = xc_potential(xc, safe_rho, chunk_size, grad_rho=safe_grad)
     else:

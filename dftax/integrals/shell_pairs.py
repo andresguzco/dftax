@@ -17,11 +17,11 @@ from dftax.energy.gto import BasisData, _CART_COMPONENTS
 # Precomputed Cartesian components as JAX arrays, keyed by total angular momentum
 CART_COMPONENTS_ARRAYS = {
     l: jnp.array(_CART_COMPONENTS[l], dtype=jnp.int32)  # (n_comp, 3)
-    for l in range(5)  # l = 0..4
+    for l in range(7)  # l = 0..6 (h/i appear only in auxiliary DF bases)
 }
 
 # Number of Cartesian components per angular momentum
-N_CART = {l: len(_CART_COMPONENTS[l]) for l in range(5)}
+N_CART = {l: len(_CART_COMPONENTS[l]) for l in range(7)}
 
 
 class ShellData(eqx.Module):

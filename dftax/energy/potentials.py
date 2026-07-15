@@ -23,13 +23,23 @@ def xc_potential(
     rho: Float[Array, "n"],              # type: ignore
     chunk_size: int | None = None,
     grad_rho: Float[Array, "n 3"] | None = None,  # type: ignore
+    tau: Float[Array, "n"] | None = None,         # type: ignore
 ) -> Float[Array, "n"]:                  # type: ignore
-    """Per-electron XC energy density ``ε_xc`` evaluated pointwise on a grid."""
+    """Per-electron XC energy density ``ε_xc`` evaluated pointwise on a grid.
+
+    ``tau`` is the kinetic-energy density (meta-GGA functionals only).
+    """
     if xc.xc_type == "LDA":
         return vmap(xc)(rho)
     elif xc.xc_type == "GGA":
         if grad_rho is None:
             raise ValueError("GGA requires grad_rho")
         return vmap(xc, in_axes=(0, 0), chunk_size=chunk_size)(rho, grad_rho)
+    elif xc.xc_type == "MGGA":
+        if grad_rho is None or tau is None:
+            raise ValueError("MGGA requires grad_rho and tau")
+        return vmap(xc, in_axes=(0, 0, 0), chunk_size=chunk_size)(
+            rho, grad_rho, tau
+        )
     else:
         raise NotImplementedError(f"XC type {xc.xc_type} not implemented.")

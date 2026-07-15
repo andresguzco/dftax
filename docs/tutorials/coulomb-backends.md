@@ -5,36 +5,40 @@ offers a ladder of backends with the same energy but different memory/compute
 trade-offs. Each backend is a value passed to the builder as `coulomb=`; invalid
 combinations raise at the factory.
 
-## Exact 4-center ERIs (default)
+## Density fitting (RI, the default)
 
 ```python
-from dftax import KS, Molecule, exact, scf
+from dftax import KS, Molecule, df, scf
 from dftax.energy.xc import PBE
 
 water = Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043", "sto-3g")
-scf(KS(water, PBE()))                          # builds the (nao⁴) ERI tensor
-scf(KS(water, PBE(), coulomb=exact()))         # the same, spelled explicitly
+scf(KS(water, PBE()))                          # same as coulomb=df()
+scf(KS(water, PBE(), coulomb=df()))            # def2-universal-jkfit, chunk="auto"
+```
+
+Resolution-of-identity reduces the 4-center integral to 2- and 3-center pieces against an
+auxiliary basis (functions up to i, so transition metals work): O(N³) compute,
+O(N²·N_aux) memory for the materialized 3-center tensor, and the `chunk="auto"` policy
+switches to the streamed contraction when that tensor would exceed the memory budget.
+The RI error against the exact path is sub-mHa with the JK-fitting set.
+
+## Exact 4-center ERIs
+
+```python
+from dftax import exact
+
+scf(KS(water, PBE(), coulomb=exact()))         # builds the (nao⁴) ERI tensor
 ```
 
 Exact `(μν|λσ)` via McMurchie-Davidson, using the 8-fold permutational symmetry. O(N⁴)
-memory, best for small systems and as the validation reference. Two variants trade
-compute for memory:
+memory: small systems and reference comparisons (it is also the fallback when building
+from a raw `System`, which has no element symbols to resolve an auxiliary basis name).
+Two variants trade compute for memory:
 
 ```python
 exact(screen=1e-10)   # Cauchy-Schwarz-screened materialized ERI tensor
 exact(stream=True)    # J/K contracted on the fly, O(N²) memory, no ERI tensor
 ```
-
-## Density fitting (RI)
-
-```python
-from dftax import df
-
-scf(KS(water, PBE(), coulomb=df("def2-universal-jkfit")))   # RI-J / RI-K
-```
-
-Resolution-of-identity reduces the 4-center integral to 2- and 3-center pieces against an
-auxiliary basis: O(N³) compute, O(N²·N_aux) memory for the materialized 3-center tensor.
 
 ## Streaming + screening (large systems)
 
@@ -68,10 +72,10 @@ path is compile- and memory-bounded by scanning the bra primitive pair in the ER
 
 | System size | Backend |
 |---|---|
-| small / validation | `exact()` (default) |
+| anything, by default | `df()` (auto materialize/stream) |
+| small / validation | `exact()` |
 | small, memory-tight | `exact(stream=True)` or `exact(screen=1e-10)` |
-| medium | `df("def2-universal-jkfit")` |
-| large | `df("def2-universal-jkfit", chunk=64, screen=1e-10)` + `becke(chunk=20_000)` |
+| large, hand-tuned | `df(chunk=64, screen=1e-10)` + `becke(chunk=20_000)` |
 
 ## Multi-GPU: `mesh=`
 

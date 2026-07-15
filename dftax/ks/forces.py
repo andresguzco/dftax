@@ -89,6 +89,7 @@ def forces(
     *,
     grid: Becke | None = None,
     coulomb: ExactSpec | DFSpec | None = None,
+    dispersion=None,
 ) -> Float[Array, "n_atom 3"]:
     """Nuclear forces ``F = -dE/dR`` (Ha/Bohr), shape ``(n_atom, 3)``.
 
@@ -108,18 +109,28 @@ def forces(
             energy calculation; a ``chunk`` on the spec streams the XC grid
             here too). Explicit point grids cannot follow the nuclei, so only
             Becke specs are accepted.
-        coulomb: :func:`~dftax.ks.terms.exact` (default) or a *materialized*
-            :func:`~dftax.ks.terms.df`; the streamed backends do not propagate
-            geometry gradients (see :func:`dftax.ks.terms._streamed_df_rik`).
+        coulomb: a *materialized* :func:`~dftax.ks.terms.df` (default,
+            matching the KS default backend) or :func:`~dftax.ks.terms.exact`;
+            the streamed DF backends do not propagate geometry gradients (see
+            :func:`dftax.ks.terms._streamed_df_rik`), so ``chunk="auto"``
+            resolves to materialized here regardless of size.
     """
     grid = becke() if grid is None else grid
     if not isinstance(grid, Becke):
         raise ValueError("forces need a geometry-following grid: pass becke(...).")
-    if isinstance(coulomb, DFSpec) and coulomb.chunk is not None:
-        raise ValueError(
-            "forces need the materialized DF backend: df(...) without chunk "
-            "(the streamed RI-K vjp does not propagate geometry gradients)."
-        )
+    if coulomb is None:
+        coulomb = df()                          # match the KS default backend
+    if isinstance(coulomb, DFSpec):
+        if isinstance(coulomb.chunk, int):
+            raise ValueError(
+                "forces need the materialized DF backend: df(...) without an "
+                "explicit chunk (the streamed RI-K vjp does not propagate "
+                "geometry gradients)."
+            )
+        if coulomb.chunk == "auto":
+            coulomb = DFSpec(
+                auxbasis=coulomb.auxbasis, chunk=None, screen=coulomb.screen
+            )
     if isinstance(coulomb, ExactSpec) and (coulomb.stream or coulomb.screen):
         raise ValueError("forces support only the plain materialized exact() backend.")
 
@@ -173,7 +184,7 @@ def forces(
         spec = None
         if aux_t is not None:
             aux_basis = eqx.tree_at(lambda b: b.centers, aux_t, coords[aux_atom_idx])
-            spec = df(aux_basis)                          # materialized DF
+            spec = df(aux_basis, chunk=None)              # materialized DF
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max
         )
@@ -184,6 +195,7 @@ def forces(
             System(basis=basis, coords=coords, charges=charges,
                    nelec=nelec, spin=0 if spin is None else spin),
             xc, grid=points(gc, gw, chunk=xc_chunk), coulomb=spec, spin=spin,
+            dispersion=dispersion,
         )
         P = jnp.stack([w * (Z @ jnp.linalg.solve(Z.T @ ks.S @ Z, Z.T)) for Z in Zs])
         return ks.total(P)

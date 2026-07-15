@@ -248,7 +248,7 @@ def scf(
     )
     result = KSResult(
         e_tot=float(e_tot),
-        e_elec=float(e_tot) - float(ks.e_nn),
+        e_elec=float(e_tot) - float(ks.e_nn) - float(ks.e_disp),
         converged=bool(converged),
         n_iter=int(n_iter),
         nocc=ks.nocc,

@@ -222,3 +222,5 @@ third_party/
 !dftax/grid/data/lebedev.npz
 !dftax/basis/data/
 !dftax/basis/data/cart2sph.npz
+!dftax/energy/data/
+!dftax/energy/data/d3bj.npz

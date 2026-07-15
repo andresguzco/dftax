@@ -16,7 +16,7 @@ from pyscf import dft, gto
 
 from dftax.energy.xc import LDA
 from dftax.system.molecule import Molecule
-from dftax import KS, becke, scf, forces
+from dftax import KS, becke, scf, forces, exact
 from dftax.grid import becke_grid
 
 
@@ -30,7 +30,7 @@ def test_smoke_rks_energy(water_mol):
     mf.verbose = 0
     e_ref = mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    res = scf(KS(water_mol, LDA(), grid=(grid[0], grid[1])))
+    res = scf(KS(water_mol, LDA(), grid=(grid[0], grid[1]), coulomb=exact()))
     assert res.converged
     assert abs(res.e_tot - e_ref) < 5e-5
 
@@ -46,7 +46,7 @@ def test_smoke_uks_energy():
     mf.verbose = 0
     e_ref = mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    res = scf(KS(mol, LDA(), grid=(grid[0], grid[1]), spin=mol.spin))
+    res = scf(KS(mol, LDA(), grid=(grid[0], grid[1]), spin=mol.spin, coulomb=exact()))
     assert res.converged
     assert abs(res.e_tot - e_ref) < 5e-5
 

@@ -13,7 +13,9 @@ import pytest
 from dftax import KS, Molecule, becke, df, exact, points
 from dftax.grid import becke_grid
 from dftax.ks.scf import _scf_solve, canonical_orthonormalizer
-from dftax.ks.terms import DFCoulomb, ExactCoulomb, StreamedGridXC
+from dftax.ks.terms import (
+    DFCoulomb, ExactCoulomb, StreamedDFCoulomb, StreamedGridXC,
+)
 from dftax.energy.xc import LDA, PBE
 
 jax.config.update("jax_enable_x64", True)
@@ -37,9 +39,9 @@ def test_builder_grid_spec_matches_explicit_grid():
     field by field."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     grid = becke(n_radial=35, lebedev=50)
-    ks_spec = KS(mol, LDA(), grid=grid)
+    ks_spec = KS(mol, LDA(), grid=grid, coulomb=exact())
     gc, gw = becke_grid(mol.symbols, mol.atom_coords(), 35, 50)
-    ks_expl = KS(mol, LDA(), grid=(gc, gw))
+    ks_expl = KS(mol, LDA(), grid=(gc, gw), coulomb=exact())
 
     assert ks_spec.nocc == ks_expl.nocc == (5,)
     assert jnp.allclose(ks_spec.S, ks_expl.S)
@@ -130,3 +132,45 @@ def test_molecule_rejects_inconsistent_spin():
                           "sto-3g", spin=1)               # 10 electrons, odd 2S
     with pytest.raises(ValueError, match="too large"):
         Molecule.from_xyz("H 0 0 0; H 0 0 0.74", "sto-3g", spin=4)
+
+
+@pytest.mark.float64
+def test_default_coulomb_is_df():
+    """coulomb=None resolves to density fitting (def2-universal-jkfit)."""
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    ks = KS(mol, LDA(), grid=becke(35, 50))
+    assert isinstance(ks.coulomb, DFCoulomb)
+
+
+@pytest.mark.float64
+def test_df_auto_chunk_switches_to_streamed(monkeypatch):
+    """df(chunk="auto") streams past the memory budget; same energy."""
+    import dftax.ks.energy as energy_mod
+    from dftax.ks.scf import scf
+
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    grid = becke(35, 50)
+    e_mat = scf(KS(mol, LDA(), grid=grid)).e_tot
+    monkeypatch.setattr(energy_mod, "_DF_BUDGET", 16)
+    ks_s = KS(mol, LDA(), grid=grid)
+    assert isinstance(ks_s.coulomb, StreamedDFCoulomb)
+    assert abs(scf(ks_s).e_tot - e_mat) < 1e-9
+
+
+@pytest.mark.float64
+def test_raw_system_defaults_to_exact():
+    """A raw System has no symbols to resolve an aux basis: exact fallback."""
+    from dftax import System
+    from dftax.basis.loader import build_basis_data
+    from dftax.grid import becke_grid
+    import jax.numpy as jnp
+
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    basis = build_basis_data(mol.symbols, mol.atom_coords(), "sto-3g")
+    sys = System(
+        basis=basis, coords=jnp.asarray(mol.atom_coords()),
+        charges=jnp.asarray(mol.atom_charges()), nelec=10,
+    )
+    gc, gw = becke_grid(mol.symbols, mol.atom_coords(), 20, 50)
+    ks = KS(sys, LDA(), grid=(gc, gw))
+    assert isinstance(ks.coulomb, ExactCoulomb)

@@ -19,9 +19,9 @@ The canonical flow::
     from dftax.energy.xc import PBE
 
     mol = Molecule.from_xyz("O 0 0 0; H ...", "sto-3g")
-    ks  = KS(mol, PBE())                        # exact ERI, default Becke grid
+    ks  = KS(mol, PBE())                        # DF Coulomb, pruned Becke grid
     ks  = KS(mol, PBE(), grid=becke(75, 302),   # or: choices as values
-             coulomb=df("def2-universal-jkfit"))
+             coulomb=exact())                   # O(N^4) exact ERIs
     res = scf(ks)                               # DIIS; res.e_tot, res.P, ...
     res = scf(ks, guess=sad())                  # better start, fewer iterations
 
@@ -29,6 +29,7 @@ The most common entry points are re-exported here; import the submodules
 directly for the full surface.
 """
 
+from dftax.energy.d3 import d3bj
 from dftax.energy.gto import BasisData, extract_basis_data, eval_gto
 from dftax.grid import becke, points
 from dftax.integrals import (
@@ -62,6 +63,8 @@ __all__ = [
     "KS", "System", "Molecule", "exact", "df", "becke", "points", "mesh",
     # initial guesses (the guess= argument of the solvers)
     "core", "sad", "minao", "sap",
+    # dispersion (the dispersion= argument of KS)
+    "d3bj",
     # run: solver verbs + result
     "scf", "minimize", "forces", "scf_batched", "KSResult", "BatchedResult",
     # response properties

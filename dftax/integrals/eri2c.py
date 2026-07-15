@@ -39,12 +39,33 @@ from dftax.integrals.eri3c import (
 # Primitive 2-center Coulomb integral
 # ---------------------------------------------------------------------------
 
-def _eri2c_primitive(alpha, A, ang_a, beta, B, ang_b):
+def _eri2c_sizes(aux_basis):
+    """Per-molecule recursion sizes ``(max_l, max_t, max_m)`` for (P|Q).
+
+    The Hermite index per axis reaches ``l_a + l_b <= 2·L_aux`` and the Boys
+    order the total angular momentum. Sized to the basis like
+    :func:`~dftax.integrals.eri3c._eri3c_sizes` (the old module constants
+    covered only g-type auxiliaries and would silently truncate h/i).
+    """
+    L_aux = int(aux_basis.max_l)
+    if L_aux > 6:
+        raise ValueError(
+            f"eri2c supports auxiliary angular momentum up to i (l=6, the "
+            f"def2-universal-jkfit maximum); got l={L_aux}."
+        )
+    mt = 2 * L_aux + 1
+    return L_aux + 1, mt, mt
+
+
+def _eri2c_primitive(alpha, A, ang_a, beta, B, ang_b,
+                     max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M, omega=None):
     """2-center Coulomb integral (P|Q) for primitive GTOs.
 
     Args:
         alpha, A, ang_a: exponent, center (3,), angular (3,) for function P
         beta, B, ang_b: exponent, center (3,), angular (3,) for function Q
+        max_l, max_t, max_m: recursion sizes (per-basis; see
+            :func:`_eri2c_sizes`; the defaults reproduce the old g cap).
     """
     safe_alpha = jnp.where(alpha == 0.0, 1.0, alpha)
     safe_beta = jnp.where(beta == 0.0, 1.0, beta)
@@ -56,21 +77,22 @@ def _eri2c_primitive(alpha, A, ang_a, beta, B, ang_b):
                  / (safe_alpha * safe_beta * jnp.sqrt(safe_alpha + safe_beta)))
 
     # Single-center E-coefficients for both sides
-    Ex_a = _single_center_E_1d(ang_a[0], alpha)
-    Ey_a = _single_center_E_1d(ang_a[1], alpha)
-    Ez_a = _single_center_E_1d(ang_a[2], alpha)
+    Ex_a = _single_center_E_1d(ang_a[0], alpha, max_l, max_t)
+    Ey_a = _single_center_E_1d(ang_a[1], alpha, max_l, max_t)
+    Ez_a = _single_center_E_1d(ang_a[2], alpha, max_l, max_t)
 
-    Ex_b = _single_center_E_1d(ang_b[0], beta)
-    Ey_b = _single_center_E_1d(ang_b[1], beta)
-    Ez_b = _single_center_E_1d(ang_b[2], beta)
+    Ex_b = _single_center_E_1d(ang_b[0], beta, max_l, max_t)
+    Ey_b = _single_center_E_1d(ang_b[1], beta, max_l, max_t)
+    Ez_b = _single_center_E_1d(ang_b[2], beta, max_l, max_t)
 
     # Hermite Coulomb integrals
-    R = _hermite_coulomb(rho, AB)
+    R = _hermite_coulomb(rho, AB, max_t, max_m, omega)
 
     # Combined E-coefficients via convolution with sign
-    F_x = jnp.convolve(Ex_a, Ex_b * _SIGN, mode='full')[:_MAX_T]
-    F_y = jnp.convolve(Ey_a, Ey_b * _SIGN, mode='full')[:_MAX_T]
-    F_z = jnp.convolve(Ez_a, Ez_b * _SIGN, mode='full')[:_MAX_T]
+    sign = (-1.0) ** jnp.arange(max_t)
+    F_x = jnp.convolve(Ex_a, Ex_b * sign, mode='full')[:max_t]
+    F_y = jnp.convolve(Ey_a, Ey_b * sign, mode='full')[:max_t]
+    F_z = jnp.convolve(Ez_a, Ez_b * sign, mode='full')[:max_t]
 
     result = jnp.einsum("s,r,q,srq->", F_x, F_y, F_z, R)
     return prefactor * result
@@ -81,13 +103,15 @@ def _eri2c_primitive(alpha, A, ang_a, beta, B, ang_b):
 # ---------------------------------------------------------------------------
 
 def _contracted_eri2c(alpha_a, coeff_a, center_a, ang_a,
-                      alpha_b, coeff_b, center_b, ang_b):
+                      alpha_b, coeff_b, center_b, ang_b,
+                      max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M, omega=None):
     """Contracted 2-center Coulomb integral over all primitive pairs."""
     def _prim_a(a_exp, a_coeff):
         def _prim_b(b_exp, b_coeff):
             return (a_coeff * b_coeff
                     * _eri2c_primitive(a_exp, center_a, ang_a,
-                                      b_exp, center_b, ang_b))
+                                      b_exp, center_b, ang_b,
+                                      max_l, max_t, max_m, omega))
         return jnp.sum(jax.vmap(_prim_b)(alpha_b, coeff_b))
     return jnp.sum(jax.vmap(_prim_a)(alpha_a, coeff_a))
 
@@ -98,6 +122,7 @@ def _contracted_eri2c(alpha_a, coeff_a, center_a, ang_a,
 
 def eri2c_matrix(
     aux_basis: BasisData,
+    omega: float | None = None,
 ) -> Float[Array, "n_aux n_aux"]:
     """Compute 2-center Coulomb matrix J_{PQ} = (P|Q).
 
@@ -109,12 +134,15 @@ def eri2c_matrix(
     Returns:
         J matrix, shape (n_aux, n_aux) in spherical harmonics.
     """
+    ml, mt, mm = _eri2c_sizes(aux_basis)      # size the recursion to the basis
+
     def _element(i, j):
         return _contracted_eri2c(
             aux_basis.exponents[i], aux_basis.coefficients[i],
             aux_basis.centers[i], aux_basis.angular[i],
             aux_basis.exponents[j], aux_basis.coefficients[j],
             aux_basis.centers[j], aux_basis.angular[j],
+            ml, mt, mm, omega,
         )
 
     n = aux_basis.centers.shape[0]
@@ -307,8 +335,16 @@ def eri2c_matrix_batched(
 ) -> Float[Array, "n_aux n_aux"]:
     """Compute 2-center Coulomb matrix J_{PQ} = (P|Q) via shell-pair batching.
 
-    Differentiable w.r.t. aux_basis.centers.
+    Differentiable w.r.t. aux_basis.centers. This path is still sized by the
+    global g-type constants (``_MAX_COMP``/``_MAX_T``/``_MAX_M``); for h/i
+    auxiliaries (heavier-element JK-fitting sets) use :func:`eri2c_matrix`,
+    which sizes its recursion to the basis.
     """
+    if int(aux_basis.max_l) > 4:
+        raise ValueError(
+            f"eri2c_matrix_batched supports auxiliary angular momentum up to "
+            f"g (l=4); got l={int(aux_basis.max_l)}. Use eri2c_matrix."
+        )
     (shell_ao_idx, comps_all, n_comps, _l_values,
      pair_a, pair_b, _n_shells, nao_cart) = _prepare_shell_pairs(aux_basis)
 

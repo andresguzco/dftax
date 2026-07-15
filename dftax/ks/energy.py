@@ -28,12 +28,15 @@ structure is the static tuple ``nocc`` of per-channel occupied counts:
 The Coulomb/exchange backend is a value from :func:`~dftax.ks.terms.exact` /
 :func:`~dftax.ks.terms.df`:
 
-- **exact** (default): the full 4-center ERI tensor (``eri4c``), tight against
-  PySCF, but O(N⁴) memory, so only for small systems.
-- **density fitting** (``df(auxbasis)``): RI-J / RI-K via 3- and 2-center
-  integrals, O(N³) memory, for larger systems. The fit is the robust Dunlap
-  (Coulomb-metric) form; the RI error vs the exact path is sub-mHa with a
-  standard JK-fitting auxiliary basis.
+- **density fitting** (default; ``df()`` = ``def2-universal-jkfit`` with the
+  ``chunk="auto"`` memory policy): RI-J / RI-K via 3- and 2-center integrals,
+  O(N³) memory (streamed to O(N²) past a budget). The fit is the robust
+  Dunlap (Coulomb-metric) form; the RI error vs the exact path is sub-mHa
+  with the JK-fitting auxiliary set.
+- **exact** (``exact()``): the full 4-center ERI tensor (``eri4c``), tight
+  against PySCF, but O(N⁴) memory: small systems and reference comparisons.
+  Also the fallback for a raw :class:`System` (no element symbols to resolve
+  an auxiliary basis name).
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ import jax.numpy as jnp
 import equinox as eqx
 from jaxtyping import Array, Float, Scalar
 
+from dftax.energy.d3 import D3BJSpec, _resolve_dispersion
 from dftax.energy.gto import BasisData, extract_basis_data, eval_gto
 from dftax.energy.xc import XCFunctional
 from dftax.grid import Becke, Points, becke, becke_grid
@@ -77,6 +81,7 @@ from dftax.ks.terms import (
     XCTerm,
     _make_coulomb,
     _metric_pinv,  # noqa: F401  (re-exported; also used by _build_integrals)
+    df,
     exact,
 )
 from dftax.system.molecule import Molecule
@@ -155,6 +160,27 @@ def _resolve_system(system):
 _AO_GRID_BUDGET = 2**27
 # Per-chunk element budget when streaming (~32 MiB of AO values per chunk).
 _AO_CHUNK_BUDGET = 2**22
+# Element budget for the materialized DF 3-center tensor (nao², naux),
+# ~2 GiB in float64; above it ``df(chunk="auto")`` streams RI-J/RI-K over
+# auxiliary chunks sized to keep ~_DF_CHUNK_BUDGET elements in flight.
+_DF_BUDGET = 2**28
+_DF_CHUNK_BUDGET = 2**24
+
+
+def _resolve_df_chunk(chunk, nao: int, naux: int, sharded: bool):
+    """Resolve a DF spec's chunk policy to a concrete value.
+
+    ``"auto"``: materialize the (nao², naux) tensor when it fits
+    ``_DF_BUDGET`` or when the calculation is mesh-sharded (the aux-sharded
+    backend holds per-device slabs, which is already the capacity path);
+    otherwise stream over auxiliary chunks. ``None`` forces materialized; an
+    int streams with exactly that chunk.
+    """
+    if chunk != "auto":
+        return chunk
+    if sharded or nao * nao * naux <= _DF_BUDGET:
+        return None
+    return max(8, _DF_CHUNK_BUDGET // (nao * nao))
 
 
 def _resolve_chunk(chunk, ng: int, nao: int):
@@ -205,9 +231,14 @@ def _resolve_grid(grid, symbols, coords):
 
 
 def _resolve_coulomb(spec, symbols, coords):
-    """Resolve a Coulomb spec's auxiliary basis name to ``BasisData``."""
+    """Resolve a Coulomb spec's auxiliary basis name to ``BasisData``.
+
+    ``None`` defaults to density fitting (O(N³) memory, sub-mHa RI error);
+    a raw :class:`System` carries no element symbols to resolve the auxiliary
+    basis name, so it falls back to the exact 4-center path.
+    """
     if spec is None:
-        return exact()
+        spec = df() if symbols is not None else exact()
     if isinstance(spec, DFSpec) and not isinstance(spec.auxbasis, BasisData):
         if symbols is None:
             raise TypeError(
@@ -253,7 +284,7 @@ def ao_on_grid(
 @eqx.filter_jit
 def _build_integrals(
     basis, coords, charges, grid_coords, aux_basis, materialize_ao, materialize_int3c,
-    eri_quartets=None, eri_qof=None, stream_exact=False,
+    eri_quartets=None, eri_qof=None, stream_exact=False, omega=None,
 ):
     """Build all integral arrays in one jitted pass.
 
@@ -272,12 +303,20 @@ def _build_integrals(
     ao, dao = ao_on_grid(basis, grid_coords) if materialize_ao else (None, None)
     e_nn = nuclear_repulsion(coords, charges)
 
+    eri_lr = None
+    int3c_lr = None
+    int2c_inv_lr = None
     if aux_basis is None:
         # stream_exact: skip the O(N⁴) tensor; J/K are contracted on the fly
         # in StreamedExactCoulomb (coulomb_j_4c / exchange_k_4c).
         eri = None if stream_exact else eri4c_matrix(basis, quartets=eri_quartets, qof=eri_qof)
         int3c = None
         int2c_inv = None
+        if omega is not None:
+            # Long-range erf(ω·r₁₂)/r₁₂ tensor for range-separated hybrids.
+            eri_lr = eri4c_matrix(
+                basis, quartets=eri_quartets, qof=eri_qof, omega=omega
+            )
     else:
         # int3c (nao²×naux) is the big DF tensor; skip it when streaming RI-J.
         int3c = eri3c_matrix(basis, aux_basis) if materialize_int3c else None
@@ -291,8 +330,15 @@ def _build_integrals(
         # the RI error stays sub-mHa.
         int2c_inv = _metric_pinv(int2c)
         eri = None
+        if omega is not None:
+            # The RI treatment of the long-range operator attenuates both the
+            # 3-center integrals and the metric (standard, as in PySCF's
+            # range-separated DF).
+            int3c_lr = eri3c_matrix(basis, aux_basis, omega=omega)
+            int2c_inv_lr = _metric_pinv(eri2c_matrix(aux_basis, omega=omega))
 
-    return S, T + V, ao, dao, e_nn, eri, int3c, int2c_inv
+    return (S, T + V, ao, dao, e_nn, eri, int3c, int2c_inv,
+            eri_lr, int3c_lr, int2c_inv_lr)
 
 
 class KS(eqx.Module):
@@ -308,6 +354,7 @@ class KS(eqx.Module):
     S: Float[Array, "nao nao"]
     hcore: Float[Array, "nao nao"]
     e_nn: Scalar
+    e_disp: Scalar
     basis: BasisData
     coulomb: CoulombTerm
     xc_term: XCTerm
@@ -328,6 +375,7 @@ class KS(eqx.Module):
         coulomb: ExactSpec | DFSpec | None = None,
         spin: int | None = None,
         mesh: MeshSpec | None = None,
+        dispersion: D3BJSpec | None = None,
     ):
         """Build the energy functional.
 
@@ -339,8 +387,10 @@ class KS(eqx.Module):
                 (default), an explicit ``(coords, weights)`` tuple, or a
                 :func:`~dftax.grid.points` spec (explicit grid + streaming
                 chunk).
-            coulomb: Coulomb/exchange backend, :func:`~dftax.ks.terms.exact`
-                (default) or :func:`~dftax.ks.terms.df`.
+            coulomb: Coulomb/exchange backend, :func:`~dftax.ks.terms.df`
+                (default: ``def2-universal-jkfit``, auto materialize/stream)
+                or :func:`~dftax.ks.terms.exact` (O(N⁴); also the raw-System
+                fallback).
             spin: ``None`` infers from the system (closed shell → restricted);
                 an explicit ``spin`` (= 2S, including 0) requests
                 spin-polarized α/β channels.
@@ -348,6 +398,10 @@ class KS(eqx.Module):
                 across a device mesh (the XC quadrature and the DF 3-center
                 tensor; the dense nao² matrices stay replicated).
                 ``None`` = single device.
+            dispersion: a :func:`~dftax.energy.d3.d3bj` spec adds the two-body
+                D3(BJ) correction to ``total()`` (P-independent, so the SCF is
+                untouched; forces get its gradient by autodiff). Parameters
+                resolve from the functional's name unless given explicitly.
 
         Example:
             ```python
@@ -397,6 +451,20 @@ class KS(eqx.Module):
         grid_chunk = _resolve_chunk(
             grid_chunk, -(-grid_coords.shape[0] // ndev), nao_final
         )
+        if isinstance(spec, DFSpec) and spec.chunk == "auto":
+            aux = spec.auxbasis
+            naux = (
+                aux.cart2sph.shape[1]
+                if aux.cart2sph is not None
+                else aux.centers.shape[0]
+            )
+            spec = DFSpec(
+                auxbasis=aux,
+                chunk=_resolve_df_chunk(
+                    spec.chunk, nao_final, naux, devices is not None
+                ),
+                screen=spec.screen,
+            )
         quartets, qof, pairs = _resolve_screening(spec, basis)
         is_df = isinstance(spec, DFSpec)
         aux_basis = spec.auxbasis if is_df else None
@@ -408,11 +476,40 @@ class KS(eqx.Module):
                     "supported; the aux-sharded materialized backend covers "
                     "that memory regime; use df(auxbasis) with mesh=."
                 )
-        S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv = _build_integrals(
+        # Range-separated hybrids: build the erf(ω·r₁₂)/r₁₂ tensors alongside
+        # the Coulomb ones (memory doubles; materialized backends only).
+        hf_lr = float(getattr(xc, "hf_coeff_lr", 0.0))
+        omega = float(getattr(xc, "omega", 0.0)) if hf_lr != 0.0 else 0.0
+        if hf_lr != 0.0 and omega == 0.0:
+            raise ValueError(
+                f"{type(xc).__name__} sets hf_coeff_lr={hf_lr} but omega=0; "
+                f"a range-separated functional must define its ω."
+            )
+        if hf_lr != 0.0 and shard_df:
+            raise NotImplementedError(
+                "range-separated hybrids are not supported with mesh= yet; "
+                "run single-device with df(chunk=None) or exact()."
+            )
+        if hf_lr != 0.0 and (not is_df) and spec.stream:
+            raise NotImplementedError(
+                "range-separated hybrids need a materialized backend: use "
+                "exact() or df(chunk=None), not exact(stream=True)."
+            )
+        (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
+         eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(
             basis, coords, charges, grid_coords, aux_basis,
             devices is None and grid_chunk is None,   # sharded AO grid built below
             (not shard_df) and not (is_df and spec.chunk is not None),
             quartets, qof, (not is_df) and spec.stream,
+            omega if hf_lr != 0.0 else None,
+        )
+        # Dispersion is P-independent: a scalar of the (traced) coordinates,
+        # mirroring e_nn, so the rebuilt energies in forces/batched carry its
+        # gradient automatically. Atomic numbers come from the charges (works
+        # on the raw System path too).
+        disp_fn = _resolve_dispersion(dispersion, xc, charges)
+        self.e_disp = (
+            disp_fn(coords) if disp_fn is not None else jnp.asarray(0.0)
         )
         self.S = S
         self.hcore = hcore
@@ -435,7 +532,8 @@ class KS(eqx.Module):
             )
         else:
             self.coulomb = _make_coulomb(
-                spec, basis, eri, int3c, int2c_inv, pairs, float(xc.hf_coeff)
+                spec, basis, eri, int3c, int2c_inv, pairs, float(xc.hf_coeff),
+                eri_lr, int3c_lr, int2c_inv_lr, hf_lr,
             )
         if devices is not None:
             # Pad the quadrature to the mesh and lay it out sharded; the AO
@@ -474,8 +572,8 @@ class KS(eqx.Module):
         return e1 + e2 + self.xc_term.energy(P)
 
     def total(self, P: Float[Array, "nspin nao nao"]) -> Scalar:
-        """Total KS energy (electronic + nuclear repulsion)."""
-        return self.electronic(P) + self.e_nn
+        """Total KS energy (electronic + nuclear repulsion + dispersion)."""
+        return self.electronic(P) + self.e_nn + self.e_disp
 
     def density(
         self, P: Float[Array, "nspin nao nao"]

@@ -141,9 +141,13 @@ def _Ec_table(lc, gamma, mt):
 
 
 def _hermite_table(rho, RPC, mt, omega=None):
-    """(mt, mt, mt) Hermite Coulomb integrals R^0_{t,u,v}, unrolled at trace
-    time (mirrors dftax.integrals.eri3c._hermite_coulomb, whose fori_loops
-    issue ~3*mt^2 sequential launches)."""
+    """(mt, mt, mt) Hermite Coulomb integrals R^0_{t,u,v}.
+
+    Same m-ladder as dftax.integrals.eri3c._hermite_coulomb, unrolled over m
+    at trace time with each level's t/u/v sweeps as vectorized slice updates:
+    every entry of level m reads only level m+1, so each sweep is one shifted
+    multiply-add (the scalar-dict formulation traced ~mt^3/6 Python ops per
+    class and dominated first-call latency)."""
     T = rho * jnp.sum(RPC ** 2)
     neg2rho = -2.0 * rho
     if omega is None:
@@ -151,36 +155,28 @@ def _hermite_table(rho, RPC, mt, omega=None):
     else:
         s = (omega * omega) / (omega * omega + rho)
         base = [s ** (m + 0.5) * boys(m, s * T) for m in range(mt)]
-    # R[m][t][u][v] built as nested python lists of scalars, then stacked;
-    # only t+u+v+m < mt entries are ever read.
-    R = {(m, 0, 0, 0): neg2rho ** m * base[m] for m in range(mt)}
+    idx = jnp.arange(mt - 1, dtype=jnp.float64)      # t/u/v factor 0..mt-2
+    zrow = jnp.zeros((1,))
 
-    def get(m, t, u, v):
-        if t < 0 or u < 0 or v < 0:
-            return 0.0
-        return R[(m, t, u, v)]
-
+    Rp = jnp.zeros((mt, mt, mt)).at[0, 0, 0].set(
+        neg2rho ** (mt - 1) * base[mt - 1])
     for m in range(mt - 2, -1, -1):
-        top = mt - 1 - m
-        for t in range(top):
-            R[(m, t + 1, 0, 0)] = (RPC[0] * get(m + 1, t, 0, 0)
-                                   + t * get(m + 1, t - 1, 0, 0))
-        for u in range(top):
-            for t in range(top - u):
-                R[(m, t, u + 1, 0)] = (RPC[1] * get(m + 1, t, u, 0)
-                                       + u * get(m + 1, t, u - 1, 0))
-        for v in range(top):
-            for u in range(top - v):
-                for t in range(top - v - u):
-                    R[(m, t, u, v + 1)] = (RPC[2] * get(m + 1, t, u, v)
-                                           + v * get(m + 1, t, u, v - 1))
-    zero = jnp.zeros(())
-    return jnp.stack([
-        jnp.stack([
-            jnp.stack([R.get((0, t, u, v), zero) * jnp.ones(())
-                       for v in range(mt)])
-            for u in range(mt)])
-        for t in range(mt)])
+        R = jnp.zeros((mt, mt, mt)).at[0, 0, 0].set(neg2rho ** m * base[m])
+        # t sweep on the (t, 0, 0) row of level m+1
+        row = Rp[:, 0, 0]
+        shifted = jnp.concatenate([zrow, row[:-2]])
+        R = R.at[1:, 0, 0].set(RPC[0] * row[:-1] + idx * shifted)
+        # u sweep on the (t, u, 0) plane of level m+1
+        plane = Rp[:, :-1, 0]
+        pshift = jnp.concatenate([jnp.zeros((mt, 1)), Rp[:, :-2, 0]], axis=1)
+        R = R.at[:, 1:, 0].set(RPC[1] * plane + idx[None, :] * pshift)
+        # v sweep on the full (t, u, v) cube of level m+1
+        cube = Rp[:, :, :-1]
+        cshift = jnp.concatenate([jnp.zeros((mt, mt, 1)), Rp[:, :, :-2]],
+                                 axis=2)
+        R = R.at[:, :, 1:].set(RPC[2] * cube + idx[None, None, :] * cshift)
+        Rp = R
+    return Rp
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] - 2026-07-16
 
 ### Changed (numerically visible)
 - **Density fitting is the default Coulomb backend.** `KS(mol, xc)` now uses

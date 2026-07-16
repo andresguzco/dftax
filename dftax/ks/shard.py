@@ -100,7 +100,12 @@ def _build_int3c_sharded(basis, aux_basis, devices):
     """
     import numpy as np
 
-    from dftax.integrals import eri3c_matrix
+    # The flat per-element engine, deliberately: the slab boundaries slice
+    # the aux axis at arbitrary function indices and can cut through a
+    # shell, which the shell-class-bucketed engine cannot represent (its
+    # plan works on whole shells). Shell-aligned slabs would let this path
+    # bucket too; follow-up.
+    from dftax.integrals.eri3c import _eri3c_matrix_flat
 
     naux = aux_basis.centers.shape[0]
     ndev = len(devices)
@@ -110,7 +115,7 @@ def _build_int3c_sharded(basis, aux_basis, devices):
         lo, hi = d * slab, min((d + 1) * slab, naux)
         aux_d = _slice_basis(aux_basis, lo, hi)
         with jax.default_device(dev):
-            blk = jax.jit(eri3c_matrix)(basis, aux_d)      # (nao, nao, hi-lo)
+            blk = jax.jit(_eri3c_matrix_flat)(basis, aux_d)  # (nao, nao, hi-lo)
             if hi - lo < slab:
                 blk = jnp.pad(blk, ((0, 0), (0, 0), (0, slab - (hi - lo))))
             blk.block_until_ready()

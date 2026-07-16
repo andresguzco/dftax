@@ -11,6 +11,7 @@ validate_bucketed.py and bench_bucketed.py.
 """
 
 from collections import defaultdict
+from functools import lru_cache
 
 import jax
 import jax.numpy as jnp
@@ -245,6 +246,28 @@ def make_class_kernel(la, lb, lc, anga, angb, angc, omega=None):
     return one_triple
 
 
+@lru_cache(maxsize=4096)
+def _compiled_class_kernel(la, lb, lc, anga, angb, angc, omega, chunk_size):
+    """Jitted, cached batch kernel for one class.
+
+    Without this cache every bucketed_eri3c call re-traces the unrolled
+    graphs through Python; the tracing, not the GPU, was ~100% of the
+    measured wall (69 s ethanol). ang tuples are hashable static metadata;
+    jit keys the shapes, so repeat builds hit the compiled executable.
+    """
+    kern = make_class_kernel(la, lb, lc,
+                             np.asarray(anga), np.asarray(angb),
+                             np.asarray(angc), omega)
+    # explicit in_axes: the utility's chunked path only batches the
+    # arguments named by in_axes, and a bare 0 covers just the first
+    return jax.jit(chunked_vmap(kern, in_axes=(0,) * 9,
+                                chunk_size=chunk_size))
+
+
+def _hashable_ang(a):
+    return tuple(tuple(int(x) for x in row) for row in a)
+
+
 def bucketed_eri3c(basis, aux_basis, omega=None, chunk=4096):
     """Full (nao, nao, naux) tensor via class buckets, then the same
     cart2sph transforms as eri3c_matrix."""
@@ -256,11 +279,10 @@ def bucketed_eri3c(basis, aux_basis, omega=None, chunk=4096):
     out = jnp.zeros((nao, nao, naux))
     for (la, lb, lc), b in sorted(buckets.items()):
         anga, angb, angc = b["ang"]
-        kern = make_class_kernel(la, lb, lc, anga, angb, angc, omega)
-        # explicit in_axes: the utility's chunked path only batches the
-        # arguments named by in_axes, and a bare 0 covers just the first
-        vals = chunked_vmap(kern, in_axes=(0,) * 9,
-                            chunk_size=min(chunk, b["A"].shape[0]))(
+        fn = _compiled_class_kernel(
+            la, lb, lc, _hashable_ang(anga), _hashable_ang(angb),
+            _hashable_ang(angc), omega, min(chunk, b["A"].shape[0]))
+        vals = fn(
             jnp.asarray(b["A"]), jnp.asarray(b["B"]), jnp.asarray(b["C"]),
             jnp.asarray(b["ea"]), jnp.asarray(b["eb"]), jnp.asarray(b["ec"]),
             jnp.asarray(b["ca"]), jnp.asarray(b["cb"]), jnp.asarray(b["cc"]),

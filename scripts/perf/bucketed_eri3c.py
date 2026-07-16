@@ -15,9 +15,8 @@ from collections import defaultdict
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import lax
 
-from dftax.integrals.eri3c import _hermite_coulomb
+from dftax.energy.boys import boys
 from dftax.utils.vmap import vmap as chunked_vmap
 
 
@@ -100,53 +99,87 @@ def bucket_triples(bra_shells, aux_shells):
 # Right-sized table builders (mirror eri3c.py's recursions, return tables)
 # ---------------------------------------------------------------------------
 
+def _bump(row, X, i2g, mt):
+    """One MD E-recursion step on a length-mt row (trace-time unrolled)."""
+    left = jnp.concatenate([jnp.zeros(1), row[:-1]])
+    right = jnp.concatenate([row[1:], jnp.zeros(1)])
+    t_idx = jnp.arange(mt)
+    return (X * row + i2g * jnp.where(t_idx > 0, left, 0.0)
+            + jnp.where(t_idx + 1 < mt, (t_idx + 1) * right, 0.0))
+
+
 def _E_table(la, lb, alpha, beta, XAB, mt):
-    """Full (la+1, lb+1, mt) two-center E table (same recursion as
-    _md_E_coefficients_1d, without the final row slice)."""
+    """Full (la+1, lb+1, mt) two-center E table, recursion unrolled at trace
+    time: the trip counts are tiny static ints, and unrolling lets XLA fuse
+    the whole table into one kernel instead of ~la*lb sequential launches
+    (the launch latency dominated the fori_loop version by ~100x)."""
     gamma = alpha + beta
     safe_gamma = jnp.where(gamma == 0.0, 1.0, gamma)
     i2g = 0.5 / safe_gamma
     XPA = -beta * XAB / safe_gamma
     XPB = alpha * XAB / safe_gamma
-    t_idx = jnp.arange(mt)
-    E = jnp.zeros((la + 1, lb + 1, mt)).at[0, 0, 0].set(1.0)
-
-    def bump(row, X):
-        left = jnp.concatenate([jnp.zeros(1), row[:-1]])
-        right = jnp.concatenate([row[1:], jnp.zeros(1)])
-        return (X * row + jnp.where(t_idx > 0, i2g * left, 0.0)
-                + jnp.where(t_idx + 1 < mt, (t_idx + 1) * right, 0.0))
-
-    def _step_i(i, E):
-        return E.at[i + 1, 0, :].set(bump(E[i, 0, :], XPA))
-
-    E = lax.fori_loop(0, la, _step_i, E)
-
-    def _step_j(j, E):
-        def _step_ji(i, E):
-            return E.at[i, j + 1, :].set(bump(E[i, j, :], XPB))
-        return lax.fori_loop(0, la + 1, _step_ji, E)
-
-    return lax.fori_loop(0, lb, _step_j, E)
+    col = [jnp.zeros(mt).at[0].set(1.0)]           # E[i, 0] rows
+    for _ in range(la):
+        col.append(_bump(col[-1], XPA, i2g, mt))
+    rows = [col]                                    # rows[j][i]
+    for _ in range(lb):
+        rows.append([_bump(r, XPB, i2g, mt) for r in rows[-1]])
+    # stack to (la+1, lb+1, mt)
+    return jnp.stack([jnp.stack([rows[j][i] for j in range(lb + 1)])
+                      for i in range(la + 1)])
 
 
 def _Ec_table(lc, gamma, mt):
-    """(lc+1, mt) single-center E table (same recursion as
-    _single_center_E_1d, without the final row slice)."""
+    """(lc+1, mt) single-center E table, unrolled at trace time."""
     safe_gamma = jnp.where(gamma == 0.0, 1.0, gamma)
     i2g = 0.5 / safe_gamma
-    t_idx = jnp.arange(mt)
-    E = jnp.zeros((lc + 1, mt)).at[0, 0].set(1.0)
+    rows = [jnp.zeros(mt).at[0].set(1.0)]
+    for _ in range(lc):
+        rows.append(_bump(rows[-1], 0.0, i2g, mt))
+    return jnp.stack(rows)
 
-    def _step_i(i, E):
-        row = E[i, :]
-        left = jnp.concatenate([jnp.zeros(1), row[:-1]])
-        right = jnp.concatenate([row[1:], jnp.zeros(1)])
-        new = (jnp.where(t_idx > 0, i2g * left, 0.0)
-               + jnp.where(t_idx + 1 < mt, (t_idx + 1) * right, 0.0))
-        return E.at[i + 1, :].set(new)
 
-    return lax.fori_loop(0, lc, _step_i, E)
+def _hermite_table(rho, RPC, mt, omega=None):
+    """(mt, mt, mt) Hermite Coulomb integrals R^0_{t,u,v}, unrolled at trace
+    time (mirrors dftax.integrals.eri3c._hermite_coulomb, whose fori_loops
+    issue ~3*mt^2 sequential launches)."""
+    T = rho * jnp.sum(RPC ** 2)
+    neg2rho = -2.0 * rho
+    if omega is None:
+        base = [boys(m, T) for m in range(mt)]
+    else:
+        s = (omega * omega) / (omega * omega + rho)
+        base = [s ** (m + 0.5) * boys(m, s * T) for m in range(mt)]
+    # R[m][t][u][v] built as nested python lists of scalars, then stacked;
+    # only t+u+v+m < mt entries are ever read.
+    R = {(m, 0, 0, 0): neg2rho ** m * base[m] for m in range(mt)}
+
+    def get(m, t, u, v):
+        if t < 0 or u < 0 or v < 0:
+            return 0.0
+        return R[(m, t, u, v)]
+
+    for m in range(mt - 2, -1, -1):
+        top = mt - 1 - m
+        for t in range(top):
+            R[(m, t + 1, 0, 0)] = (RPC[0] * get(m + 1, t, 0, 0)
+                                   + t * get(m + 1, t - 1, 0, 0))
+        for u in range(top):
+            for t in range(top - u):
+                R[(m, t, u + 1, 0)] = (RPC[1] * get(m + 1, t, u, 0)
+                                       + u * get(m + 1, t, u - 1, 0))
+        for v in range(top):
+            for u in range(top - v):
+                for t in range(top - v - u):
+                    R[(m, t, u, v + 1)] = (RPC[2] * get(m + 1, t, u, v)
+                                           + v * get(m + 1, t, u, v - 1))
+    zero = jnp.zeros(())
+    return jnp.stack([
+        jnp.stack([
+            jnp.stack([R.get((0, t, u, v), zero) * jnp.ones(())
+                       for v in range(mt)])
+            for u in range(mt)])
+        for t in range(mt)])
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +221,7 @@ def make_class_kernel(la, lb, lc, anga, angb, angc, omega=None):
                 rho = safe * safec / (safe + safec)
                 pref = (K * 2.0 * jnp.pi ** 2.5
                         / (safe * safec * jnp.sqrt(safe + safec)))
-                R = _hermite_coulomb(rho, P - C, mt, mt, omega)
+                R = _hermite_table(rho, P - C, mt, omega)
                 Ec = [_Ec_table(lc, ga, mt) * sign for _ in range(3)]
                 # G[x][i', j', k', s] = sum_tau Et[i',j',t] Ec[k',tau] conv
                 G = [jnp.einsum("ijt,ku,tus->ijks", Et[x], Ec[x], conv)

@@ -1126,6 +1126,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dftax.energy.d3.d3bj" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;d3bj
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#dftax.system.molecule.Molecule" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1524,7 +1535,7 @@
 
 <h1 id="building-a-calculation">Building a calculation<a class="headerlink" href="#building-a-calculation" title="Permanent link">¤</a></h1>
 <p>One builder captures every choice as a value: the system, the functional, and
-the grid/Coulomb/spin/mesh specs. See <a href="../../all-of-dftax/#2-building-a-calculation-choices-as-values">All of dftax</a>
+the grid/Coulomb/spin/mesh/dispersion specs. See <a href="../../all-of-dftax/#2-building-a-calculation-choices-as-values">All of dftax</a>
 for the tour.</p>
 
 
@@ -1871,7 +1882,7 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 
 
 <h5 id="dftax.ks.energy.KS.__init__" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="fm">__init__</span><span class="p">(</span><span class="n">system</span><span class="p">:</span> <span class="n">Molecule</span> <span class="o">|</span> <span class="n">System</span> <span class="o">|</span> <span class="nb">object</span><span class="p">,</span> <span class="n">xc</span><span class="p">:</span> <span class="n">XCFunctional</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">grid</span><span class="p">:</span> <span class="n">Becke</span> <span class="o">|</span> <span class="n">Points</span> <span class="o">|</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">coulomb</span><span class="p">:</span> <span class="n">ExactSpec</span> <span class="o">|</span> <span class="n">DFSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">spin</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">mesh</span><span class="p">:</span> <span class="n">MeshSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="fm">__init__</span><span class="p">(</span><span class="n">system</span><span class="p">:</span> <span class="n">Molecule</span> <span class="o">|</span> <span class="n">System</span> <span class="o">|</span> <span class="nb">object</span><span class="p">,</span> <span class="n">xc</span><span class="p">:</span> <span class="n">XCFunctional</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">grid</span><span class="p">:</span> <span class="n">Becke</span> <span class="o">|</span> <span class="n">Points</span> <span class="o">|</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">coulomb</span><span class="p">:</span> <span class="n">ExactSpec</span> <span class="o">|</span> <span class="n">DFSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">spin</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">mesh</span><span class="p">:</span> <span class="n">MeshSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dispersion</span><span class="p">:</span> <span class="n">D3BJSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span></code>
 
 <a href="#dftax.ks.energy.KS.__init__" class="headerlink" title="Permanent link">¤</a></h5>
 
@@ -1953,8 +1964,10 @@ chunk).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Coulomb/exchange backend, :func:<code>~dftax.ks.terms.exact</code>
-(default) or :func:<code>~dftax.ks.terms.df</code>.</p>
+                <p>Coulomb/exchange backend, :func:<code>~dftax.ks.terms.df</code>
+(default: <code>def2-universal-jkfit</code>, auto materialize/stream)
+or :func:<code>~dftax.ks.terms.exact</code> (O(N⁴); also the raw-System
+fallback).</p>
               </div>
             </td>
             <td>
@@ -1992,6 +2005,25 @@ spin-polarized α/β channels.</p>
 across a device mesh (the XC quadrature and the DF 3-center
 tensor; the dense nao² matrices stay replicated).
 <code>None</code> = single device.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>dispersion</code>
+            </td>
+            <td>
+                  <code><span title="dftax.energy.d3.D3BJSpec">D3BJSpec</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>a :func:<code>~dftax.energy.d3.d3bj</code> spec adds the two-body
+D3(BJ) correction to <code>total()</code> (P-independent, so the SCF is
+untouched; forces get its gradient by autodiff). Parameters
+resolve from the functional's name unless given explicitly.</p>
               </div>
             </td>
             <td>
@@ -2061,7 +2093,7 @@ tensor; the dense nao² matrices stay replicated).
 
     <div class="doc doc-contents ">
 
-        <p>Total KS energy (electronic + nuclear repulsion).</p>
+        <p>Total KS energy (electronic + nuclear repulsion + dispersion).</p>
 
 
     </div>
@@ -2089,6 +2121,57 @@ tensor; the dense nao² matrices stay replicated).
 
 
   </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.energy.d3.d3bj" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">energy</span><span class="o">.</span><span class="n">d3</span><span class="o">.</span><span class="n">d3bj</span><span class="p">(</span><span class="n">method</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">D3BJSpec</span></code>
+
+<a href="#dftax.energy.d3.d3bj" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Two-body D3(BJ) dispersion correction.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>method</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>damping-parameter set name (<code>"pbe"</code>, <code>"pbe0"</code>,
+<code>"b3lyp"</code>, <code>"cam-b3lyp"</code>, <code>"r2scan"</code>); <code>None</code> resolves it
+from the functional the KS is built with.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
 
     </div>
 

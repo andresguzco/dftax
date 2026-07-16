@@ -916,10 +916,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#exact-4-center-eris-default" class="md-nav__link">
+  <a href="#density-fitting-ri-the-default" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Exact 4-center ERIs (default)
+        Density fitting (RI, the default)
       
     </span>
   </a>
@@ -927,10 +927,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#density-fitting-ri" class="md-nav__link">
+  <a href="#exact-4-center-eris" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Density fitting (RI)
+        Exact 4-center ERIs
       
     </span>
   </a>
@@ -1560,27 +1560,31 @@
 offers a ladder of backends with the same energy but different memory/compute
 trade-offs. Each backend is a value passed to the builder as <code>coulomb=</code>; invalid
 combinations raise at the factory.</p>
-<h2 id="exact-4-center-eris-default">Exact 4-center ERIs (default)<a class="headerlink" href="#exact-4-center-eris-default" title="Permanent link">¤</a></h2>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">KS</span><span class="p">,</span> <span class="n">Molecule</span><span class="p">,</span> <span class="n">exact</span><span class="p">,</span> <span class="n">scf</span>
+<h2 id="density-fitting-ri-the-default">Density fitting (RI, the default)<a class="headerlink" href="#density-fitting-ri-the-default" title="Permanent link">¤</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">KS</span><span class="p">,</span> <span class="n">Molecule</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">scf</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dftax.energy.xc</span><span class="w"> </span><span class="kn">import</span> <span class="n">PBE</span>
 
 <span class="n">water</span> <span class="o">=</span> <span class="n">Molecule</span><span class="o">.</span><span class="n">from_xyz</span><span class="p">(</span><span class="s2">&quot;O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043&quot;</span><span class="p">,</span> <span class="s2">&quot;sto-3g&quot;</span><span class="p">)</span>
-<span class="n">scf</span><span class="p">(</span><span class="n">KS</span><span class="p">(</span><span class="n">water</span><span class="p">,</span> <span class="n">PBE</span><span class="p">()))</span>                          <span class="c1"># builds the (nao⁴) ERI tensor</span>
-<span class="n">scf</span><span class="p">(</span><span class="n">KS</span><span class="p">(</span><span class="n">water</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">exact</span><span class="p">()))</span>         <span class="c1"># the same, spelled explicitly</span>
+<span class="n">scf</span><span class="p">(</span><span class="n">KS</span><span class="p">(</span><span class="n">water</span><span class="p">,</span> <span class="n">PBE</span><span class="p">()))</span>                          <span class="c1"># same as coulomb=df()</span>
+<span class="n">scf</span><span class="p">(</span><span class="n">KS</span><span class="p">(</span><span class="n">water</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">()))</span>            <span class="c1"># def2-universal-jkfit, chunk=&quot;auto&quot;</span>
+</code></pre></div>
+<p>Resolution-of-identity reduces the 4-center integral to 2- and 3-center pieces against an
+auxiliary basis (functions up to i, so transition metals work): O(N³) compute,
+O(N²·N_aux) memory for the materialized 3-center tensor, and the <code>chunk="auto"</code> policy
+switches to the streamed contraction when that tensor would exceed the memory budget.
+The RI error against the exact path is sub-mHa with the JK-fitting set.</p>
+<h2 id="exact-4-center-eris">Exact 4-center ERIs<a class="headerlink" href="#exact-4-center-eris" title="Permanent link">¤</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">exact</span>
+
+<span class="n">scf</span><span class="p">(</span><span class="n">KS</span><span class="p">(</span><span class="n">water</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">exact</span><span class="p">()))</span>         <span class="c1"># builds the (nao⁴) ERI tensor</span>
 </code></pre></div>
 <p>Exact <code>(μν|λσ)</code> via McMurchie-Davidson, using the 8-fold permutational symmetry. O(N⁴)
-memory, best for small systems and as the validation reference. Two variants trade
-compute for memory:</p>
+memory: small systems and reference comparisons (it is also the fallback when building
+from a raw <code>System</code>, which has no element symbols to resolve an auxiliary basis name).
+Two variants trade compute for memory:</p>
 <div class="highlight"><pre><span></span><code><span class="n">exact</span><span class="p">(</span><span class="n">screen</span><span class="o">=</span><span class="mf">1e-10</span><span class="p">)</span>   <span class="c1"># Cauchy-Schwarz-screened materialized ERI tensor</span>
 <span class="n">exact</span><span class="p">(</span><span class="n">stream</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>    <span class="c1"># J/K contracted on the fly, O(N²) memory, no ERI tensor</span>
 </code></pre></div>
-<h2 id="density-fitting-ri">Density fitting (RI)<a class="headerlink" href="#density-fitting-ri" title="Permanent link">¤</a></h2>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">df</span>
-
-<span class="n">scf</span><span class="p">(</span><span class="n">KS</span><span class="p">(</span><span class="n">water</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="s2">&quot;def2-universal-jkfit&quot;</span><span class="p">)))</span>   <span class="c1"># RI-J / RI-K</span>
-</code></pre></div>
-<p>Resolution-of-identity reduces the 4-center integral to 2- and 3-center pieces against an
-auxiliary basis: O(N³) compute, O(N²·N_aux) memory for the materialized 3-center tensor.</p>
 <h2 id="streaming-screening-large-systems">Streaming + screening (large systems)<a class="headerlink" href="#streaming-screening-large-systems" title="Permanent link">¤</a></h2>
 <p>For memory-light runs, stream the RI-J contraction over auxiliary chunks (never forming
 the nao²×naux tensor) and Schwarz-screen negligible bra pairs; the XC integral streams
@@ -1612,20 +1616,20 @@ path is compile- and memory-bounded by scanning the bra primitive pair in the ER
 </thead>
 <tbody>
 <tr>
+<td>anything, by default</td>
+<td><code>df()</code> (auto materialize/stream)</td>
+</tr>
+<tr>
 <td>small / validation</td>
-<td><code>exact()</code> (default)</td>
+<td><code>exact()</code></td>
 </tr>
 <tr>
 <td>small, memory-tight</td>
 <td><code>exact(stream=True)</code> or <code>exact(screen=1e-10)</code></td>
 </tr>
 <tr>
-<td>medium</td>
-<td><code>df("def2-universal-jkfit")</code></td>
-</tr>
-<tr>
-<td>large</td>
-<td><code>df("def2-universal-jkfit", chunk=64, screen=1e-10)</code> + <code>becke(chunk=20_000)</code></td>
+<td>large, hand-tuned</td>
+<td><code>df(chunk=64, screen=1e-10)</code> + <code>becke(chunk=20_000)</code></td>
 </tr>
 </tbody>
 </table>

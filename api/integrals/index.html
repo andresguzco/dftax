@@ -2142,7 +2142,7 @@ errors defaults to 'strict'.</p>
 
 
 <h4 id="dftax.integrals.eri2c_matrix" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">eri2c_matrix</span><span class="p">(</span><span class="n">aux_basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;n_aux n_aux&#39;</span><span class="p">]</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">eri2c_matrix</span><span class="p">(</span><span class="n">aux_basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">omega</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;n_aux n_aux&#39;</span><span class="p">]</span></code>
 
 <a href="#dftax.integrals.eri2c_matrix" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -2215,7 +2215,7 @@ errors defaults to 'strict'.</p>
 
 
 <h4 id="dftax.integrals.eri3c_matrix" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">eri3c_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">aux_basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao nao n_aux&#39;</span><span class="p">]</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">eri3c_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">aux_basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">omega</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao nao n_aux&#39;</span><span class="p">]</span></code>
 
 <a href="#dftax.integrals.eri3c_matrix" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -2267,6 +2267,23 @@ errors defaults to 'strict'.</p>
             </td>
             <td>
                 <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>omega</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>None for the Coulomb kernel, a float for the long-range
+<code>erf(ω·r₁₂)/r₁₂</code> kernel (range-separated hybrids).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
       </tbody>

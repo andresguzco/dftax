@@ -1513,8 +1513,10 @@
 
 <h1 id="coulomb-backends">Coulomb backends<a class="headerlink" href="#coulomb-backends" title="Permanent link">¤</a></h1>
 <p>Two-electron strategies as values. Each knob lives on the backend it
-configures; inert combinations raise at the factory. The
-<a href="../../tutorials/coulomb-backends/">Coulomb backends tutorial</a> has the
+configures; inert combinations raise at the factory. Density fitting is the
+default (<code>df()</code> = <code>def2-universal-jkfit</code> with the <code>chunk="auto"</code> memory
+policy, auxiliary functions up to i); <code>exact()</code> is the O(N⁴) reference path.
+The <a href="../../tutorials/coulomb-backends/">Coulomb backends tutorial</a> has the
 backend-choice table.</p>
 
 
@@ -1589,7 +1591,7 @@ tensor (O(N²) memory, slower; incompatible with <code>screen</code>).</p>
 
 
 <h4 id="dftax.ks.terms.df" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">terms</span><span class="o">.</span><span class="n">df</span><span class="p">(</span><span class="n">auxbasis</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">BasisData</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">screen</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DFSpec</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">terms</span><span class="o">.</span><span class="n">df</span><span class="p">(</span><span class="n">auxbasis</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">BasisData</span> <span class="o">=</span> <span class="s1">&#39;def2-universal-jkfit&#39;</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">&#39;auto&#39;</span><span class="p">,</span> <span class="n">screen</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DFSpec</span></code>
 
 <a href="#dftax.ks.terms.df" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -1597,6 +1599,9 @@ tensor (O(N²) memory, slower; incompatible with <code>screen</code>).</p>
     <div class="doc doc-contents first">
 
         <p>Density-fitted (RI) Coulomb/exchange with the given auxiliary basis.</p>
+<p>This is the KS default backend (O(N³) memory; RI error sub-mHa with a
+JK-fitting set); :func:<code>exact</code> remains available for small systems and
+reference comparisons.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -1619,12 +1624,13 @@ tensor (O(N²) memory, slower; incompatible with <code>screen</code>).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>JK-fitting auxiliary basis name (e.g.
-<code>"def2-universal-jkfit"</code>), or an already built <code>BasisData</code>.</p>
+                <p>JK-fitting auxiliary basis name (default
+<code>"def2-universal-jkfit"</code>, the universal set covering any orbital
+basis), or an already built <code>BasisData</code>.</p>
               </div>
             </td>
             <td>
-                <em>required</em>
+                  <code>&#39;def2-universal-jkfit&#39;</code>
             </td>
           </tr>
           <tr class="doc-section-item">
@@ -1632,16 +1638,19 @@ tensor (O(N²) memory, slower; incompatible with <code>screen</code>).</p>
                 <code>chunk</code>
             </td>
             <td>
-                  <code><span title="int">int</span> | None</code>
+                  <code><span title="int">int</span> | <span title="str">str</span> | None</code>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>if set, stream RI-J (and RI-K for hybrids) over auxiliary
-chunks of this size instead of materializing the nao²×naux tensor.</p>
+                <p>RI memory strategy. <code>"auto"</code> (default) materializes the
+nao²×naux 3-center tensor when it fits a memory budget and
+otherwise streams RI-J/RI-K over budget-derived auxiliary chunks;
+<code>None</code> forces the materialized tensor; an int streams with
+exactly that chunk.</p>
               </div>
             </td>
             <td>
-                  <code>None</code>
+                  <code>&#39;auto&#39;</code>
             </td>
           </tr>
           <tr class="doc-section-item">
@@ -1654,7 +1663,7 @@ chunks of this size instead of materializing the nao²×naux tensor.</p>
             <td>
               <div class="doc-md-description">
                 <p>Schwarz threshold restricting the streamed RI-J bra sum to
-significant pairs; requires <code>chunk</code>.</p>
+significant pairs; requires an explicit int <code>chunk</code>.</p>
               </div>
             </td>
             <td>
@@ -1667,7 +1676,8 @@ significant pairs; requires <code>chunk</code>.</p>
 
 <details class="example" open>
   <summary>Example</summary>
-  <div class="highlight"><pre><span></span><code><span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="s2">&quot;def2-universal-jkfit&quot;</span><span class="p">))</span>            <span class="c1"># materialized</span>
+  <div class="highlight"><pre><span></span><code><span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">)</span>                                    <span class="c1"># same as coulomb=df()</span>
+<span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="n">chunk</span><span class="o">=</span><span class="kc">None</span><span class="p">))</span>            <span class="c1"># force materialized</span>
 <span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="s2">&quot;def2-universal-jkfit&quot;</span><span class="p">,</span> <span class="n">chunk</span><span class="o">=</span><span class="mi">64</span><span class="p">))</span>  <span class="c1"># streamed</span>
 </code></pre></div>
 </details>

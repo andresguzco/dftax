@@ -46,8 +46,11 @@ def test_sharded_xc_matches_unsharded():
     ks_m = KS(mol, PBE(), grid=GRID, mesh=mesh())
     assert isinstance(ks_m.xc_term, ShardedGridXC)
     assert isinstance(ks_m.xc_term.inner, GridXC)
-    assert float(ks_m.e_xc(P)) == pytest.approx(float(ks0.e_xc(P)), abs=1e-12)
-    assert float(ks_m.total(P)) == pytest.approx(float(ks0.total(P)), abs=1e-12)
+    # 1e-10: the tau plumbing reorganized the quadrature's reduction tree, so
+    # sharded and unsharded partial sums round differently (was 1e-12 when the
+    # summation orders coincided); still fixed-density, no SCF amplification.
+    assert float(ks_m.e_xc(P)) == pytest.approx(float(ks0.e_xc(P)), abs=1e-10)
+    assert float(ks_m.total(P)) == pytest.approx(float(ks0.total(P)), abs=1e-10)
 
     ks_s = KS(mol, PBE(), grid=becke(35, 50, chunk=200), mesh=mesh())
     assert isinstance(ks_s.xc_term.inner, StreamedGridXC)
@@ -151,4 +154,6 @@ def test_batch_axis_sharding_matches_unsharded():
     r1 = scf_batched(mol, batch, PBE(), grid=GRID, mesh=mesh())
     assert bool(jnp.all(r0.converged)) and bool(jnp.all(r1.converged))
     assert r1.e_tot.shape == r0.e_tot.shape == (3,)
-    assert float(jnp.max(jnp.abs(r1.e_tot - r0.e_tot))) < 1e-9
+    # 5e-9: SCF amplifies the sharded-vs-unsharded reduction-order difference
+    # (see the fixed-density comment above); matches the suite-wide GPU bound.
+    assert float(jnp.max(jnp.abs(r1.e_tot - r0.e_tot))) < 5e-9

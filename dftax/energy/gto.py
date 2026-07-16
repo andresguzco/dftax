@@ -44,6 +44,25 @@ _CART_COMPONENTS = {
         (1, 3, 0), (1, 2, 1), (1, 1, 2), (1, 0, 3),
         (0, 4, 0), (0, 3, 1), (0, 2, 2), (0, 1, 3), (0, 0, 4),
     ],
+    # l = 5, 6 (h, i): same lexicographic order (lx descending, then ly).
+    # Needed only for *auxiliary* DF bases (def2-universal-jkfit carries h/i
+    # for the heavier elements); the primary AO basis stays capped at g.
+    5: [
+        (5, 0, 0), (4, 1, 0), (4, 0, 1),
+        (3, 2, 0), (3, 1, 1), (3, 0, 2),
+        (2, 3, 0), (2, 2, 1), (2, 1, 2), (2, 0, 3),
+        (1, 4, 0), (1, 3, 1), (1, 2, 2), (1, 1, 3), (1, 0, 4),
+        (0, 5, 0), (0, 4, 1), (0, 3, 2), (0, 2, 3), (0, 1, 4), (0, 0, 5),
+    ],
+    6: [
+        (6, 0, 0), (5, 1, 0), (5, 0, 1),
+        (4, 2, 0), (4, 1, 1), (4, 0, 2),
+        (3, 3, 0), (3, 2, 1), (3, 1, 2), (3, 0, 3),
+        (2, 4, 0), (2, 3, 1), (2, 2, 2), (2, 1, 3), (2, 0, 4),
+        (1, 5, 0), (1, 4, 1), (1, 3, 2), (1, 2, 3), (1, 1, 4), (1, 0, 5),
+        (0, 6, 0), (0, 5, 1), (0, 4, 2), (0, 3, 3), (0, 2, 4), (0, 1, 5),
+        (0, 0, 6),
+    ],
 }
 
 
@@ -66,6 +85,7 @@ def _angular_overlap_factor(ang: tuple[int, int, int], alpha: float) -> float:
     """
     factor = 1.0
     for lk in ang:
+        # (2k-1)!! / (2·alpha)^k per axis.
         if lk == 1:
             factor /= 2.0 * alpha
         elif lk == 2:
@@ -74,6 +94,10 @@ def _angular_overlap_factor(ang: tuple[int, int, int], alpha: float) -> float:
             factor *= 15.0 / (8.0 * alpha**3)
         elif lk == 4:
             factor *= 105.0 / (16.0 * alpha**4)
+        elif lk == 5:
+            factor *= 945.0 / (32.0 * alpha**5)
+        elif lk == 6:
+            factor *= 10395.0 / (64.0 * alpha**6)
     return factor
 
 

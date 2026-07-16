@@ -124,7 +124,7 @@ def _single_center_E_1d(l, gamma, max_l=_MAX_L, max_t=_MAX_T):
 # Hermite Coulomb integrals R^0_{t,u,v}
 # ---------------------------------------------------------------------------
 
-def _hermite_coulomb(rho, RPC, max_t=_MAX_T, max_m=_MAX_M):
+def _hermite_coulomb(rho, RPC, max_t=_MAX_T, max_m=_MAX_M, omega=None):
     """Hermite Coulomb integrals R^0_{t,u,v} with reduced exponent ρ.
 
     Base: R^m_{0,0,0} = (-2ρ)^m F_m(T), where T = ρ|RPC|²
@@ -133,15 +133,29 @@ def _hermite_coulomb(rho, RPC, max_t=_MAX_T, max_m=_MAX_M):
     ``max_t``/``max_m`` default to the global g-type cap but are passed smaller
     per-molecule for speed. Uses lax.fori_loop over m (reverse) with vectorized
     (t, u, v) operations.
+
+    ``omega`` (a static float or None) switches the kernel from ``1/r₁₂`` to
+    the long-range ``erf(ω·r₁₂)/r₁₂``: with ``s = ω²/(ω² + ρ)`` the Boys base
+    row becomes ``s^{m+1/2}·F_m(s·T)`` (all recurrences and prefactors are
+    unchanged). This is the single change point for every range-separated
+    integral: eri2c, eri3c and eri4c all route through here.
     """
     T = rho * jnp.sum(RPC ** 2)
 
     R = jnp.zeros((max_m, max_t, max_t, max_t))
 
-    # Base case: R^m_{0,0,0} = (-2ρ)^m F_m(T)
+    # Base case: R^m_{0,0,0} = (-2ρ)^m F_m(T), attenuated for erf(ωr)/r.
     neg2rho = -2.0 * rho
-    boys_vals = jnp.array([boys(m, T) for m in range(max_m)])
-    powers = neg2rho ** jnp.arange(max_m)
+    m_idx = jnp.arange(max_m)
+    if omega is None:
+        boys_vals = jnp.array([boys(m, T) for m in range(max_m)])
+    else:
+        s = (omega * omega) / (omega * omega + rho)
+        boys_vals = (
+            s ** (m_idx + 0.5)
+            * jnp.array([boys(m, s * T) for m in range(max_m)])
+        )
+    powers = neg2rho ** m_idx
     R = R.at[:, 0, 0, 0].set(powers * boys_vals)
 
     # Index arrays for vectorized operations
@@ -204,15 +218,18 @@ def _eri3c_sizes(basis, aux_basis):
     """
     L_orb = int(basis.max_l)
     L_aux = int(aux_basis.max_l)
-    L = max(L_orb, L_aux)
-    if L > 4:
+    if L_orb > 4:
         raise ValueError(
-            f"eri3c supports angular momentum up to g (l=4); got max l={L} "
-            f"(orbital l={L_orb}, auxiliary l={L_aux}). Auxiliary h functions "
-            f"(e.g. def2-universal-jkfit on heavier elements) are not yet supported."
+            f"eri3c supports orbital angular momentum up to g (l=4); got "
+            f"l={L_orb}."
+        )
+    if L_aux > 6:
+        raise ValueError(
+            f"eri3c supports auxiliary angular momentum up to i (l=6, the "
+            f"def2-universal-jkfit maximum); got l={L_aux}."
         )
     mt = 2 * L_orb + L_aux + 1
-    return L + 1, mt, mt
+    return max(L_orb, L_aux) + 1, mt, mt
 
 
 # Target element count for a fused 3-center intermediate. One contracted (bra, aux)
@@ -239,7 +256,7 @@ def _eri3c_build_chunk(basis, aux_basis) -> int:
 
 
 def _eri3c_primitive(alpha, A, ang_a, beta, B, ang_b, gamma_c, C, ang_c,
-                     max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M):
+                     max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M, omega=None):
     """3-center ERI (ab|c) for a single set of primitive GTOs.
 
     Args:
@@ -248,6 +265,8 @@ def _eri3c_primitive(alpha, A, ang_a, beta, B, ang_b, gamma_c, C, ang_c,
         gamma_c, C, ang_c: exponent, center (3,), angular (3,) for auxiliary c
         max_l, max_t, max_m: recursion sizes (per-molecule; default = g cap).
             See :func:`_eri3c_sizes`.
+        omega: None for the Coulomb kernel, a float for ``erf(ω·r₁₂)/r₁₂``
+            (see :func:`_hermite_coulomb`).
     """
     gamma_ab = alpha + beta
     safe_gab = jnp.where(gamma_ab == 0.0, 1.0, gamma_ab)
@@ -273,7 +292,7 @@ def _eri3c_primitive(alpha, A, ang_a, beta, B, ang_b, gamma_c, C, ang_c,
     Ez_c = _single_center_E_1d(ang_c[2], gamma_c, max_l, max_t)
 
     # Hermite Coulomb integrals with reduced exponent
-    R = _hermite_coulomb(rho, PC, max_t, max_m)
+    R = _hermite_coulomb(rho, PC, max_t, max_m, omega)
 
     # Combined E-coefficients via convolution with sign factor (-1)^τ
     # F_x[s] = Σ_{t+τ=s} E^{ab}_t · E^c_τ · (-1)^τ
@@ -294,7 +313,7 @@ def _eri3c_primitive(alpha, A, ang_a, beta, B, ang_b, gamma_c, C, ang_c,
 def _contracted_eri3c(alpha_a, coeff_a, center_a, ang_a,
                       alpha_b, coeff_b, center_b, ang_b,
                       alpha_c, coeff_c, center_c, ang_c,
-                      max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M):
+                      max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M, omega=None):
     """Contracted 3-center ERI summed over all primitive triples.
 
     ``max_l``/``max_t``/``max_m`` are the per-molecule recursion sizes from
@@ -307,7 +326,7 @@ def _contracted_eri3c(alpha_a, coeff_a, center_a, ang_a,
                         * _eri3c_primitive(a_exp, center_a, ang_a,
                                            b_exp, center_b, ang_b,
                                            c_exp, center_c, ang_c,
-                                           max_l, max_t, max_m))
+                                           max_l, max_t, max_m, omega))
             return jnp.sum(jax.vmap(_prim_c)(alpha_c, coeff_c))
         return jnp.sum(jax.vmap(_prim_b)(alpha_b, coeff_b))
     return jnp.sum(jax.vmap(_prim_a)(alpha_a, coeff_a))
@@ -320,6 +339,7 @@ def _contracted_eri3c(alpha_a, coeff_a, center_a, ang_a,
 def eri3c_matrix(
     basis: BasisData,
     aux_basis: BasisData,
+    omega: float | None = None,
 ) -> Float[Array, "nao nao n_aux"]:
     """Compute 3-center ERI tensor (μν|P) in the AO basis.
 
@@ -328,6 +348,8 @@ def eri3c_matrix(
     Args:
         basis: BasisData for primary AO basis (from extract_basis_data(mol)).
         aux_basis: BasisData for auxiliary basis (from extract_basis_data(auxmol)).
+        omega: None for the Coulomb kernel, a float for the long-range
+            ``erf(ω·r₁₂)/r₁₂`` kernel (range-separated hybrids).
 
     Returns:
         (μν|P) tensor, shape (nao, nao, n_aux) in spherical harmonics.
@@ -342,7 +364,7 @@ def eri3c_matrix(
             basis.centers[j], basis.angular[j],
             aux_basis.exponents[k], aux_basis.coefficients[k],
             aux_basis.centers[k], aux_basis.angular[k],
-            ml, mt, mm,
+            ml, mt, mm, omega,
         )
 
     n_prim = basis.centers.shape[0]

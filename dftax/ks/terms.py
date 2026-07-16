@@ -65,11 +65,13 @@ class DFSpec:
     """Density-fitting (RI-J/RI-K) backend (see :func:`df`).
 
     ``auxbasis`` is a basis-set name at the public constructors and an already
-    built :class:`~dftax.energy.gto.BasisData` once resolved.
+    built :class:`~dftax.energy.gto.BasisData` once resolved. ``chunk`` may be
+    the string ``"auto"`` until the KS constructor resolves it against the
+    system size (materialized vs streamed by memory budget).
     """
 
-    auxbasis: str | BasisData
-    chunk: int | None = None
+    auxbasis: str | BasisData = "def2-universal-jkfit"
+    chunk: int | str | None = "auto"
     screen: float | None = None
 
 
@@ -91,31 +93,40 @@ def exact(*, screen: float | None = None, stream: bool = False) -> ExactSpec:
 
 
 def df(
-    auxbasis: str | BasisData,
+    auxbasis: str | BasisData = "def2-universal-jkfit",
     *,
-    chunk: int | None = None,
+    chunk: int | str | None = "auto",
     screen: float | None = None,
 ) -> DFSpec:
     """Density-fitted (RI) Coulomb/exchange with the given auxiliary basis.
 
+    This is the KS default backend (O(N³) memory; RI error sub-mHa with a
+    JK-fitting set); :func:`exact` remains available for small systems and
+    reference comparisons.
+
     Args:
-        auxbasis: JK-fitting auxiliary basis name (e.g.
-            ``"def2-universal-jkfit"``), or an already built ``BasisData``.
-        chunk: if set, stream RI-J (and RI-K for hybrids) over auxiliary
-            chunks of this size instead of materializing the nao²×naux tensor.
+        auxbasis: JK-fitting auxiliary basis name (default
+            ``"def2-universal-jkfit"``, the universal set covering any orbital
+            basis), or an already built ``BasisData``.
+        chunk: RI memory strategy. ``"auto"`` (default) materializes the
+            nao²×naux 3-center tensor when it fits a memory budget and
+            otherwise streams RI-J/RI-K over budget-derived auxiliary chunks;
+            ``None`` forces the materialized tensor; an int streams with
+            exactly that chunk.
         screen: Schwarz threshold restricting the streamed RI-J bra sum to
-            significant pairs; requires ``chunk``.
+            significant pairs; requires an explicit int ``chunk``.
 
     Example:
         ```python
-        KS(mol, xc, coulomb=df("def2-universal-jkfit"))            # materialized
+        KS(mol, xc)                                    # same as coulomb=df()
+        KS(mol, xc, coulomb=df(chunk=None))            # force materialized
         KS(mol, xc, coulomb=df("def2-universal-jkfit", chunk=64))  # streamed
         ```
     """
-    if screen is not None and chunk is None:
+    if screen is not None and not isinstance(chunk, int):
         raise ValueError(
-            "df(screen=...) requires chunk: Schwarz pair screening applies "
-            "only to the streamed RI-J contraction."
+            "df(screen=...) requires an explicit int chunk: Schwarz pair "
+            "screening applies only to the streamed RI-J contraction."
         )
     return DFSpec(auxbasis=auxbasis, chunk=chunk, screen=screen)
 
@@ -128,6 +139,19 @@ def df(
 def _metric_pinv(V: Float[Array, "naux naux"]) -> Float[Array, "naux naux"]:
     """Symmetric pseudo-inverse of the RI Coulomb metric, dropping directions below a
     1e-7 relative eigenvalue cutoff (see the caller in ``_build_integrals``).
+
+    The hard cutoff is deliberate; smooth spectral filters were measured and
+    rejected. Comparisons of density-fitted forces across independently
+    converged solves differ at ~2e-6 Ha/Bohr (GPU vs CPU, batched vs serial);
+    that is d_tol-level density difference amplified through the
+    ill-conditioned auxiliary directions, not filter noise: at a matched
+    density the paths agree to 5e-15. Tikhonov filters w/(w² + σ²) trade
+    strictly worse: σ = 1e-7·w_max damps the fit-relevant band of a redundant
+    h/i auxiliary metric (Fe/jkfit RI error 1.7 -> 16 mHa), σ = 1e-9·w_max
+    lets the Schwarz-screening perturbation through (screened-vs-dense RI-J
+    1.5e-8 Ha), and the σ = 1e-8·w_max middle ground degrades cross-backend
+    force reproducibility 126x (3.3e-6 -> 4.2e-4) by re-admitting near-null
+    modes whose eigenvectors rotate under backend rounding.
 
     Wrapped in a ``custom_jvp`` so its derivative uses the matrix identity
     ``d(V⁺) = -V⁺ (dV) V⁺`` rather than differentiating the eigendecomposition. eigh's
@@ -165,16 +189,22 @@ def _streamed_e_xc(xc, basis, coords, weights, P, chunk):
     nan-safe density threshold mirrors ``grid.xc_energy``.
     """
     gga = xc.xc_type == "GGA"
+    mgga = xc.xc_type == "MGGA"
 
     def point(r, w):
         ao_g = eval_gto(basis, r)                       # (nao,)
         rho = ao_g @ P @ ao_g
         mask = rho > 1e-10
         safe_rho = jnp.where(mask, rho, 1.0)
-        if gga:
+        if gga or mgga:
             dao_g = jax.jacfwd(eval_gto, argnums=1)(basis, r)   # (nao, 3)
             grad = 2.0 * (ao_g @ P) @ dao_g             # (3,)
-            eps = xc(safe_rho, jnp.where(mask, grad, 0.0))
+            if mgga:
+                tau = 0.5 * jnp.einsum("mx,mn,nx->", dao_g, P, dao_g)
+                eps = xc(safe_rho, jnp.where(mask, grad, 0.0),
+                         jnp.where(mask, tau, 1.0))
+            else:
+                eps = xc(safe_rho, jnp.where(mask, grad, 0.0))
         else:
             eps = xc(safe_rho)
         return jnp.where(mask, w * eps * rho, 0.0)
@@ -196,6 +226,7 @@ def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk):
     negative channel does not blow up ``ρ_σ^{1/3}`` / the reduced gradient).
     """
     gga = xc.xc_type == "GGA"
+    mgga = xc.xc_type == "MGGA"
 
     def point(r, w):
         ao = eval_gto(basis, r)                                 # (nao,)
@@ -206,11 +237,18 @@ def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk):
         ta = rho_a > 1e-10
         tb = rho_b > 1e-10
         rho2 = jnp.stack([jnp.where(ta, rho_a, 1e-10), jnp.where(tb, rho_b, 1e-10)])   # (2,)
-        if gga:
+        if gga or mgga:
             dao = jax.jacfwd(eval_gto, argnums=1)(basis, r)     # (nao, 3)
             ga = jnp.where(ta, 2.0 * (ao @ Pa) @ dao, 0.0)      # (3,)
             gb = jnp.where(tb, 2.0 * (ao @ Pb) @ dao, 0.0)
-            eps = xc(rho2, jnp.stack([ga, gb], axis=-1))        # grad (3, 2)
+            if mgga:
+                tau2 = jnp.stack([
+                    jnp.where(ta, 0.5 * jnp.einsum("mx,mn,nx->", dao, Pa, dao), 1e-10),
+                    jnp.where(tb, 0.5 * jnp.einsum("mx,mn,nx->", dao, Pb, dao), 1e-10),
+                ])                                              # (2,)
+                eps = xc(rho2, jnp.stack([ga, gb], axis=-1), tau2)
+            else:
+                eps = xc(rho2, jnp.stack([ga, gb], axis=-1))    # grad (3, 2)
         else:
             eps = xc(rho2)
         return jnp.where(mask, w * eps * rho_tot, 0.0)
@@ -455,10 +493,17 @@ class CoulombTerm(eqx.Module):
 
 
 class ExactCoulomb(CoulombTerm):
-    """Materialized exact 4-center ERI backend: ``J/K`` by direct contraction."""
+    """Materialized exact 4-center ERI backend: ``J/K`` by direct contraction.
+
+    For range-separated hybrids, ``eri_lr`` holds the ``erf(ω·r₁₂)/r₁₂``
+    tensor and ``hf_coeff_lr`` the long-range exchange fraction:
+    ``K_hf = hf_coeff·K + hf_coeff_lr·K_lr``.
+    """
 
     eri: Float[Array, "nao nao nao nao"]
     hf_coeff: float = eqx.field(static=True)
+    eri_lr: Float[Array, "nao nao nao nao"] | None = None
+    hf_coeff_lr: float = eqx.field(static=True, default=0.0)
 
     def energy(self, P, S, nocc):
         Ptot = jnp.sum(P, axis=0)
@@ -467,6 +512,11 @@ class ExactCoulomb(CoulombTerm):
         if self.hf_coeff != 0.0:
             e = e + _exchange_quadratic(
                 lambda Q: jnp.einsum("ikjl,kl->ij", self.eri, Q), P, self.hf_coeff
+            )
+        if self.hf_coeff_lr != 0.0:
+            e = e + _exchange_quadratic(
+                lambda Q: jnp.einsum("ikjl,kl->ij", self.eri_lr, Q),
+                P, self.hf_coeff_lr,
             )
         return e
 
@@ -489,11 +539,20 @@ class StreamedExactCoulomb(CoulombTerm):
 
 
 class DFCoulomb(CoulombTerm):
-    """Materialized density fitting: robust Dunlap RI-J (+ RI-K for hybrids)."""
+    """Materialized density fitting: robust Dunlap RI-J (+ RI-K for hybrids).
+
+    For range-separated hybrids, ``int3c_lr``/``int2c_inv_lr`` hold the
+    ``erf(ω·r₁₂)/r₁₂``-metric fit (the standard RI treatment of the
+    long-range operator: both the 3-center integrals and the metric are
+    attenuated) and ``hf_coeff_lr`` the long-range exchange fraction.
+    """
 
     int3c: Float[Array, "nao nao naux"]
     int2c_inv: Float[Array, "naux naux"]
     hf_coeff: float = eqx.field(static=True)
+    int3c_lr: Float[Array, "nao nao naux"] | None = None
+    int2c_inv_lr: Float[Array, "naux naux"] | None = None
+    hf_coeff_lr: float = eqx.field(static=True, default=0.0)
 
     def energy(self, P, S, nocc):
         Ptot = jnp.sum(P, axis=0)
@@ -506,6 +565,15 @@ class DFCoulomb(CoulombTerm):
                 ),
                 P,
                 self.hf_coeff,
+            )
+        if self.hf_coeff_lr != 0.0:
+            e = e + _exchange_quadratic(
+                lambda Q: jnp.einsum(
+                    "mlP,PQ,nsQ,ls->mn",
+                    self.int3c_lr, self.int2c_inv_lr, self.int3c_lr, Q,
+                ),
+                P,
+                self.hf_coeff_lr,
             )
         return e
 
@@ -538,7 +606,7 @@ class ShardedDFCoulomb(CoulombTerm):
 
     def energy(self, P, S, nocc):
         import numpy as np
-        from jax.experimental.shard_map import shard_map
+        from jax import shard_map
 
         jmesh = jax.sharding.Mesh(np.asarray(self.devices), ("aux",))
         spec = jax.sharding.PartitionSpec
@@ -575,13 +643,13 @@ class ShardedDFCoulomb(CoulombTerm):
                 return e - 0.25 * ax * tr_pkp(Pst[0])
             return e - 0.5 * ax * (tr_pkp(Pst[0]) + tr_pkp(Pst[1]))
 
-        # check_rep=False: the static replication checker cannot prove the
+        # check_vma=False: the static replication checker cannot prove the
         # post-all_gather value is replicated (it is; every device computes
         # the identical quadratic form after the gather).
         return shard_map(
             part, mesh=jmesh,
             in_specs=(spec(None, None, "aux"), spec(), spec(), spec()),
-            out_specs=spec(), check_rep=False,
+            out_specs=spec(), check_vma=False,
         )(self.int3c, self.int2c_inv, Lf, P)
 
 
@@ -653,9 +721,18 @@ class GridXC(XCTerm):
         grad_rho = 2.0 * jnp.einsum("gm,mn,gnx->gx", self.ao, P, self.dao)
         return rho, grad_rho
 
+    def _tau(self, P: Float[Array, "nao nao"]) -> Float[Array, "ng"]:
+        """Kinetic-energy density ``τ = ½ Σ_ij P_ij ∇φ_i·∇φ_j`` on the grid."""
+        return 0.5 * jnp.einsum("gmx,mn,gnx->g", self.dao, P, self.dao)
+
     def energy(self, P):
         if P.shape[0] == 1:
             rho, grad_rho = self.density(P)
+            if self.xc.xc_type == "MGGA":
+                return xc_energy(
+                    self.xc, rho, self.weights, grad_rho=grad_rho,
+                    tau=self._tau(P[0]),
+                )
             gr = grad_rho if self.xc.xc_type == "GGA" else None
             return xc_energy(self.xc, rho, self.weights, grad_rho=gr)
 
@@ -676,7 +753,18 @@ class GridXC(XCTerm):
         rho_stack = jnp.stack(
             [jnp.where(ta, rho_a, 1e-10), jnp.where(tb, rho_b, 1e-10)], axis=-1
         )                                                          # (ng, 2)
-        if self.xc.xc_type == "GGA":
+        if self.xc.xc_type == "MGGA":
+            grad_a = jnp.where(ta[:, None], grad_a, 0.0)
+            grad_b = jnp.where(tb[:, None], grad_b, 0.0)
+            grad_stack = jnp.stack([grad_a, grad_b], axis=-1)      # (ng, 3, 2)
+            tau_stack = jnp.stack(
+                [jnp.where(ta, self._tau(P[0]), 1e-10),
+                 jnp.where(tb, self._tau(P[1]), 1e-10)], axis=-1,
+            )                                                      # (ng, 2)
+            eps = xc_potential(
+                self.xc, rho_stack, grad_rho=grad_stack, tau=tau_stack
+            )
+        elif self.xc.xc_type == "GGA":
             grad_a = jnp.where(ta[:, None], grad_a, 0.0)
             grad_b = jnp.where(tb[:, None], grad_b, 0.0)
             grad_stack = jnp.stack([grad_a, grad_b], axis=-1)      # (ng, 3, 2)
@@ -723,7 +811,7 @@ class ShardedGridXC(XCTerm):
 
     def energy(self, P):
         import numpy as np
-        from jax.experimental.shard_map import shard_map
+        from jax import shard_map
 
         jmesh = jax.sharding.Mesh(np.asarray(self.devices), ("grid",))
         spec = jax.sharding.PartitionSpec
@@ -760,8 +848,15 @@ class ShardedGridXC(XCTerm):
 # Term construction from a resolved spec + built integral arrays
 # ---------------------------------------------------------------------------
 
-def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff):
-    """Wrap the integral arrays built for ``spec`` into the matching Coulomb term."""
+def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
+                  eri_lr=None, int3c_lr=None, int2c_inv_lr=None,
+                  hf_coeff_lr=0.0):
+    """Wrap the integral arrays built for ``spec`` into the matching Coulomb term.
+
+    ``hf_coeff_lr`` (with the ``*_lr`` attenuated tensors) is the long-range
+    exchange fraction of a range-separated hybrid; only the materialized
+    backends support it.
+    """
     if isinstance(spec, DFSpec):
         if not isinstance(spec.auxbasis, BasisData):
             raise TypeError(
@@ -769,11 +864,28 @@ def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff):
                 "the public constructors resolve basis-set names."
             )
         if spec.chunk is not None:
+            if hf_coeff_lr != 0.0:
+                raise NotImplementedError(
+                    "range-separated hybrids need the materialized DF "
+                    "backend: use df(chunk=None) (the streamed RI-K has no "
+                    "long-range variant yet)."
+                )
             return StreamedDFCoulomb(
                 basis=basis, aux_basis=spec.auxbasis, int2c_inv=int2c_inv,
                 pairs=pairs, chunk=spec.chunk, hf_coeff=hf_coeff,
             )
-        return DFCoulomb(int3c=int3c, int2c_inv=int2c_inv, hf_coeff=hf_coeff)
+        return DFCoulomb(
+            int3c=int3c, int2c_inv=int2c_inv, hf_coeff=hf_coeff,
+            int3c_lr=int3c_lr, int2c_inv_lr=int2c_inv_lr,
+            hf_coeff_lr=hf_coeff_lr,
+        )
     if spec.stream:
+        if hf_coeff_lr != 0.0:
+            raise NotImplementedError(
+                "range-separated hybrids need a materialized backend: use "
+                "exact() or df(chunk=None), not exact(stream=True)."
+            )
         return StreamedExactCoulomb(basis=basis, hf_coeff=hf_coeff)
-    return ExactCoulomb(eri=eri, hf_coeff=hf_coeff)
+    return ExactCoulomb(
+        eri=eri, hf_coeff=hf_coeff, eri_lr=eri_lr, hf_coeff_lr=hf_coeff_lr
+    )

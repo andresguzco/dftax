@@ -2,9 +2,11 @@
 
 import abc
 import equinox as eqx
+import jax
 
 from jax import numpy as jnp
 from jax import Array
+from jax.scipy.special import erf as _jerf
 from typing import ClassVar
 from jaxtyping import Float, Scalar
 
@@ -41,6 +43,12 @@ class XCFunctional(DensityFunctional):
     exchange: eqx.AbstractClassVar[DensityFunctional]
     correlation: eqx.AbstractClassVar[DensityFunctional]
     hf_coeff: ClassVar[float] = 0.0
+    # Range-separated hybrids: the exact-exchange split is
+    # K_hf = hf_coeff·K + hf_coeff_lr·K_lr(omega), with K_lr built from
+    # erf(ω·r₁₂)/r₁₂ integrals (see dftax.ks.terms). Both are 0 for global
+    # hybrids and pure functionals.
+    hf_coeff_lr: ClassVar[float] = 0.0
+    omega: ClassVar[float] = 0.0
 
     def __call__(self, *args: ScalarFeature | VectorFeature) -> Scalar:
         return self.exchange(*args) + self.correlation(*args)
@@ -581,4 +589,477 @@ class PBE0(XCFunctional):
     def __call__(self, density: ScalarFeature, grad_density: VectorFeature) -> Scalar:
         return 0.75 * self.exchange(density, grad_density) + self.correlation(
             density, grad_density
+        )
+
+
+# ---------------------------------------------------------------------------
+#  Range-separated hybrids: erf attenuation, PW92, SR-B88 (ITYH), B97 series
+# ---------------------------------------------------------------------------
+
+
+def _erf_attenuation(a: Scalar) -> Scalar:
+    """Short-range fraction ``F(a)`` of an erfc-attenuated exchange hole.
+
+    ``F(a) = 1 - (8/3)·a·[√π·erf(1/2a) - 3a + 4a³ + (2a - 4a³)·e^{-1/(4a²)}]``
+    (Gill/Adamson; the common kernel of SR-LDA exchange and the ITYH SR-GGA
+    scheme). The direct form loses ~a⁶ digits to cancellation as a grows, so
+    beyond ``a = 8`` the asymptote ``F → 1/(36a²)`` takes over (relative
+    switch error ~1e-4 there, in a region reached only by masked ρ→0 points).
+    Both branches are evaluated clamped to their own region so the unused
+    branch cannot inject NaNs through autodiff (the boys.py double-``where``
+    pattern).
+    """
+    a = jnp.clip(a, 1e-10)
+    a_small = jnp.minimum(a, 8.0)
+    direct = 1.0 - (8.0 / 3.0) * a_small * (
+        jnp.sqrt(jnp.pi) * _jerf(1.0 / (2.0 * a_small))
+        - 3.0 * a_small
+        + 4.0 * a_small**3
+        + (2.0 * a_small - 4.0 * a_small**3)
+        * jnp.exp(-1.0 / (4.0 * a_small**2))
+    )
+    asym = 1.0 / (36.0 * jnp.maximum(a, 8.0) ** 2)
+    return jnp.where(a < 8.0, direct, asym)
+
+
+class PW92Correlation(DensityFunctional):
+    """Perdew-Wang 1992 LSDA correlation (the B97 family's LSDA backbone).
+
+    ``ε_c(r_s, ζ) = ε_0 - α_c·f(ζ)/f''(0)·(1-ζ⁴) + (ε_1-ε_0)·f(ζ)·ζ⁴`` with
+    the three G-function fits of PW92 (the parameters fit −α_c, hence the
+    sign). Validated against ``libxc LDA_C_PW`` to ~4e-10 (libxc carries one
+    more digit on the A constants).
+    """
+
+    name: ClassVar[str] = "PW92"
+    xc_type: ClassVar[str] = "LDA"
+
+    @staticmethod
+    def _G(rs, A, a1, b1, b2, b3, b4):
+        srs = jnp.sqrt(rs)
+        den = 2.0 * A * (b1 * srs + b2 * rs + b3 * rs * srs + b4 * rs * rs)
+        return -2.0 * A * (1.0 + a1 * rs) * jnp.log1p(1.0 / jnp.clip(den, 1e-30))
+
+    @staticmethod
+    def eps(rho_a: Scalar, rho_b: Scalar) -> Scalar:
+        """ε_c per electron for one (ρ_α, ρ_β) point."""
+        ra = jnp.clip(rho_a, 0.0)
+        rb = jnp.clip(rho_b, 0.0)
+        rho = jnp.clip(ra + rb, 1e-20)
+        zeta = jnp.clip((ra - rb) / rho, -1.0, 1.0)
+        rs = (3.0 / (4.0 * jnp.pi * rho)) ** (1.0 / 3.0)
+        ec0 = PW92Correlation._G(rs, 0.031091, 0.21370, 7.5957, 3.5876, 1.6382, 0.49294)
+        ec1 = PW92Correlation._G(rs, 0.015545, 0.20548, 14.1189, 6.1977, 3.3662, 0.62517)
+        mac = PW92Correlation._G(rs, 0.016887, 0.11125, 10.357, 3.6231, 0.88026, 0.49671)
+        fz = ((1.0 + zeta) ** (4.0 / 3.0) + (1.0 - zeta) ** (4.0 / 3.0) - 2.0) / (
+            2.0 ** (4.0 / 3.0) - 2.0
+        )
+        d2f0 = 4.0 / (9.0 * (2.0 ** (1.0 / 3.0) - 1.0))
+        return ec0 - mac * fz * (1.0 - zeta**4) / d2f0 + (ec1 - ec0) * fz * zeta**4
+
+    def __call__(self, density: ScalarFeature) -> Scalar:
+        if _has_spin(density):
+            n_up, n_dn = jnp.unstack(density, axis=-1)
+            return self.eps(n_up, n_dn)
+        return self.eps(density / 2.0, density / 2.0)
+
+
+class ITYHB88Exchange(DensityFunctional):
+    """Short-range B88 exchange via the ITYH scheme at ω = 0.33 (CAM-B3LYP).
+
+    Per spin: ``ε_x^{sr} = ε_x^{B88}·F(a_σ)`` with the GGA-adapted momentum
+    ``a_σ = ω·√K_σ / (6√π·ρ_σ^{1/3})``, ``K_σ = -2·ε_x^{B88}/ρ_σ^{1/3}``
+    (Iikura-Tsuneda-Yanai-Hirao 2001). Matches ``libxc GGA_X_ITYH`` at
+    ω = 0.33 to machine precision.
+    """
+
+    name: ClassVar[str] = "ITYH-B88"
+    xc_type: ClassVar[str] = "GGA"
+    omega: ClassVar[float] = 0.33
+
+    @classmethod
+    def _per_spin(cls, rho_s, grad_norm_s):
+        rho_s = jnp.clip(rho_s, 1e-20)
+        eps = B88Exchange._per_spin(rho_s, grad_norm_s)      # < 0
+        K = jnp.clip(-2.0 * eps / rho_s ** (1.0 / 3.0), 1e-20)
+        a = cls.omega * jnp.sqrt(K) / (6.0 * jnp.sqrt(jnp.pi) * rho_s ** (1.0 / 3.0))
+        return eps * _erf_attenuation(a)
+
+    def __call__(self, density: ScalarFeature, grad_density: VectorFeature) -> Scalar:
+        if _has_spin(density):
+            n_up, n_dn = jnp.unstack(density, axis=-1)
+            grad_up, grad_dn = jnp.unstack(grad_density, axis=-1)
+            gn_up = jnp.linalg.norm(grad_up + 1e-30, axis=-1)
+            gn_dn = jnp.linalg.norm(grad_dn + 1e-30, axis=-1)
+            n_tot = jnp.clip(n_up + n_dn, 1e-20)
+            return (n_up / n_tot) * self._per_spin(n_up, gn_up) + (
+                n_dn / n_tot
+            ) * self._per_spin(n_dn, gn_dn)
+        grad_norm = jnp.linalg.norm(grad_density + 1e-30, axis=-1)
+        return self._per_spin(density / 2.0, grad_norm / 2.0)
+
+
+class CAMB3LYP(XCFunctional):
+    """CAM-B3LYP (Yanai-Tew-Handy 2004) range-separated hybrid.
+
+    DFT part (identified against libxc ``HYB_GGA_XC_CAM_B3LYP`` to machine
+    precision): ``0.35·B88 + 0.46·SR-B88(ITYH, ω=0.33) + 0.81·LYP +
+    0.19·VWN5``. Exact exchange: ``0.19·K + 0.46·K_lr(ω=0.33)`` (PySCF
+    ``rsh_coeff`` convention (0.33, 0.65, -0.46) re-expressed as
+    full-range + long-range).
+    """
+
+    name: ClassVar[str] = "CAM-B3LYP"
+    xc_type: ClassVar[str] = "GGA"
+    hf_coeff: ClassVar[float] = 0.19
+    hf_coeff_lr: ClassVar[float] = 0.46
+    omega: ClassVar[float] = 0.33
+
+    exchange: ClassVar[DensityFunctional] = B88Exchange()
+    correlation: ClassVar[DensityFunctional] = LYPCorrelation()
+
+    _b88: ClassVar[DensityFunctional] = B88Exchange()
+    _sr_b88: ClassVar[DensityFunctional] = ITYHB88Exchange()
+    _lyp: ClassVar[DensityFunctional] = LYPCorrelation()
+    _vwn5: ClassVar[DensityFunctional] = VWN5Correlation()
+
+    def __call__(self, density: ScalarFeature, grad_density: VectorFeature) -> Scalar:
+        return (
+            0.35 * self._b88(density, grad_density)
+            + 0.46 * self._sr_b88(density, grad_density)
+            + 0.81 * self._lyp(density, grad_density)
+            + 0.19 * self._vwn5(density)
+        )
+
+
+class _B97Pieces:
+    """Shared machinery for the wB97X power series (Chai-Head-Gordon 2008).
+
+    Every piece is an *energy density* per spin assembled from
+    ``u = γ·s²/(1+γ·s²)`` enhancement series over the SR-LDA exchange and the
+    Stoll-partitioned PW92 correlation. The series coefficients below were
+    recovered from ``libxc HYB_GGA_XC_WB97X`` by exact linear fit
+    (residual ~1e-10) and equal the published wB97X parameters.
+    """
+
+    GAMMA_X: ClassVar[float] = 0.004
+    GAMMA_SS: ClassVar[float] = 0.2
+    GAMMA_AB: ClassVar[float] = 0.006
+
+    @staticmethod
+    def u(s2, gamma):
+        return gamma * s2 / (1.0 + gamma * s2)
+
+    @staticmethod
+    def series(u, coeffs):
+        acc = coeffs[0] * jnp.ones_like(u)
+        up = u
+        for c in coeffs[1:]:
+            acc = acc + c * up
+            up = up * u
+        return acc
+
+    @staticmethod
+    def ex_sr_lda_density(rho_s, omega):
+        """SR-LDA exchange energy *density* of one spin channel."""
+        rho_s = jnp.clip(rho_s, 1e-20)
+        kF = (6.0 * jnp.pi**2 * rho_s) ** (1.0 / 3.0)
+        C_sigma = (3.0 / 4.0) * (6.0 / jnp.pi) ** (1.0 / 3.0)
+        return rho_s * (-C_sigma * rho_s ** (1.0 / 3.0)) * _erf_attenuation(
+            omega / (2.0 * kF)
+        )
+
+
+class WB97X(XCFunctional):
+    """ωB97X (Chai-Head-Gordon 2008) range-separated hybrid GGA.
+
+    Exchange: B97 series over SR-LDA (ω = 0.3); correlation: B97 series over
+    Stoll-partitioned PW92 (same-spin / opposite-spin). Exact exchange:
+    ``0.157706·K + 0.842294·K_lr(ω=0.3)``. The series coefficients match
+    libxc ``HYB_GGA_XC_WB97X`` (recovered by exact linear fit, residual
+    ~1e-10) and the published parameters.
+    """
+
+    name: ClassVar[str] = "wB97X"
+    xc_type: ClassVar[str] = "GGA"
+    hf_coeff: ClassVar[float] = 0.157706
+    hf_coeff_lr: ClassVar[float] = 0.842294
+    omega: ClassVar[float] = 0.3
+
+    CX: ClassVar[tuple] = (0.842294, 0.726479, 1.04760, -5.70635, 13.2794)
+    CSS: ClassVar[tuple] = (1.0, -4.33879, 18.2308, -31.7430, 17.2901)
+    CAB: ClassVar[tuple] = (1.0, 2.37031, -11.3995, 6.58405, -3.78132)
+
+    # Interface stubs (assembly happens in the weighted __call__ below).
+    exchange: ClassVar[DensityFunctional] = LDAExchange()
+    correlation: ClassVar[DensityFunctional] = PW92Correlation()
+
+    @classmethod
+    def _energy_density(cls, rho_a, rho_b, gn_a, gn_b):
+        """Total XC energy density from per-spin (ρ, |∇ρ|)."""
+        P = _B97Pieces
+        rho_a = jnp.clip(rho_a, 1e-20)
+        rho_b = jnp.clip(rho_b, 1e-20)
+        s2a = (gn_a / rho_a ** (4.0 / 3.0)) ** 2
+        s2b = (gn_b / rho_b ** (4.0 / 3.0)) ** 2
+
+        ex = P.ex_sr_lda_density(rho_a, cls.omega) * P.series(
+            P.u(s2a, P.GAMMA_X), cls.CX
+        ) + P.ex_sr_lda_density(rho_b, cls.omega) * P.series(
+            P.u(s2b, P.GAMMA_X), cls.CX
+        )
+
+        # Stoll partition of PW92: e_c^{σσ} = e_c(ρ_σ, 0); the αβ part is the
+        # remainder. Energy densities (ρ·ε).
+        ec_aa = rho_a * PW92Correlation.eps(rho_a, jnp.zeros_like(rho_a))
+        ec_bb = rho_b * PW92Correlation.eps(rho_b, jnp.zeros_like(rho_b))
+        ec_tot = (rho_a + rho_b) * PW92Correlation.eps(rho_a, rho_b)
+        ec_ab = ec_tot - ec_aa - ec_bb
+
+        css = ec_aa * P.series(P.u(s2a, P.GAMMA_SS), cls.CSS) + ec_bb * P.series(
+            P.u(s2b, P.GAMMA_SS), cls.CSS
+        )
+        cab = ec_ab * P.series(P.u(0.5 * (s2a + s2b), P.GAMMA_AB), cls.CAB)
+        return ex + css + cab
+
+    def __call__(self, density: ScalarFeature, grad_density: VectorFeature) -> Scalar:
+        if _has_spin(density):
+            n_up, n_dn = jnp.unstack(density, axis=-1)
+            grad_up, grad_dn = jnp.unstack(grad_density, axis=-1)
+            gn_up = jnp.linalg.norm(grad_up + 1e-30, axis=-1)
+            gn_dn = jnp.linalg.norm(grad_dn + 1e-30, axis=-1)
+            e_dens = self._energy_density(n_up, n_dn, gn_up, gn_dn)
+            return e_dens / jnp.clip(n_up + n_dn, 1e-20)
+        gn = jnp.linalg.norm(grad_density + 1e-30, axis=-1)
+        e_dens = self._energy_density(
+            density / 2.0, density / 2.0, gn / 2.0, gn / 2.0
+        )
+        return e_dens / jnp.clip(density, 1e-20
+        )
+
+
+# ---------------------------------------------------------------------------
+#  r2SCAN meta-GGA (Furness, Kaplan, Ning, Perdew, Sun, JPCL 11, 8208 (2020))
+# ---------------------------------------------------------------------------
+#
+# Ported from the libxc maple sources (mgga_x_r2scan.mpl / mgga_c_r2scan.mpl
+# and their SCAN/rSCAN includes); every branch validated against libxc via
+# PySCF to machine precision (exchange ~4e-16, correlation ~1e-16, closed and
+# spin-polarized). Note r2SCAN uses the *modified* PW92 constants.
+
+_R2S_ETA = 0.001
+_R2S_DP2 = 0.361
+_R2S_K1 = 0.065
+_R2S_H0X = 1.174
+_R2S_A1 = 4.9479
+_R2S_C1X, _R2S_C2X, _R2S_DXP = 0.667, 0.8, 1.24
+_R2S_C1C, _R2S_C2C, _R2S_DCP = 0.64, 1.5, 0.7
+# rSCAN switching polynomials, highest order first (c7 ... c0).
+_R2S_FX = (-0.023185843322, 0.234528941479, -0.887998041597, 1.451297044490,
+           -0.663086601049, -0.4445555, -0.667, 1.0)
+_R2S_FC = (-0.051848879792, 0.516884468372, -1.915710236206, 3.061560252175,
+           -1.535685604549, -0.4352, -0.64, 1.0)
+_R2S_GAMMA = 0.031090690869654895  # (1 - ln 2)/pi^2
+_R2S_B1C, _R2S_B2C, _R2S_B3C = 0.0285764, 0.0889, 0.125541
+_R2S_CHI_INF = 0.12802585262625815
+_R2S_G_CNST = 2.363
+_X2S = 1.0 / (2.0 * (6.0 * jnp.pi**2) ** (1.0 / 3.0))
+_XT2S = 1.0 / (2.0 * (3.0 * jnp.pi**2) ** (1.0 / 3.0))
+_K_FACTOR_C = 0.3 * (6.0 * jnp.pi**2) ** (2.0 / 3.0)
+_MU_GE = 10.0 / 81.0
+
+
+def _r2scan_f_alpha(a, ff, c1, c2, d):
+    """r2SCAN interpolation: exp (a<=0), 7th-order poly (0<a<=2.5), decay.
+
+    Each branch is evaluated clamped to its own region (the boys.py
+    double-``where`` pattern), so autodiff never sees the singular a -> 1
+    of the unused exponential branches.
+    """
+    a_neg = jnp.minimum(a, 0.0)
+    neg = jnp.exp(-c1 * a_neg / (1.0 - a_neg))
+    small = jnp.polyval(jnp.asarray(ff), jnp.clip(a, 0.0, 2.5))
+    a_big = jnp.maximum(a, 2.5 + 1e-12)
+    large = -d * jnp.exp(c2 / (1.0 - a_big))
+    return jnp.where(a <= 0.0, neg, jnp.where(a <= 2.5, small, large))
+
+
+class R2SCANExchange(DensityFunctional):
+    """r2SCAN exchange (spin-scaled per channel)."""
+
+    name: ClassVar[str] = "r2SCAN-X"
+    xc_type: ClassVar[str] = "MGGA"
+
+    @staticmethod
+    def _per_spin(rho_s, gn_s, tau_s):
+        rho_s = jnp.clip(rho_s, 1e-20)
+        xs = gn_s / rho_s ** (4.0 / 3.0)
+        ts = jnp.clip(tau_s, 0.0) / rho_s ** (5.0 / 3.0)
+        p = (_X2S * xs) ** 2
+        alpha = (ts - xs * xs / 8.0) / (_K_FACTOR_C + _R2S_ETA * xs * xs / 8.0)
+
+        Cn = 20.0 / 27.0 + _R2S_ETA * 5.0 / 3.0
+        # C2 = -sum_i i*c_i * (1 - h0x) over the switching polynomial.
+        idx = jnp.arange(1, 9)
+        C2 = -jnp.sum(idx * jnp.asarray(_R2S_FX)[8 - idx]) * (1.0 - _R2S_H0X)
+        y = (Cn * C2 * jnp.exp(-(p * p) / _R2S_DP2**4) + _MU_GE) * p
+        h1x = 1.0 + _R2S_K1 * y / (_R2S_K1 + y)
+        s = jnp.sqrt(jnp.clip(p, 1e-30))
+        gx = -jnp.expm1(-_R2S_A1 / jnp.sqrt(s))
+        fa = _r2scan_f_alpha(alpha, _R2S_FX, _R2S_C1X, _R2S_C2X, _R2S_DXP)
+        F = (h1x + fa * (_R2S_H0X - h1x)) * gx
+        eps_unif = (
+            -(3.0 / 4.0) * (6.0 / jnp.pi) ** (1.0 / 3.0) * rho_s ** (1.0 / 3.0)
+        )
+        return eps_unif * F
+
+    def __call__(self, density, grad_density, tau) -> Scalar:
+        if _has_spin(density):
+            n_up, n_dn = jnp.unstack(density, axis=-1)
+            grad_up, grad_dn = jnp.unstack(grad_density, axis=-1)
+            t_up, t_dn = jnp.unstack(tau, axis=-1)
+            gn_up = jnp.linalg.norm(grad_up + 1e-30, axis=-1)
+            gn_dn = jnp.linalg.norm(grad_dn + 1e-30, axis=-1)
+            n_tot = jnp.clip(n_up + n_dn, 1e-20)
+            return (n_up / n_tot) * self._per_spin(n_up, gn_up, t_up) + (
+                n_dn / n_tot
+            ) * self._per_spin(n_dn, gn_dn, t_dn)
+        gn = jnp.linalg.norm(grad_density + 1e-30, axis=-1)
+        return self._per_spin(density / 2.0, gn / 2.0, tau / 2.0)
+
+
+class R2SCANCorrelation(DensityFunctional):
+    """r2SCAN correlation (built on the modified-PW92 LSDA)."""
+
+    name: ClassVar[str] = "r2SCAN-C"
+    xc_type: ClassVar[str] = "MGGA"
+
+    @staticmethod
+    def _pw92_mod(rs, zeta):
+        def G(rs, A, a1, b1, b2, b3, b4):
+            srs = jnp.sqrt(rs)
+            den = 2.0 * A * (b1 * srs + b2 * rs + b3 * rs * srs + b4 * rs * rs)
+            return -2.0 * A * (1.0 + a1 * rs) * jnp.log1p(1.0 / jnp.clip(den, 1e-30))
+
+        ec0 = G(rs, 0.0310907, 0.21370, 7.5957, 3.5876, 1.6382, 0.49294)
+        ec1 = G(rs, 0.01554535, 0.20548, 14.1189, 6.1977, 3.3662, 0.62517)
+        mac = G(rs, 0.0168869, 0.11125, 10.357, 3.6231, 0.88026, 0.49671)
+        fz = (
+            (1.0 + zeta) ** (4.0 / 3.0) + (1.0 - zeta) ** (4.0 / 3.0) - 2.0
+        ) / (2.0 ** (4.0 / 3.0) - 2.0)
+        d2f0 = 4.0 / (9.0 * (2.0 ** (1.0 / 3.0) - 1.0))
+        return ec0 - mac * fz * (1.0 - zeta**4) / d2f0 + (ec1 - ec0) * fz * zeta**4
+
+    @staticmethod
+    def _eclda0(rs):
+        return -_R2S_B1C / (1.0 + _R2S_B2C * jnp.sqrt(rs) + _R2S_B3C * rs)
+
+    @staticmethod
+    def _Gc(zeta):
+        fz = (
+            (1.0 + zeta) ** (4.0 / 3.0) + (1.0 - zeta) ** (4.0 / 3.0) - 2.0
+        ) / (2.0 ** (4.0 / 3.0) - 2.0)
+        return (1.0 - _R2S_G_CNST * (2.0 ** (1.0 / 3.0) - 1.0) * fz) * (
+            1.0 - zeta**12
+        )
+
+    @staticmethod
+    def _phi(zeta):
+        return ((1.0 + zeta) ** (2.0 / 3.0) + (1.0 - zeta) ** (2.0 / 3.0)) / 2.0
+
+    @classmethod
+    def _ec0(cls, rs, zeta, s):
+        one_minus_ginf = -jnp.expm1(
+            -0.25 * jnp.log1p(4.0 * _R2S_CHI_INF * s * s)
+        )
+        H0 = _R2S_B1C * jnp.log1p(
+            jnp.expm1(-cls._eclda0(rs) / _R2S_B1C) * one_minus_ginf
+        )
+        return (cls._eclda0(rs) + H0) * cls._Gc(zeta)
+
+    @classmethod
+    def _ec1(cls, rs, zeta, s, t):
+        phi = cls._phi(zeta)
+        eps_pw = cls._pw92_mod(rs, zeta)
+        w1 = jnp.expm1(-eps_pw / (_R2S_GAMMA * phi**3))
+        beta = 0.066724550603149220 * (1.0 + 0.1 * rs) / (1.0 + 0.1778 * rs)
+        y = beta * t * t / (_R2S_GAMMA * jnp.clip(w1, 1e-30))
+
+        # Single-water-regime correction Delta-y (eq S34); the rs-derivatives
+        # of the two LSDA limits come from autodiff.
+        idx = jnp.arange(1, 8)
+        dfc2 = jnp.sum(idx * jnp.asarray(_R2S_FC)[7 - idx])
+        dz = ((1.0 + zeta) ** (5.0 / 3.0) + (1.0 - zeta) ** (5.0 / 3.0)) / 2.0
+        elsda0_f = lambda r: cls._eclda0(r) * cls._Gc(zeta)
+        elsda1_f = lambda r: cls._pw92_mod(r, zeta)
+        delsda0 = jax.grad(elsda0_f)(rs)
+        delsda1 = jax.grad(elsda1_f)(rs)
+        dy = (
+            dfc2
+            / (27.0 * _R2S_GAMMA * dz * phi**3 * jnp.clip(w1, 1e-30))
+            * (
+                20.0 * rs * (delsda0 - delsda1)
+                - 45.0 * _R2S_ETA * (elsda0_f(rs) - elsda1_f(rs))
+            )
+            * s
+            * s
+            * jnp.exp(-(s**4) / _R2S_DP2**4)
+        )
+
+        one_minus_g = -jnp.expm1(-0.25 * jnp.log1p(4.0 * (y - dy)))
+        return eps_pw + _R2S_GAMMA * phi**3 * jnp.log1p(w1 * one_minus_g)
+
+    @classmethod
+    def _eps(cls, rho_a, rho_b, gn_tot, tau_a, tau_b):
+        rho = jnp.clip(rho_a + rho_b, 1e-20)
+        zeta = jnp.clip((rho_a - rho_b) / rho, -0.9999999999, 0.9999999999)
+        rs = (3.0 / (4.0 * jnp.pi * rho)) ** (1.0 / 3.0)
+        xt = gn_tot / rho ** (4.0 / 3.0)
+        s = _XT2S * xt
+        t = xt / (4.0 * 2.0 ** (1.0 / 3.0) * cls._phi(zeta) * jnp.sqrt(rs))
+        ts0 = jnp.clip(tau_a, 0.0) / jnp.clip(rho_a, 1e-20) ** (5.0 / 3.0)
+        ts1 = jnp.clip(tau_b, 0.0) / jnp.clip(rho_b, 1e-20) ** (5.0 / 3.0)
+
+        def t_total(a, b):
+            # (ts0 (1+z)^{5/3} + ts1 (1-z)^{5/3}) / 2^{5/3}: tau/rho^{5/3}
+            return (
+                (1.0 + zeta) ** (5.0 / 3.0) * a
+                + (1.0 - zeta) ** (5.0 / 3.0) * b
+            ) / 2.0 ** (5.0 / 3.0)
+
+        alpha = (t_total(ts0, ts1) - xt * xt / 8.0) / (
+            _K_FACTOR_C * t_total(1.0, 1.0) + _R2S_ETA * xt * xt / 8.0
+        )
+        fa = _r2scan_f_alpha(alpha, _R2S_FC, _R2S_C1C, _R2S_C2C, _R2S_DCP)
+        e1 = cls._ec1(rs, zeta, s, t)
+        return e1 + fa * (cls._ec0(rs, zeta, s) - e1)
+
+    def __call__(self, density, grad_density, tau) -> Scalar:
+        if _has_spin(density):
+            n_up, n_dn = jnp.unstack(density, axis=-1)
+            grad_up, grad_dn = jnp.unstack(grad_density, axis=-1)
+            t_up, t_dn = jnp.unstack(tau, axis=-1)
+            gn_tot = jnp.linalg.norm(grad_up + grad_dn + 1e-30, axis=-1)
+            return self._eps(n_up, n_dn, gn_tot, t_up, t_dn)
+        gn = jnp.linalg.norm(grad_density + 1e-30, axis=-1)
+        return self._eps(density / 2.0, density / 2.0, gn, tau / 2.0, tau / 2.0)
+
+
+class R2SCAN(XCFunctional):
+    """r2SCAN meta-GGA (regularized-restored SCAN; the modern default mGGA).
+
+    Needs the kinetic-energy density τ on the grid (``xc_type = "MGGA"``);
+    the KS terms provide it and the Fock matrix comes from autodiff of the
+    energy, so no vxc code exists anywhere. Validated pointwise against
+    libxc ``mgga_x_r2scan``/``mgga_c_r2scan`` to machine precision.
+    """
+
+    name: ClassVar[str] = "r2SCAN"
+    xc_type: ClassVar[str] = "MGGA"
+    exchange: ClassVar[DensityFunctional] = R2SCANExchange()
+    correlation: ClassVar[DensityFunctional] = R2SCANCorrelation()
+
+    def __call__(self, density, grad_density, tau) -> Scalar:
+        return self.exchange(density, grad_density, tau) + self.correlation(
+            density, grad_density, tau
         )

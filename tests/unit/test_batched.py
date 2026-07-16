@@ -10,10 +10,15 @@ import pytest
 
 from dftax.energy.xc import PBE
 from dftax.system.molecule import Molecule
-from dftax import KS, becke, scf, forces, scf_batched, BatchedResult
+from dftax import KS, becke, exact, scf, forces, scf_batched, BatchedResult
 
 NR, LEB = 35, 50
 GRID = becke(NR, LEB)
+# The matches-serial tests pin coulomb=exact(): the property under test is
+# batched == serial, and the exact path keeps the two bit-comparable at 1e-9.
+# The vmapped DF force build also materializes a batch-wide Hermite
+# intermediate (tens of GiB at batch=16), a known follow-up.
+COUL = exact()
 
 
 @pytest.mark.float64
@@ -22,7 +27,7 @@ class TestBatched:
         mol = Molecule.from_xyz("O 0 0 0; H 0.76 0 0.50; H 0.76 0 -0.50", "sto-3g")
         c0 = jnp.asarray(mol.atom_coords())
         batch = jnp.stack([c0, c0.at[1, 2].add(0.05), c0.at[2, 0].add(-0.04)])
-        rb = scf_batched(mol, batch, PBE(), grid=GRID)
+        rb = scf_batched(mol, batch, PBE(), grid=GRID, coulomb=COUL)
         assert isinstance(rb, BatchedResult)
         # orbital-sized fields are opt-in (O(B*nspin*nao^2) memory)
         assert rb.P is None and rb.mo_coeff is None and rb.mo_energy is None
@@ -31,7 +36,7 @@ class TestBatched:
         assert bool(jnp.all(rb.converged))
         for b in range(batch.shape[0]):
             m = Molecule(mol.symbols, np.asarray(batch[b]), mol.basis)
-            es = scf(KS(m, PBE(), grid=GRID)).e_tot
+            es = scf(KS(m, PBE(), grid=GRID, coulomb=COUL)).e_tot
             assert abs(float(rb.e_tot[b]) - es) < 1e-9
 
     def test_uks_energy_matches_serial(self):
@@ -40,11 +45,11 @@ class TestBatched:
         )
         cc = jnp.asarray(ch3.atom_coords())
         batch = jnp.stack([cc, cc.at[1, 1].add(0.05)])
-        ub = scf_batched(ch3, batch, PBE(), spin=ch3.spin, grid=GRID)
+        ub = scf_batched(ch3, batch, PBE(), spin=ch3.spin, grid=GRID, coulomb=COUL)
         assert bool(jnp.all(ub.converged))
         for b in range(batch.shape[0]):
             m = Molecule(ch3.symbols, np.asarray(batch[b]), ch3.basis, spin=1)
-            es = scf(KS(m, PBE(), grid=GRID, spin=m.spin)).e_tot
+            es = scf(KS(m, PBE(), grid=GRID, spin=m.spin, coulomb=COUL)).e_tot
             assert abs(float(ub.e_tot[b]) - es) < 1e-9
 
     def test_rks_forces_match_serial(self):
@@ -52,12 +57,12 @@ class TestBatched:
         nocc = mol.nelectron // 2
         c0 = jnp.asarray(mol.atom_coords())
         batch = jnp.stack([c0, c0.at[1, 2].add(0.05)])
-        rb = scf_batched(mol, batch, PBE(), forces=True, grid=GRID)
+        rb = scf_batched(mol, batch, PBE(), forces=True, grid=GRID, coulomb=COUL)
         assert rb.forces.shape == batch.shape
         for b in range(batch.shape[0]):
             m = Molecule(mol.symbols, np.asarray(batch[b]), mol.basis)
-            r = scf(KS(m, PBE(), grid=GRID))
-            Fser = forces(m, PBE(), (r.mo_coeff[0][:, :nocc],), grid=GRID)
+            r = scf(KS(m, PBE(), grid=GRID, coulomb=COUL))
+            Fser = forces(m, PBE(), (r.mo_coeff[0][:, :nocc],), grid=GRID, coulomb=COUL)
             assert float(jnp.max(jnp.abs(rb.forces[b] - Fser))) < 1e-9
 
     def test_uks_forces_match_serial(self):
@@ -67,11 +72,11 @@ class TestBatched:
         na = (ch3.nelectron + 1) // 2
         nb = ch3.nelectron - na
         cc = jnp.asarray(ch3.atom_coords())
-        ub = scf_batched(ch3, jnp.stack([cc]), PBE(), spin=ch3.spin, forces=True, grid=GRID)
+        ub = scf_batched(ch3, jnp.stack([cc]), PBE(), spin=ch3.spin, forces=True, grid=GRID, coulomb=COUL)
         m = Molecule(ch3.symbols, np.asarray(cc), ch3.basis, spin=1)
-        r = scf(KS(m, PBE(), grid=GRID, spin=m.spin))
+        r = scf(KS(m, PBE(), grid=GRID, spin=m.spin, coulomb=COUL))
         Fser = forces(
-            m, PBE(), (r.mo_coeff[0][:, :na], r.mo_coeff[1][:, :nb]), grid=GRID
+            m, PBE(), (r.mo_coeff[0][:, :na], r.mo_coeff[1][:, :nb]), grid=GRID, coulomb=COUL
         )
         assert float(jnp.max(jnp.abs(ub.forces[0] - Fser))) < 1e-9
 

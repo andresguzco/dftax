@@ -57,7 +57,7 @@ from dftax.integrals.eri3c import (
 
 def _eri4c_primitive(alpha, A, ang_a, beta, B, ang_b,
                      gamma, C, ang_c, delta, D, ang_d,
-                     max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M):
+                     max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M, omega=None):
     """4-center ERI (ab|cd) for a single set of primitive GTOs.
 
     Args:
@@ -95,7 +95,7 @@ def _eri4c_primitive(alpha, A, ang_a, beta, B, ang_b,
     Ez_cd = _md_E_coefficients_1d(ang_c[2], ang_d[2], gamma, delta, CD[2], max_l, max_t)
 
     # Hermite Coulomb integrals with reduced exponent ρ
-    R = _hermite_coulomb(rho, PQ, max_t, max_m)
+    R = _hermite_coulomb(rho, PQ, max_t, max_m, omega)
 
     # Combined E-coefficients via convolution with sign factor (-1)^τ
     sign = (-1.0) ** jnp.arange(max_t)
@@ -113,7 +113,7 @@ def _eri4c_primitive(alpha, A, ang_a, beta, B, ang_b,
 
 def _contracted_eri4c(ea, ca, ra, la, eb, cb, rb, lb,
                       ec, cc, rc, lc, ed, cd, rd, ld,
-                      max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M):
+                      max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M, omega=None):
     """Contracted 4-center ERI summed over all primitive quadruples.
 
     The bra primitives (a, b) are reduced with ``lax.fori_loop`` (sequential) while
@@ -130,7 +130,7 @@ def _contracted_eri4c(ea, ca, ra, la, eb, cb, rb, lb,
             def _prim_d(d_exp, d_coeff):
                 return (d_coeff * _eri4c_primitive(a_exp, ra, la, b_exp, rb, lb,
                                                    c_exp, rc, lc, d_exp, rd, ld,
-                                                   max_l, max_t, max_m))
+                                                   max_l, max_t, max_m, omega))
             return c_coeff * jnp.sum(jax.vmap(_prim_d)(ed, cd))
         return a_coeff * b_coeff * jnp.sum(jax.vmap(_prim_c)(ec, cc))
 
@@ -142,13 +142,14 @@ def _contracted_eri4c(ea, ca, ra, la, eb, cb, rb, lb,
     return lax.fori_loop(0, npr, _loop_a, jnp.zeros((), dtype=ca.dtype))
 
 
-def _element(basis: BasisData, i, j, k, l, max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M):
+def _element(basis: BasisData, i, j, k, l, max_l=_MAX_L, max_t=_MAX_T, max_m=_MAX_M,
+             omega=None):
     return _contracted_eri4c(
         basis.exponents[i], basis.coefficients[i], basis.centers[i], basis.angular[i],
         basis.exponents[j], basis.coefficients[j], basis.centers[j], basis.angular[j],
         basis.exponents[k], basis.coefficients[k], basis.centers[k], basis.angular[k],
         basis.exponents[l], basis.coefficients[l], basis.centers[l], basis.angular[l],
-        max_l, max_t, max_m,
+        max_l, max_t, max_m, omega,
     )
 
 
@@ -264,6 +265,7 @@ def eri4c_matrix(
     chunk: int = 256,
     quartets=None,
     qof=None,
+    omega: float | None = None,
 ) -> Float[Array, "nao nao nao nao"]:
     """Full 4-center ERI tensor (μν|λσ) in the AO basis (spherical).
 
@@ -287,7 +289,7 @@ def eri4c_matrix(
             axis=1,
         )                                        # (nuniq, 4)
     vals = chunked_vmap(
-        lambda q: _element(basis, q[0], q[1], q[2], q[3], ml, mt, mm),
+        lambda q: _element(basis, q[0], q[1], q[2], q[3], ml, mt, mm, omega),
         chunk_size=chunk,
     )(jnp.asarray(quartets))                     # (nq,)
     # Append a zero sentinel so screened-out positions (qof == nq) read as 0.

@@ -38,10 +38,12 @@ from jaxtyping import Array, Float
 from dftax.basis.loader import build_basis_data
 from dftax.grid import Becke, becke, becke_grid, becke_grid_size, points
 from dftax.integrals import nuclear_repulsion
-from dftax.ks.energy import KS, System, _resolve_chunk, _spin_counts
+from dftax.ks.energy import KS, System, _resolve_chunk, _resolve_df_chunk, _spin_counts
 from dftax.ks.guess import _SPECS, CoreSpec, _initial_density, _resolve_guess
 from dftax.ks.shard import MeshSpec, _resolve_mesh
 from dftax.ks.scf import _scf_solve
+from dftax.ks.terms import DFSpec, ExactSpec, df
+from dftax.utils.vmap import vmap as _chunked_vmap
 
 
 def _lowdin(S, eps: float = 1e-9):
@@ -79,6 +81,8 @@ def scf_batched(
     mol, coords_batch, xc, *,
     spin: int | None = None,
     grid: Becke | None = None,
+    coulomb: ExactSpec | DFSpec | None = None,
+    dispersion=None,
     forces: bool = False,
     return_orbitals: bool = False,
     mesh: MeshSpec | None = None,
@@ -99,6 +103,12 @@ def scf_batched(
     ``guess`` is a spec from :mod:`dftax.ks.guess` (``core``/``sad``/``minao``/
     ``sap``); it is resolved once (SAD/MinAO atomic densities are
     geometry-independent) and applied per geometry inside the solve.
+
+    ``coulomb`` follows the KS default (density fitting): the auxiliary basis
+    is built once as a template and re-centered per geometry. Value-based
+    knobs are rejected here (Schwarz ``screen`` needs concrete integrals, but
+    the per-geometry build is traced), and batched ``forces=True`` with a
+    *streamed* hybrid RI-K is rejected (its vjp has no geometry gradients).
     """
     grid = becke() if grid is None else grid
     if not isinstance(grid, Becke):
@@ -126,6 +136,51 @@ def scf_batched(
         symbols, template, jnp.asarray(mol.atom_coords()),
     )
 
+    # Coulomb backend: DF default (matching KS); the aux basis is a template
+    # re-centered per geometry, and the "auto" memory policy is resolved
+    # eagerly (shapes are static across the batch).
+    if coulomb is None:
+        coulomb = df()
+    aux_t = None
+    aux_idx = None
+    df_chunk = None
+    nao_final = (
+        template.cart2sph.shape[1]
+        if template.cart2sph is not None
+        else template.centers.shape[0]
+    )
+    if isinstance(coulomb, DFSpec):
+        if coulomb.screen is not None:
+            raise ValueError(
+                "scf_batched cannot use df(screen=...): Schwarz pair "
+                "selection is value-based but the per-geometry build is traced."
+            )
+        if not isinstance(coulomb.auxbasis, str):
+            raise TypeError(
+                "scf_batched rebuilds the auxiliary basis per geometry; pass "
+                "df(<basis-set name>), not a prebuilt BasisData."
+            )
+        aux_t, a_idx = build_basis_data(
+            symbols, mol.atom_coords(), coulomb.auxbasis, return_atom_index=True
+        )
+        aux_idx = jnp.asarray(a_idx)
+        naux = (
+            aux_t.cart2sph.shape[1]
+            if aux_t.cart2sph is not None
+            else aux_t.centers.shape[0]
+        )
+        df_chunk = _resolve_df_chunk(coulomb.chunk, nao_final, naux, False)
+        if forces and df_chunk is not None and float(xc.hf_coeff) != 0.0:
+            raise ValueError(
+                "batched forces with a streamed hybrid RI-K have no geometry "
+                "gradients; use df(chunk=None) or exact()."
+            )
+    elif isinstance(coulomb, ExactSpec) and (coulomb.stream or coulomb.screen):
+        raise ValueError(
+            "scf_batched supports only plain exact(): screening is "
+            "value-based and streaming adds nothing under the traced rebuild."
+        )
+
     # Resolve the "auto" XC streaming policy eagerly (the per-geometry grid is
     # built traced inside `_build`, but its size is static per spec).
     nao_final = (
@@ -144,10 +199,15 @@ def scf_batched(
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max
         )
+        spec = coulomb
+        if aux_t is not None:
+            aux_b = eqx.tree_at(lambda b: b.centers, aux_t, coords[aux_idx])
+            spec = df(aux_b, chunk=df_chunk)
         return KS(
             System(basis=basis, coords=coords, charges=charges,
                    nelec=nelec, spin=sys_spin),
-            xc, grid=points(gc, gw, chunk=xc_chunk), spin=spin,
+            xc, grid=points(gc, gw, chunk=xc_chunk), coulomb=spec, spin=spin,
+            dispersion=dispersion,
         )
 
     def single(coords):
@@ -157,7 +217,7 @@ def scf_batched(
         e, P, C, eps, conv, n = _scf_solve(
             ks, X, P0, max_iter, e_tol, d_tol, diis_space, False, level_shift
         )
-        out = {"e": e, "conv": conv, "n": n}
+        out = {"e": e, "conv": conv, "n": n, "e_disp": ks.e_disp}
         if forces:
             w = 2.0 if len(ks.nocc) == 1 else 1.0
             Zs = tuple(
@@ -175,7 +235,16 @@ def scf_batched(
             out.update(P=P, C=C, eps=eps)
         return out
 
-    vmapped = jax.vmap(single)
+    if forces and aux_t is not None:
+        # The eri3c-rebuild VJP inside the force gradient materializes a
+        # per-geometry Hermite table of O(GiB); under a plain vmap those
+        # tables coexist batch-wide (31.6 GiB at batch=16 water/sto-3g on
+        # A100). lax.map one geometry at a time bounds the peak at the
+        # serial-forces footprint; the SCF solves it serializes are a small
+        # fraction of the force-gradient cost.
+        vmapped = _chunked_vmap(single, chunk_size=1)
+    else:
+        vmapped = jax.vmap(single)
     devices = _resolve_mesh(mesh)
     if devices is None:
         out = vmapped(coords_batch)
@@ -184,7 +253,7 @@ def scf_batched(
         # each device its slice, and let per-device while_loops converge
         # independently (no cross-device sync per iteration).
         import numpy as np
-        from jax.experimental.shard_map import shard_map
+        from jax import shard_map
 
         n_pad = (-B) % len(devices)
         cb = coords_batch
@@ -192,13 +261,13 @@ def scf_batched(
             cb = jnp.concatenate([cb, jnp.tile(cb[-1:], (n_pad, 1, 1))])
         jmesh = jax.sharding.Mesh(np.asarray(devices), ("batch",))
         bspec = jax.sharding.PartitionSpec("batch")
-        # check_rep=False: pure data parallelism (no collectives); the
+        # check_vma=False: pure data parallelism (no collectives); the
         # varying-axis analysis balks at scan carries whose init is mesh-
         # invariant (constants) while the loop makes them per-shard values.
         out = shard_map(
             vmapped, mesh=jmesh, in_specs=(bspec,),
             out_specs=jax.tree.map(lambda _: bspec, jax.eval_shape(vmapped, cb)),
-            check_rep=False,
+            check_vma=False,
         )(cb)
         out = jax.tree.map(lambda o: o[:B], out)
 
@@ -206,7 +275,7 @@ def scf_batched(
     nocc = ((nelec // 2,) if spin is None and sys_spin == 0
             else _spin_counts(nelec, sys_spin))
     return BatchedResult(
-        e_tot=out["e"], e_elec=out["e"] - e_nn,
+        e_tot=out["e"], e_elec=out["e"] - e_nn - out["e_disp"],
         converged=out["conv"], n_iter=out["n"], nocc=nocc,
         forces=out.get("F"),
         mo_energy=out.get("eps"), mo_coeff=out.get("C"), P=out.get("P"),

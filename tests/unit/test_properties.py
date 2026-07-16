@@ -12,7 +12,7 @@ import pytest
 from dftax.energy.xc import PBE
 from dftax.system.molecule import Molecule
 from dftax import (
-    KS, System, becke, scf,
+    KS, System, becke, exact, scf,
     dipole, polarizability, hessian, ir_spectrum, raman_spectrum,
     alchemical_deriv,
 )
@@ -28,13 +28,17 @@ class TestDipole:
     def test_dipole_vs_finite_field(self):
         """μ_i == -dE/dE_i (consistency of dipole integrals + field coupling)."""
         mol = Molecule.from_xyz(WATER, "sto-3g")
-        mu = np.asarray(dipole(mol, PBE(), **TOL))
+        # coulomb=exact() on both legs: the 1e-6 FD agreement was calibrated
+        # on the exact path; under DF the FD legs lose ~2e-6 (follow-up).
+        mu = np.asarray(dipole(mol, PBE(), coulomb=exact(), **TOL))
         (gc, gw), _ = _grid(mol, becke(75, 302))
         h = 1e-4
         fd = []
         for i in range(3):
-            ep = _solve_field(mol, PBE(), gc, gw, field=jnp.zeros(3).at[i].set(h), **TOL)[1]
-            em = _solve_field(mol, PBE(), gc, gw, field=jnp.zeros(3).at[i].set(-h), **TOL)[1]
+            ep = _solve_field(mol, PBE(), gc, gw, field=jnp.zeros(3).at[i].set(h),
+                              coulomb=exact(), **TOL)[1]
+            em = _solve_field(mol, PBE(), gc, gw, field=jnp.zeros(3).at[i].set(-h),
+                              coulomb=exact(), **TOL)[1]
             fd.append(-(ep - em) / (2 * h))
         assert np.max(np.abs(mu - np.array(fd))) < 1e-6
 
@@ -43,7 +47,8 @@ class TestDipole:
         from pyscf import dft
         mol = Molecule.from_xyz(WATER, "sto-3g")
         coords = mol.atom_coords()
-        mu = np.asarray(dipole(mol, PBE(), **TOL))
+        # coulomb=exact(): the PySCF oracle uses exact ERIs.
+        mu = np.asarray(dipole(mol, PBE(), coulomb=exact(), **TOL))
         m = pyscf.gto.M(atom=[[s, tuple(coords[i])] for i, s in enumerate(mol.symbols)],
                         basis="sto-3g", unit="Bohr", verbose=0)
         mf = dft.RKS(m); mf.xc = "pbe"; mf.grids.level = 5; mf.conv_tol = 1e-12; mf.kernel()
@@ -94,7 +99,8 @@ class TestResponse:
         mol = Molecule.from_xyz(WATER, "sto-3g")
         coords = mol.atom_coords()
         freq = np.sort(np.asarray(ir_spectrum(
-            mol, PBE(), step=2e-3, grid=becke(60, 194), **TOL).frequencies))
+            mol, PBE(), step=2e-3, grid=becke(60, 194), coulomb=exact(),
+            **TOL).frequencies))
         m = pyscf.gto.M(atom=[[s, tuple(coords[i])] for i, s in enumerate(mol.symbols)],
                         basis="sto-3g", unit="Bohr", verbose=0)
         mf = dft.RKS(m); mf.xc = "pbe"; mf.grids.level = 5; mf.conv_tol = 1e-12; mf.kernel()

@@ -21,7 +21,7 @@ from pyscf import dft, gto
 
 from dftax.energy.xc import LDA, PBE, PBE0, B3LYP
 from dftax.system.molecule import Molecule
-from dftax import KS, becke, df, scf, minimize, forces
+from dftax import KS, becke, df, scf, minimize, forces, exact
 from dftax.grid import becke_grid
 
 AUX = "def2-universal-jkfit"
@@ -70,7 +70,7 @@ def test_uks_doublet_matches_pyscf(xc_obj, pyscf_xc):
     """CH3 doublet vs pyscf.dft.UKS across LDA / PBE / PBE0 / B3LYP (hybrids)."""
     mol = _ch3()
     e_ref, grid = _ref_uks(mol, pyscf_xc)
-    res = scf(KS(mol, xc_obj, grid=(grid[0], grid[1]), spin=mol.spin))
+    res = scf(KS(mol, xc_obj, grid=(grid[0], grid[1]), spin=mol.spin, coulomb=exact()))
     assert res.converged
     assert abs(res.e_tot - e_ref) < 5e-5, f"{pyscf_xc}: {res.e_tot} vs {e_ref}"
 
@@ -81,7 +81,7 @@ def test_uks_triplet_o2():
     """O2 ground-state triplet (spin=2) vs pyscf.dft.UKS (LDA)."""
     mol = gto.M(atom="O 0 0 0; O 0 0 1.21", basis="sto-3g", spin=2).build()
     e_ref, grid = _ref_uks(mol, "slater,vwn5")
-    res = scf(KS(mol, LDA(), grid=(grid[0], grid[1]), spin=mol.spin))
+    res = scf(KS(mol, LDA(), grid=(grid[0], grid[1]), spin=mol.spin, coulomb=exact()))
     assert res.converged
     assert abs(res.e_tot - e_ref) < 5e-5
 

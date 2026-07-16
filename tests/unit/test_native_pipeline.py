@@ -14,7 +14,7 @@ from dftax.energy.xc import LDA, PBE, B3LYP
 from dftax.system.molecule import Molecule
 from dftax.basis.loader import build_basis_data
 from dftax.integrals import overlap_matrix
-from dftax import KS, scf
+from dftax import KS, scf, exact
 from dftax.grid import becke_grid, lebedev_grid, available_lebedev
 
 H2O = "O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043"
@@ -43,7 +43,7 @@ class TestNativeBasis:
             mf.verbose = 0
             e_ref = mf.kernel()
             grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-            res = scf(KS(nmol, xc_obj, grid=(grid[0], grid[1])))
+            res = scf(KS(nmol, xc_obj, grid=(grid[0], grid[1]), coulomb=exact()))
             assert res.converged
             assert abs(res.e_tot - e_ref) < 1e-6
 
@@ -81,7 +81,7 @@ class TestFullyPyscfFree:
         e_ref = mf.kernel()
 
         coords, weights = becke_grid(nmol.symbols, nmol.atom_coords(), 75, 302)
-        res = scf(KS(nmol, xc_cls(), grid=(coords, weights)))
+        res = scf(KS(nmol, xc_cls(), grid=(coords, weights), coulomb=exact()))
         assert res.converged
         assert abs(res.e_tot - e_ref) < 5e-5
 

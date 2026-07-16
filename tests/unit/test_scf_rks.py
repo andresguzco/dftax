@@ -62,8 +62,13 @@ class TestAutodiffFock:
     def test_fock_matches_fd(self, water_mol, key):
         xc_obj, _ = FUNCTIONALS["pbe"]
         _, grid = _pyscf_ref(water_mol, "pbe")
+        # coulomb=exact(): the FD reference resolves ~1e-10 energy differences,
+        # and the DF energy's metric-amplified cancellations carry evaluation
+        # noise of that size (the AD Fock is fine either way); the exact path
+        # keeps the FD reference meaningful.
         ks = KS(
-            water_mol, xc_obj, grid=(jnp.asarray(grid[0]), jnp.asarray(grid[1]))
+            water_mol, xc_obj, grid=(jnp.asarray(grid[0]), jnp.asarray(grid[1])),
+            coulomb=exact(),
         )
 
         # A physically sensible density: core-Hamiltonian guess.
@@ -76,10 +81,13 @@ class TestAutodiffFock:
         g = jax.grad(ks.electronic)(P)
         F = 0.5 * (g + g.transpose(0, 2, 1))
 
-        # Symmetric perturbation dP; check Tr(F dP) == central FD of E_elec.
+        # Symmetric unit-norm perturbation dP; check Tr(F dP) == central FD of
+        # E_elec (unit norm keeps the FD numerator scale, and so its roundoff
+        # floor, uniform across nao).
         nao = P.shape[-1]
         dP = jax.random.normal(key, (nao, nao))
         dP = 0.5 * (dP + dP.T)
+        dP = dP / jnp.linalg.norm(dP)
         eps = 1e-5
         fd = (
             float(ks.electronic(P + eps * dP[None]))

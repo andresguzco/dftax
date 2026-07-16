@@ -212,21 +212,43 @@ def nuclear_attraction_matrix(
     basis: BasisData,
     atom_coords: Float[Array, "n_atoms 3"],
     atom_charges: Float[Array, "n_atoms"],
+    plan=None,
 ) -> Float[Array, "nao nao"]:
     """Compute nuclear attraction matrix V_μν in the AO basis.
 
     V_μν = -Σ_A Z_A ∫ χ_μ(r) · 1/|r-R_A| · χ_ν(r) dr
 
     Pure JAX, fully differentiable w.r.t. basis.centers and atom_coords.
+    Delegates to the shell-class-bucketed engine (see
+    :mod:`dftax.integrals.eri3c_bucketed`): the flat per-element build held
+    every (pair, nucleus) Hermite table at molecule-padded sizes at once and
+    owned the KS build's memory peak (27.5 GiB for ethanol/def2-svp).
 
     Args:
         basis: BasisData from extract_basis_data(mol).
         atom_coords: Nuclear positions, shape (n_atoms, 3).
         atom_charges: Nuclear charges, shape (n_atoms,).
+        plan: static pair skeleton from
+            :func:`~dftax.integrals.eri3c_bucketed.plan_pairs`; required when
+            this build is traced with a fully-traced ``BasisData``, derived
+            here otherwise.
 
     Returns:
         V matrix, shape (nao, nao).
     """
+    from dftax.integrals.eri3c_bucketed import nuclear_attraction_bucketed
+
+    return nuclear_attraction_bucketed(basis, atom_coords, atom_charges,
+                                       plan=plan)
+
+
+def _nuclear_attraction_matrix_flat(
+    basis: BasisData,
+    atom_coords: Float[Array, "n_atoms 3"],
+    atom_charges: Float[Array, "n_atoms"],
+) -> Float[Array, "nao nao"]:
+    """The original per-element build; kept as the reference implementation
+    for A/B validation of the bucketed engine."""
     def _element(i, j):
         return _contracted_nuclear_attraction(
             basis.exponents[i], basis.coefficients[i], basis.centers[i], basis.angular[i],

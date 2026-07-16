@@ -62,7 +62,7 @@ from dftax.integrals import (
     eri3c_matrix,
     eri2c_matrix,
 )
-from dftax.integrals.eri3c_bucketed import plan_eri3c
+from dftax.integrals.eri3c_bucketed import plan_eri3c, plan_pairs
 from dftax.integrals.eri4c import (
     eri4c_matrix,
     screened_quartets,
@@ -286,7 +286,7 @@ def ao_on_grid(
 def _build_integrals(
     basis, coords, charges, grid_coords, aux_basis, materialize_ao, materialize_int3c,
     eri_quartets=None, eri_qof=None, stream_exact=False, omega=None,
-    eri3c_plan=None,
+    eri3c_plan=None, pair_plan=None,
 ):
     """Build all integral arrays in one jitted pass.
 
@@ -301,7 +301,7 @@ def _build_integrals(
     """
     S = overlap_matrix(basis)
     T = kinetic_matrix(basis)
-    V = nuclear_attraction_matrix(basis, coords, charges)
+    V = nuclear_attraction_matrix(basis, coords, charges, plan=pair_plan)
     ao, dao = ao_on_grid(basis, grid_coords) if materialize_ao else (None, None)
     e_nn = nuclear_repulsion(coords, charges)
 
@@ -505,6 +505,7 @@ class KS(eqx.Module):
         eri3c_plan = (
             plan_eri3c(basis, aux_basis) if aux_basis is not None else None
         )
+        pair_plan = plan_pairs(basis)
         (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
          eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(
             basis, coords, charges, grid_coords, aux_basis,
@@ -512,7 +513,7 @@ class KS(eqx.Module):
             (not shard_df) and not (is_df and spec.chunk is not None),
             quartets, qof, (not is_df) and spec.stream,
             omega if hf_lr != 0.0 else None,
-            eri3c_plan,
+            eri3c_plan, pair_plan,
         )
         # Dispersion is P-independent: a scalar of the (traced) coordinates,
         # mirroring e_nn, so the rebuilt energies in forces/batched carry its

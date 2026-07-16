@@ -255,6 +255,125 @@ def _compiled_class_kernel(la, lb, lc, anga, angb, angc, omega, chunk_size):
 # Phase 2: the traced build (jnp gathers only; jit/grad-safe)
 # ---------------------------------------------------------------------------
 
+def plan_pairs(basis):
+    """Static bra-pair plan for :func:`nuclear_attraction_bucketed`.
+
+    Same contract as :func:`plan_eri3c`: python ints only, computed where the
+    basis metadata is concrete, safe as a static jit argument.
+    """
+    bra, ang = _shells(basis.angular, basis.exponents)
+    buckets = defaultdict(lambda: ([], []))
+    nprims = {}
+    for ia, (la, ra, nca, npa) in enumerate(bra):
+        for lb, rb, ncb, npb in bra[ia:]:
+            key = (la, lb)
+            b = buckets[key]
+            b[0].append(ra); b[1].append(rb)
+            cur = nprims.get(key, (0, 0))
+            nprims[key] = (max(cur[0], npa), max(cur[1], npb))
+
+    def ang_tup(row0, l, ncomp):
+        return tuple(tuple(int(x) for x in ang[row0 + i])
+                     for i in range(ncomp))
+
+    classes = []
+    for (la, lb), (rows_a, rows_b) in sorted(buckets.items()):
+        nca = (la + 1) * (la + 2) // 2
+        ncb = (lb + 1) * (lb + 2) // 2
+        classes.append((
+            la, lb,
+            ang_tup(rows_a[0], la, nca), ang_tup(rows_b[0], lb, ncb),
+            tuple(rows_a), tuple(rows_b), nprims[(la, lb)],
+        ))
+    return (int(np.asarray(basis.angular).shape[0]), tuple(classes))
+
+
+def _make_pair_kernel(la, lb, anga, angb):
+    """Nuclear-attraction kernel for one (la, lb) bra class.
+
+    One pair -> (nca, ncb); the nucleus sum is vectorized inside:
+    V[a, b] = sum_A -Z_A K_AB (2 pi / gamma) sum_tuv E^x_t E^y_u E^z_v
+    R_tuv(gamma, P - R_A), matching _nuclear_attraction_primitive.
+    """
+    mt = max(la + lb + 1, 2)
+    anga, angb = np.asarray(anga), np.asarray(angb)
+    ia = (anga[:, 0], anga[:, 1], anga[:, 2])
+    jb = (angb[:, 0], angb[:, 1], angb[:, 2])
+
+    def one_pair(A, B, ea, eb, ca, cb, atom_coords, atom_charges):
+        AB = A - B
+
+        def per_ab(al, be):
+            gab = al + be
+            safe = jnp.where(gab == 0.0, 1.0, gab)
+            P = (al * A + be * B) / safe
+            K = jnp.exp(-al * be / safe * jnp.sum(AB ** 2))
+            Et = [_E_table(la, lb, al, be, AB[x], mt) for x in range(3)]
+
+            def per_atom(C, Z):
+                return -Z * _hermite_table(safe, P - C, mt)
+
+            Rsum = jnp.sum(jax.vmap(per_atom)(atom_coords, atom_charges),
+                           axis=0)
+            pref = K * 2.0 * jnp.pi / safe
+            GX = Et[0][ia[0][:, None], jb[0][None, :], :]
+            GY = Et[1][ia[1][:, None], jb[1][None, :], :]
+            GZ = Et[2][ia[2][:, None], jb[2][None, :], :]
+            return pref * jnp.einsum("abs,abr,abq,srq->ab", GX, GY, GZ, Rsum)
+
+        vals = jax.vmap(jax.vmap(per_ab, (None, 0)), (0, None))(ea, eb)
+        return jnp.einsum("ijab,ai,bj->ab", vals, ca, cb)
+
+    return one_pair
+
+
+@lru_cache(maxsize=4096)
+def _compiled_pair_kernel(la, lb, anga, angb, chunk_size):
+    """Jitted, cached batch kernel for one bra class (see the eri3c cache
+    note: numpy closure constants, hashable static metadata)."""
+    kern = _make_pair_kernel(la, lb, anga, angb)
+    return jax.jit(chunked_vmap(kern, in_axes=(0,) * 6 + (None, None),
+                                chunk_size=chunk_size))
+
+
+def nuclear_attraction_bucketed(basis, atom_coords, atom_charges, plan=None,
+                                chunk=4096):
+    """(nao, nao) nuclear attraction matrix via shell-class buckets.
+
+    Drop-in for the flat builder; the per-element build held every
+    (pair, nucleus) Hermite table at molecule-padded sizes at once (27.5 GiB
+    for ethanol/def2-svp, the KS build's memory peak). Differentiable
+    w.r.t. ``basis.centers`` and ``atom_coords``.
+    """
+    if plan is None:
+        plan = plan_pairs(basis)
+    nao, classes = plan
+    cen = basis.centers
+    out = jnp.zeros((nao, nao), dtype=cen.dtype)
+    for (la, lb, anga, angb, ra, rb, nprims) in classes:
+        npa, npb = nprims
+        ra = np.asarray(ra); rb = np.asarray(rb)
+        nca = (la + 1) * (la + 2) // 2
+        ncb = (lb + 1) * (lb + 2) // 2
+        ca = basis.coefficients[ra[:, None] + np.arange(nca)][:, :, :npa]
+        cb = basis.coefficients[rb[:, None] + np.arange(ncb)][:, :, :npb]
+        fn = _compiled_pair_kernel(la, lb, anga, angb,
+                                   min(chunk, ra.shape[0]))
+        vals = fn(cen[ra], cen[rb],
+                  basis.exponents[ra][:, :npa], basis.exponents[rb][:, :npb],
+                  ca, cb, atom_coords, atom_charges)   # (npair, nca, ncb)
+        i_idx = ra[:, None, None] + np.arange(nca)[:, None]
+        j_idx = rb[:, None, None] + np.arange(ncb)[None, :]
+        i_idx, j_idx = (np.broadcast_to(x, vals.shape)
+                        for x in (i_idx, j_idx))
+        out = out.at[i_idx.ravel(), j_idx.ravel()].set(vals.reshape(-1))
+        # bra symmetry via index swap (same rule as the 3-center scatter)
+        out = out.at[j_idx.ravel(), i_idx.ravel()].set(vals.reshape(-1))
+    if basis.cart2sph is not None:
+        out = basis.cart2sph.T @ out @ basis.cart2sph
+    return out
+
+
 def eri3c_matrix_bucketed(basis, aux_basis, omega=None, plan=None,
                           chunk=4096):
     """(nao, nao, naux) 3-center ERI tensor via shell-class buckets.

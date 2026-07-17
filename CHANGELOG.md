@@ -29,6 +29,18 @@ to [Semantic Versioning](https://semver.org/).
   saddle escape (negative curvature) are the documented limitations; the
   robust pipeline for pathological cases is `adiis` then `newton`.
 
+- **Fermi-Dirac smearing and ROKS.** `scf(ks, smearing=fermi(sigma=...))`
+  replaces the integer aufbau fill with fractional occupations (chemical
+  potential bisected per spin channel inside the loop): small-gap systems
+  converge where integer occupations flip-flop, the electron count is
+  conserved to machine precision, and the occupations are smooth in the
+  orbital energies, which keeps the energy differentiable through level
+  crossings; sigma to zero recovers the aufbau ground state. `roks(ks)` adds
+  restricted open-shell KS as shared-orbital Newton: one spatial orbital set
+  for both channels (no UKS spin contamination), the beta-inside-alpha
+  constraint holding by construction (residual ~1e-15), implemented as the
+  masked-rotation variant of `newton` with no new derivative code.
+
 ### Changed (performance)
 - **The 3-center ERI and nuclear-attraction builds are bucketed by shell
   class.** One right-sized McMurchie-Davidson kernel per angular-momentum
@@ -44,6 +56,14 @@ to [Semantic Versioning](https://semver.org/).
   the speedup twice (both tensor sets). The aux-sharded multi-GPU slab
   build keeps the flat engine (slab boundaries cut shells; shell-aligned
   slabs are follow-up).
+
+### Fixed
+- **The DF chunk budgets price all three primitive loops.** The memory cost
+  models behind the materialized and streamed 3-center chunk sizes counted
+  the two bra primitive axes but not the auxiliary one, so the ~2.5e8-element
+  budget silently admitted ~nprim_aux times more (a factor ~9 with
+  def2-universal-jkfit contractions) and the chunked builds ran well past
+  their stated bound. Reported from the field against 0.3.0.
 
 ## [0.3.0] - 2026-07-16
 

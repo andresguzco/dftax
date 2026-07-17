@@ -91,6 +91,63 @@ def _occupations(nocc: tuple[int, ...], nmo: int) -> Float[Array, "nspin nmo"]:
 
 
 @dataclass(frozen=True)
+class FermiSpec:
+    """Fermi-Dirac fractional occupations (see :func:`fermi`)."""
+
+    sigma: float = 0.01
+
+
+def fermi(*, sigma: float = 0.01) -> FermiSpec:
+    """Fermi-Dirac smearing of the SCF occupations.
+
+    Occupations become ``f_i = w / (1 + exp((eps_i - mu) / sigma))`` with the
+    chemical potential ``mu`` solved per spin channel so the electron count
+    is conserved. Small-gap and metallic-like systems (transition metals,
+    stretched bonds, clusters) converge where integer aufbau occupations
+    flip-flop between quasi-degenerate configurations, and the occupations
+    become a smooth function of the orbital energies, which keeps the energy
+    differentiable through level crossings.
+
+    The reported ``e_tot`` is the Kohn-Sham energy at the smeared density
+    (the Mermin entropy term is not added); take ``sigma`` to zero to
+    recover the integer-occupation ground state.
+
+    Args:
+        sigma: smearing width in Hartree (0.01 Ha ~ 3160 K electronic
+            temperature; typical range 0.001 to 0.02).
+
+    Example:
+        ```python
+        res = scf(ks, smearing=fermi(sigma=0.005))
+        ```
+    """
+    return FermiSpec(sigma=sigma)
+
+
+def _fermi_occupations(eps, nocc, w, sigma, bisect_iters=64):
+    """(nspin, nmo) smeared occupations: per channel, f = w·fd((eps−mu)/sigma)
+    with mu bisected so sum(f) = w·nocc (monotone in mu; fixed iterations)."""
+    def channel(eps_s, n_s):
+        lo = jnp.min(eps_s) - 30.0 * sigma
+        hi = jnp.max(eps_s) + 30.0 * sigma
+
+        def count(mu):
+            return jnp.sum(jax.nn.sigmoid(-(eps_s - mu) / sigma))
+
+        def step(_, bounds):
+            lo, hi = bounds
+            mid = 0.5 * (lo + hi)
+            too_few = count(mid) < n_s
+            return (jnp.where(too_few, mid, lo), jnp.where(too_few, hi, mid))
+
+        lo, hi = lax.fori_loop(0, bisect_iters, step, (lo, hi))
+        mu = 0.5 * (lo + hi)
+        return w * jax.nn.sigmoid(-(eps_s - mu) / sigma)
+
+    return jnp.stack([channel(eps[s], n) for s, n in enumerate(nocc)])
+
+
+@dataclass(frozen=True)
 class ADIISSpec:
     """SCF acceleration: ADIIS far from convergence, Pulay DIIS near it
     (see :func:`adiis`)."""
@@ -196,7 +253,7 @@ def _diis_extrapolate(dF, dErr, count, m):
 
 @eqx.filter_jit
 def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
-               adiis_switch=None):
+               adiis_switch=None, smear_sigma=None):
     """On-device SCF: autodiff Fock + DIIS in a single while_loop (spin-stacked).
 
     ``P0`` is the initial spin-stacked density (see :mod:`dftax.ks.guess`);
@@ -227,8 +284,14 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
     def make_density(F):                     # F: (nspin, nao, nao)
         eps, Cp = jnp.linalg.eigh(X.T @ F @ X)          # batched over channels
         C = X @ Cp                                       # (nspin, nao, nmo)
-        Co = C[:, :, :nmax]                              # static occupied slice
-        P = jnp.einsum("smi,si,sni->smn", Co, f, Co)     # aufbau fill
+        if smear_sigma is not None:
+            # fractional occupations are dynamic in eps: no occupied slice
+            fs = _fermi_occupations(eps, ks.nocc, 2.0 if nspin == 1 else 1.0,
+                                    smear_sigma)
+            P = jnp.einsum("smi,si,sni->smn", C, fs, C)
+        else:
+            Co = C[:, :, :nmax]                          # static occupied slice
+            P = jnp.einsum("smi,si,sni->smn", Co, f, Co)  # aufbau fill
         return P, C, eps
 
     e0 = ks.total(P0)
@@ -306,6 +369,7 @@ def scf(
     level_shift: float = 0.0,
     guess: GuessSpec | Array | None = None,
     accel: ADIISSpec | None = None,
+    smearing: FermiSpec | None = None,
     verbose: bool = False,
 ) -> KSResult:
     """Run KS SCF to self-consistency (restricted and spin-polarized alike).
@@ -328,6 +392,9 @@ def scf(
             oscillation), blending into Pulay DIIS near the fixed point;
             ``None`` is plain Pulay DIIS. When given, its ``space``
             supersedes ``diis_space``.
+        smearing: a :func:`fermi` spec replaces the integer aufbau fill with
+            Fermi-Dirac fractional occupations (small-gap systems, smooth
+            energies through level crossings); ``None`` is the aufbau fill.
         verbose: print per-iteration energy / error (via jax.debug.print).
 
     Example:
@@ -350,6 +417,7 @@ def scf(
         ks, X, P0, jnp.asarray(max_iter), jnp.asarray(e_tol), jnp.asarray(d_tol),
         diis_space, verbose, jnp.asarray(level_shift),
         accel.switch if accel is not None else None,
+        smearing.sigma if smearing is not None else None,
     )
     result = KSResult(
         e_tot=float(e_tot),

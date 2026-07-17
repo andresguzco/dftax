@@ -374,6 +374,132 @@ def nuclear_attraction_bucketed(basis, atom_coords, atom_charges, plan=None,
     return out
 
 
+def _os_table(la, lb_ext, PA, PB, i2g):
+    """(la+1, lb_ext+1) 1D Obara-Saika overlap table, unrolled at trace time.
+
+    S(a+1, b) = PA S(a, b) + a i2g S(a-1, b) + b i2g S(a, b-1); the kinetic
+    caller extends the b axis two beyond the class l to read S(a, b+2).
+    """
+    rows = [[None] * (lb_ext + 1) for _ in range(la + 1)]
+    rows[0][0] = jnp.ones(())
+    for a in range(la):
+        val = PA * rows[a][0]
+        if a > 0:
+            val = val + a * i2g * rows[a - 1][0]
+        rows[a + 1][0] = val
+    for b in range(lb_ext):
+        for a in range(la + 1):
+            val = PB * rows[a][b]
+            if b > 0:
+                val = val + b * i2g * rows[a][b - 1]
+            if a > 0:
+                val = val + a * i2g * rows[a - 1][b]
+            rows[a][b + 1] = val
+    return jnp.stack([jnp.stack(r) for r in rows])
+
+
+def _make_st_kernel(la, lb, anga, angb):
+    """Overlap + kinetic kernel for one (la, lb) bra class.
+
+    One OS table per axis (b axis extended by 2) serves the overlap and all
+    seven kinetic terms as index reads; the flat engine rebuilt the tables
+    seven times per element (base plus the six b-shifted overlaps).
+    """
+    anga, angb = np.asarray(anga), np.asarray(angb)
+    ia = (anga[:, 0], anga[:, 1], anga[:, 2])
+    jb = (angb[:, 0], angb[:, 1], angb[:, 2])
+    Lb = angb.sum(1)                                   # (ncb,) static
+
+    def one_pair(A, B, ea, eb, ca, cb):
+        AB = A - B
+
+        def per_ab(al, be):
+            gab = al + be
+            safe = jnp.where(gab == 0.0, 1.0, gab)
+            i2g = 0.5 / safe
+            P = (al * A + be * B) / safe
+            PA = P - A
+            PB = P - B
+            K = jnp.exp(-al * be / safe * jnp.sum(AB ** 2))
+            pref = (jnp.pi / safe) ** 1.5 * K
+            T3 = [_os_table(la, lb + 2, PA[x], PB[x], i2g) for x in range(3)]
+
+            def gathers(shift_axis, delta):
+                out = []
+                for x in range(3):
+                    bidx = jb[x] + (delta if x == shift_axis else 0)
+                    out.append(T3[x][ia[x][:, None],
+                                     np.maximum(bidx, 0)[None, :]])
+                return out[0] * out[1] * out[2]         # (nca, ncb)
+
+            S = gathers(-1, 0)
+            up = sum(gathers(x, 2) for x in range(3))
+            down = sum((jb[x] * (jb[x] - 1))[None, :] * gathers(x, -2)
+                       for x in range(3))
+            T = (be * (2 * Lb + 3)[None, :] * S
+                 - 2.0 * be ** 2 * up - 0.5 * down)
+            return pref * S, pref * T
+
+        Sv, Tv = jax.vmap(jax.vmap(per_ab, (None, 0)), (0, None))(ea, eb)
+        S = jnp.einsum("ijab,ai,bj->ab", Sv, ca, cb)
+        T = jnp.einsum("ijab,ai,bj->ab", Tv, ca, cb)
+        return S, T
+
+    return one_pair
+
+
+@lru_cache(maxsize=4096)
+def _compiled_st_kernel(la, lb, anga, angb, chunk_size):
+    """Jitted, cached overlap+kinetic batch kernel (numpy closure constants;
+    see the eri3c cache note)."""
+    kern = _make_st_kernel(la, lb, anga, angb)
+    return jax.jit(chunked_vmap(kern, in_axes=(0,) * 6,
+                                chunk_size=chunk_size))
+
+
+def overlap_kinetic_bucketed(basis, plan=None, chunk=4096):
+    """(S, T) overlap and kinetic matrices in one shell-class-bucketed pass.
+
+    The kinetic matrix is written via the same index-swap symmetry as the
+    other builds; its per-element formula is b-sided, so the swapped write
+    holds to the same rounding the flat engine's own T = T.T asymmetry has.
+    """
+    if plan is None:
+        plan = plan_pairs(basis)
+    nao, classes = plan
+    cen = basis.centers
+    S = jnp.zeros((nao, nao), dtype=cen.dtype)
+    T = jnp.zeros((nao, nao), dtype=cen.dtype)
+    for (la, lb, anga, angb, ra, rb, nprims) in classes:
+        npa, npb = nprims
+        ra = np.asarray(ra); rb = np.asarray(rb)
+        nca = (la + 1) * (la + 2) // 2
+        ncb = (lb + 1) * (lb + 2) // 2
+        ca = basis.coefficients[ra[:, None] + np.arange(nca)][:, :, :npa]
+        cb = basis.coefficients[rb[:, None] + np.arange(ncb)][:, :, :npb]
+        fn = _compiled_st_kernel(la, lb, anga, angb, min(chunk, ra.shape[0]))
+        Sv, Tv = fn(cen[ra], cen[rb],
+                    basis.exponents[ra][:, :npa],
+                    basis.exponents[rb][:, :npb], ca, cb)
+        i_idx = ra[:, None, None] + np.arange(nca)[:, None]
+        j_idx = rb[:, None, None] + np.arange(ncb)[None, :]
+        i_idx, j_idx = (np.broadcast_to(x, Sv.shape)
+                        for x in (i_idx, j_idx))
+        for out_i, vals in ((0, Sv), (1, Tv)):
+            tgt = S if out_i == 0 else T
+            tgt = tgt.at[i_idx.ravel(), j_idx.ravel()].set(vals.reshape(-1))
+            tgt = tgt.at[j_idx.ravel(), i_idx.ravel()].set(vals.reshape(-1))
+            if out_i == 0:
+                S = tgt
+            else:
+                T = tgt
+    if basis.cart2sph is not None:
+        C = basis.cart2sph
+        S = C.T @ S @ C
+        T = C.T @ T @ C
+    return S, T
+
+
 def _make_eri2c_kernel(la, lb, anga, angb, omega=None):
     """2-center Coulomb kernel for one (la, lb) aux-shell class.
 

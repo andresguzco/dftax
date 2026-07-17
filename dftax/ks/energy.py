@@ -55,14 +55,14 @@ from dftax.energy.gto import BasisData, extract_basis_data, eval_gto
 from dftax.energy.xc import XCFunctional
 from dftax.grid import Becke, Points, becke, becke_grid
 from dftax.integrals import (
-    overlap_matrix,
-    kinetic_matrix,
     nuclear_attraction_matrix,
     nuclear_repulsion,
     eri3c_matrix,
     eri2c_matrix,
 )
-from dftax.integrals.eri3c_bucketed import plan_eri3c, plan_pairs
+from dftax.integrals.eri3c_bucketed import (
+    overlap_kinetic_bucketed, plan_eri3c, plan_pairs,
+)
 from dftax.integrals.eri4c import (
     eri4c_matrix,
     screened_quartets,
@@ -299,8 +299,9 @@ def _build_integrals(
     orbit map for the exact ERI. Composes with grad (used by forces), where jit
     is traced inline.
     """
-    S = overlap_matrix(basis)
-    T = kinetic_matrix(basis)
+    # One bucketed pass builds both (shared OS tables per shell pair); the
+    # public overlap_matrix / kinetic_matrix wrappers stay for direct users.
+    S, T = overlap_kinetic_bucketed(basis, plan=pair_plan)
     V = nuclear_attraction_matrix(basis, coords, charges, plan=pair_plan)
     ao, dao = ao_on_grid(basis, grid_coords) if materialize_ao else (None, None)
     e_nn = nuclear_repulsion(coords, charges)

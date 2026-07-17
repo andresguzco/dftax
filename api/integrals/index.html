@@ -1755,7 +1755,7 @@ never call these directly.</p>
 
 
 <h4 id="dftax.integrals.nuclear_attraction_matrix" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">nuclear_attraction_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">atom_coords</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;n_atoms 3&#39;</span><span class="p">],</span> <span class="n">atom_charges</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">n_atoms</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao nao&#39;</span><span class="p">]</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">nuclear_attraction_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">atom_coords</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;n_atoms 3&#39;</span><span class="p">],</span> <span class="n">atom_charges</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">n_atoms</span><span class="p">],</span> <span class="n">plan</span><span class="p">:</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao nao&#39;</span><span class="p">]</span></code>
 
 <a href="#dftax.integrals.nuclear_attraction_matrix" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -1764,7 +1764,11 @@ never call these directly.</p>
 
         <p>Compute nuclear attraction matrix V_μν in the AO basis.</p>
 <p>V_μν = -Σ_A Z_A ∫ χ_μ(r) · 1/|r-R_A| · χ_ν(r) dr</p>
-<p>Pure JAX, fully differentiable w.r.t. basis.centers and atom_coords.</p>
+<p>Pure JAX, fully differentiable w.r.t. basis.centers and atom_coords.
+Delegates to the shell-class-bucketed engine (see
+:mod:<code>dftax.integrals.eri3c_bucketed</code>): the flat per-element build held
+every (pair, nucleus) Hermite table at molecule-padded sizes at once and
+owned the KS build's memory peak (27.5 GiB for ethanol/def2-svp).</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -1824,6 +1828,25 @@ never call these directly.</p>
             </td>
             <td>
                 <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>plan</code>
+            </td>
+            <td>
+                  <code><span title="tuple">tuple</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>static pair skeleton from
+:func:<code>~dftax.integrals.eri3c_bucketed.plan_pairs</code>; required when
+this build is traced with a fully-traced <code>BasisData</code>, derived
+here otherwise.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
       </tbody>
@@ -2215,7 +2238,7 @@ errors defaults to 'strict'.</p>
 
 
 <h4 id="dftax.integrals.eri3c_matrix" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">eri3c_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">aux_basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">omega</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao nao n_aux&#39;</span><span class="p">]</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">eri3c_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">aux_basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">omega</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">plan</span><span class="p">:</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao nao n_aux&#39;</span><span class="p">]</span></code>
 
 <a href="#dftax.integrals.eri3c_matrix" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -2223,7 +2246,12 @@ errors defaults to 'strict'.</p>
     <div class="doc doc-contents first">
 
         <p>Compute 3-center ERI tensor (μν|P) in the AO basis.</p>
-<p>Pure JAX, fully differentiable w.r.t. basis.centers and aux_basis.centers.</p>
+<p>Pure JAX, fully differentiable w.r.t. basis.centers and aux_basis.centers.
+Delegates to the shell-class-bucketed engine
+(:func:<code>~dftax.integrals.eri3c_bucketed.eri3c_matrix_bucketed</code>): one
+right-sized kernel per (l_a, l_b, l_aux) class instead of a
+molecule-padded per-element build (50x on ethanol/def2-svp, sub-GiB
+peak, identical to machine precision).</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2280,6 +2308,25 @@ errors defaults to 'strict'.</p>
               <div class="doc-md-description">
                 <p>None for the Coulomb kernel, a float for the long-range
 <code>erf(ω·r₁₂)/r₁₂</code> kernel (range-separated hybrids).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>plan</code>
+            </td>
+            <td>
+                  <code><span title="tuple">tuple</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>static bucket skeleton from
+:func:<code>~dftax.integrals.eri3c_bucketed.plan_eri3c</code>; required when
+this build is traced with a fully-traced <code>BasisData</code> (the
+jitted <code>_build_integrals</code> passes it), derived here otherwise.</p>
               </div>
             </td>
             <td>

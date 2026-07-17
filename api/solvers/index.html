@@ -1210,10 +1210,54 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dftax.ks.scf.adiis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;adiis
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.scf.fermi" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;fermi
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#dftax.ks.minimize.minimize" class="md-nav__link">
     <span class="md-ellipsis">
       
         <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;minimize
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.newton.newton" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;newton
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dftax.ks.newton.roks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;roks
       
     </span>
   </a>
@@ -1608,7 +1652,7 @@ the converged fixed point.</p>
 
 
 <h4 id="dftax.ks.scf.scf" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">scf</span><span class="o">.</span><span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">:</span> <span class="n">KS</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">max_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span><span class="p">,</span> <span class="n">e_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-08</span><span class="p">,</span> <span class="n">d_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-06</span><span class="p">,</span> <span class="n">diis_space</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8</span><span class="p">,</span> <span class="n">lindep_thresh</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-07</span><span class="p">,</span> <span class="n">level_shift</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">guess</span><span class="p">:</span> <span class="n">GuessSpec</span> <span class="o">|</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KSResult</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">scf</span><span class="o">.</span><span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">:</span> <span class="n">KS</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">max_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span><span class="p">,</span> <span class="n">e_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-08</span><span class="p">,</span> <span class="n">d_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-06</span><span class="p">,</span> <span class="n">diis_space</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8</span><span class="p">,</span> <span class="n">lindep_thresh</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-07</span><span class="p">,</span> <span class="n">level_shift</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">guess</span><span class="p">:</span> <span class="n">GuessSpec</span> <span class="o">|</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">accel</span><span class="p">:</span> <span class="n">ADIISSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">smearing</span><span class="p">:</span> <span class="n">FermiSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KSResult</span></code>
 
 <a href="#dftax.ks.scf.scf" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -1763,6 +1807,44 @@ guess.</p>
           </tr>
           <tr class="doc-section-item">
             <td>
+                <code>accel</code>
+            </td>
+            <td>
+                  <code><span title="dftax.ks.scf.ADIISSpec">ADIISSpec</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>an :func:<code>adiis</code> spec runs the far-from-convergence
+iterations with ADIIS (energy-model extrapolation, no
+oscillation), blending into Pulay DIIS near the fixed point;
+<code>None</code> is plain Pulay DIIS. When given, its <code>space</code>
+supersedes <code>diis_space</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>smearing</code>
+            </td>
+            <td>
+                  <code><span title="dftax.ks.scf.FermiSpec">FermiSpec</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>a :func:<code>fermi</code> spec replaces the integer aufbau fill with
+Fermi-Dirac fractional occupations (small-gap systems, smooth
+energies through level crossings); <code>None</code> is the aufbau fill.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
                 <code>verbose</code>
             </td>
             <td>
@@ -1787,6 +1869,152 @@ guess.</p>
 <span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">e_tol</span><span class="o">=</span><span class="mf">1e-9</span><span class="p">)</span>
 <span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">guess</span><span class="o">=</span><span class="n">sad</span><span class="p">())</span>               <span class="c1"># fewer iterations</span>
 <span class="n">res</span><span class="o">.</span><span class="n">e_tot</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">P</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>       <span class="c1"># P is spin-stacked</span>
+</code></pre></div>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.scf.adiis" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">scf</span><span class="o">.</span><span class="n">adiis</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">space</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8</span><span class="p">,</span> <span class="n">switch</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.1</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ADIISSpec</span></code>
+
+<a href="#dftax.ks.scf.adiis" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>ADIIS-accelerated SCF (Hu-Yang energy-model extrapolation).</p>
+<p>Plain Pulay DIIS extrapolates on the commutator error and can oscillate
+or limit-cycle when the starting density is poor (transition metals,
+radicals, stretched geometries). ADIIS instead minimizes an interpolated
+energy model over the density/Fock history, which cannot overshoot, and
+switches to Pulay DIIS whenever the commutator norm is below <code>switch</code>
+(Pulay converges faster near the fixed point; the switch is re-entrant,
+so an error that grows again hands back to ADIIS).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>space</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>history depth (shared by the ADIIS and Pulay buffers).</p>
+              </div>
+            </td>
+            <td>
+                  <code>8</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>switch</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>commutator-norm threshold between the ADIIS and Pulay
+extrapolations.</p>
+              </div>
+            </td>
+            <td>
+                  <code>0.1</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">accel</span><span class="o">=</span><span class="n">adiis</span><span class="p">())</span>             <span class="c1"># robust far-from-convergence</span>
+<span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">accel</span><span class="o">=</span><span class="n">adiis</span><span class="p">(</span><span class="n">switch</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">))</span>  <span class="c1"># trust ADIIS longer</span>
+</code></pre></div>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.scf.fermi" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">scf</span><span class="o">.</span><span class="n">fermi</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">sigma</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FermiSpec</span></code>
+
+<a href="#dftax.ks.scf.fermi" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Fermi-Dirac smearing of the SCF occupations.</p>
+<p>Occupations become <code>f_i = w / (1 + exp((eps_i - mu) / sigma))</code> with the
+chemical potential <code>mu</code> solved per spin channel so the electron count
+is conserved. Small-gap and metallic-like systems (transition metals,
+stretched bonds, clusters) converge where integer aufbau occupations
+flip-flop between quasi-degenerate configurations, and the occupations
+become a smooth function of the orbital energies, which keeps the energy
+differentiable through level crossings.</p>
+<p>The reported <code>e_tot</code> is the Kohn-Sham energy at the smeared density
+(the Mermin entropy term is not added); take <code>sigma</code> to zero to
+recover the integer-occupation ground state.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>sigma</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>smearing width in Hartree (0.01 Ha ~ 3160 K electronic
+temperature; typical range 0.001 to 0.02).</p>
+              </div>
+            </td>
+            <td>
+                  <code>0.01</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">smearing</span><span class="o">=</span><span class="n">fermi</span><span class="p">(</span><span class="n">sigma</span><span class="o">=</span><span class="mf">0.005</span><span class="p">))</span>
 </code></pre></div>
 </details>
 
@@ -1966,6 +2194,358 @@ the aufbau eigenvectors of the Fock built at that density.</p>
   <div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">minimize</span><span class="p">(</span><span class="n">ks</span><span class="p">)</span>                             <span class="c1"># optax.adam(0.3)</span>
 <span class="n">res</span> <span class="o">=</span> <span class="n">minimize</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">chain</span><span class="p">(</span>
     <span class="n">optax</span><span class="o">.</span><span class="n">clip_by_global_norm</span><span class="p">(</span><span class="mf">1.0</span><span class="p">),</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">0.1</span><span class="p">)),</span> <span class="n">g_tol</span><span class="o">=</span><span class="mf">1e-7</span><span class="p">)</span>
+</code></pre></div>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.newton.newton" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">newton</span><span class="o">.</span><span class="n">newton</span><span class="p">(</span><span class="n">ks</span><span class="p">:</span> <span class="n">KS</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">max_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">64</span><span class="p">,</span> <span class="n">g_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-06</span><span class="p">,</span> <span class="n">e_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-10</span><span class="p">,</span> <span class="n">cg_iters</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span> <span class="n">trust</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.4</span><span class="p">,</span> <span class="n">guess</span><span class="p">:</span> <span class="n">GuessSpec</span> <span class="o">|</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KSResult</span></code>
+
+<a href="#dftax.ks.newton.newton" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Second-order SCF (trust-region Newton on orbital rotations).</p>
+<p>Converges quadratically near a minimum and handles densities that DIIS
+and ADIIS limit-cycle on (small-gap transition metals, stretched bonds).
+One Newton iteration costs a CG solve of Hessian-vector products, each
+the price of a couple of Fock builds, so for benign systems
+:func:<code>~dftax.ks.scf.scf</code> is faster; reach for this when robustness is
+the constraint, typically warm-started from a stalled SCF density
+(<code>newton(ks, guess=res.P)</code>).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>ks</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.ks.energy.KS" href="../build/#dftax.ks.energy.KS">KS</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the built :class:<code>~dftax.ks.energy.KS</code> energy functional.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>max_iter</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>maximum Newton iterations.</p>
+              </div>
+            </td>
+            <td>
+                  <code>64</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>g_tol</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>convergence threshold on the orbital-gradient norm.</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-06</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>e_tol</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>convergence threshold on the energy change (Ha).</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-10</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>cg_iters</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>CG iterations for the Newton step (Hessian-vector solves).</p>
+              </div>
+            </td>
+            <td>
+                  <code>32</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>trust</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>initial trust radius on the rotation norm (radians); halved
+on an uphill proposal, doubled (capped at 1) on success.</p>
+              </div>
+            </td>
+            <td>
+                  <code>0.4</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>guess</code>
+            </td>
+            <td>
+                  <code><span title="dftax.ks.newton.GuessSpec">GuessSpec</span> | <span title="builtins.Array">Array</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>initial density, same forms as :func:<code>~dftax.ks.scf.scf</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>verbose</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>print per-iteration energy / gradient norm.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">max_iter</span><span class="o">=</span><span class="mi">200</span><span class="p">)</span>              <span class="c1"># limit-cycles on a hard case</span>
+<span class="n">res</span> <span class="o">=</span> <span class="n">newton</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">guess</span><span class="o">=</span><span class="n">res</span><span class="o">.</span><span class="n">P</span><span class="p">)</span>            <span class="c1"># quadratic cleanup</span>
+</code></pre></div>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.newton.roks" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">newton</span><span class="o">.</span><span class="n">roks</span><span class="p">(</span><span class="n">ks</span><span class="p">:</span> <span class="n">KS</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">max_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">64</span><span class="p">,</span> <span class="n">g_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-06</span><span class="p">,</span> <span class="n">e_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-10</span><span class="p">,</span> <span class="n">cg_iters</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span> <span class="n">trust</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.4</span><span class="p">,</span> <span class="n">guess</span><span class="p">:</span> <span class="n">GuessSpec</span> <span class="o">|</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KSResult</span></code>
+
+<a href="#dftax.ks.newton.roks" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Restricted open-shell KS via shared-orbital Newton.</p>
+<p>One set of spatial orbitals for both spin channels (alpha fills the
+first <code>nocc[0]</code>, beta the first <code>nocc[1]</code>), so the wavefunction is a
+spin eigenfunction with none of UKS's spin contamination. Implemented as
+:func:<code>newton</code> over rotations of the single shared orbital set: kappa is
+masked to the doubly-occupied/singly-occupied/virtual inter-block
+rotations that change the density, and the constraint that the beta
+space sits inside the alpha space holds by construction. Requires a
+spin-polarized <code>ks</code> (<code>spin != 0</code>).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>ks</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.ks.energy.KS" href="../build/#dftax.ks.energy.KS">KS</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the built spin-polarized :class:<code>~dftax.ks.energy.KS</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>max_iter</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>maximum Newton iterations.</p>
+              </div>
+            </td>
+            <td>
+                  <code>64</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>g_tol</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>convergence threshold on the orbital-gradient norm.</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-06</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>e_tol</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>convergence threshold on the energy change (Ha).</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-10</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>cg_iters</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>CG iterations for the Newton step.</p>
+              </div>
+            </td>
+            <td>
+                  <code>32</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>trust</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>initial trust radius on the rotation norm.</p>
+              </div>
+            </td>
+            <td>
+                  <code>0.4</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>guess</code>
+            </td>
+            <td>
+                  <code><span title="dftax.ks.newton.GuessSpec">GuessSpec</span> | <span title="builtins.Array">Array</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>initial density, same forms as :func:<code>~dftax.ks.scf.scf</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>verbose</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>print per-iteration energy / gradient norm.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="highlight"><pre><span></span><code><span class="n">ks</span> <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">spin</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>              <span class="c1"># triplet</span>
+<span class="n">res</span> <span class="o">=</span> <span class="n">roks</span><span class="p">(</span><span class="n">ks</span><span class="p">)</span>                           <span class="c1"># E &gt;= UKS, no contamination</span>
 </code></pre></div>
 </details>
 

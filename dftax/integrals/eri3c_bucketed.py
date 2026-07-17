@@ -374,6 +374,92 @@ def nuclear_attraction_bucketed(basis, atom_coords, atom_charges, plan=None,
     return out
 
 
+def _make_eri2c_kernel(la, lb, anga, angb, omega=None):
+    """2-center Coulomb kernel for one (la, lb) aux-shell class.
+
+    (P|Q) = 2 pi^{5/2} / (a b sqrt(a+b)) sum_stq Fx_s Fy_r Fz_q R_srq with
+    single-center E tables on both sides, matching _eri2c_primitive.
+    """
+    mt = max(la + lb + 1, 2)
+    conv = np.zeros((mt, mt, mt))
+    for t in range(mt):
+        for tau in range(mt - t):
+            conv[t, tau, t + tau] = 1.0
+    sign = np.asarray([(-1.0) ** t for t in range(mt)])
+    anga, angb = np.asarray(anga), np.asarray(angb)
+    ia = (anga[:, 0], anga[:, 1], anga[:, 2])
+    jb = (angb[:, 0], angb[:, 1], angb[:, 2])
+
+    def one_pair(A, B, ea, eb, ca, cb):
+        AB = A - B
+
+        def per_ab(al, be):
+            sa = jnp.where(al == 0.0, 1.0, al)
+            sb = jnp.where(be == 0.0, 1.0, be)
+            rho = sa * sb / (sa + sb)
+            pref = 2.0 * jnp.pi ** 2.5 / (sa * sb * jnp.sqrt(sa + sb))
+            Ea = [_Ec_table(la, al, mt) for _ in range(3)]
+            Eb = [_Ec_table(lb, be, mt) * sign for _ in range(3)]
+            R = _hermite_table(rho, AB, mt, omega)
+            G = [jnp.einsum("it,ju,tus->ijs", Ea[x], Eb[x], conv)
+                 for x in range(3)]
+            GX = G[0][ia[0][:, None], jb[0][None, :], :]
+            GY = G[1][ia[1][:, None], jb[1][None, :], :]
+            GZ = G[2][ia[2][:, None], jb[2][None, :], :]
+            return pref * jnp.einsum("abs,abr,abq,srq->ab", GX, GY, GZ, R)
+
+        vals = jax.vmap(jax.vmap(per_ab, (None, 0)), (0, None))(ea, eb)
+        return jnp.einsum("ijab,ai,bj->ab", vals, ca, cb)
+
+    return one_pair
+
+
+@lru_cache(maxsize=4096)
+def _compiled_eri2c_kernel(la, lb, anga, angb, omega, chunk_size):
+    """Jitted, cached batch kernel (numpy closure constants; see the eri3c
+    cache note)."""
+    kern = _make_eri2c_kernel(la, lb, anga, angb, omega)
+    return jax.jit(chunked_vmap(kern, in_axes=(0,) * 6,
+                                chunk_size=chunk_size))
+
+
+def eri2c_matrix_bucketed(aux_basis, omega=None, plan=None, chunk=4096):
+    """(naux, naux) 2-center Coulomb metric via shell-class buckets.
+
+    Drop-in for the flat builder (both kernels, same cart2sph convention,
+    differentiable w.r.t. ``centers``); ``plan`` is :func:`plan_pairs` of the
+    auxiliary basis, derived here when the metadata is concrete.
+    """
+    if plan is None:
+        plan = plan_pairs(aux_basis)
+    naux, classes = plan
+    cen = aux_basis.centers
+    out = jnp.zeros((naux, naux), dtype=cen.dtype)
+    for (la, lb, anga, angb, ra, rb, nprims) in classes:
+        npa, npb = nprims
+        ra = np.asarray(ra); rb = np.asarray(rb)
+        nca = (la + 1) * (la + 2) // 2
+        ncb = (lb + 1) * (lb + 2) // 2
+        ca = aux_basis.coefficients[ra[:, None] + np.arange(nca)][:, :, :npa]
+        cb = aux_basis.coefficients[rb[:, None] + np.arange(ncb)][:, :, :npb]
+        fn = _compiled_eri2c_kernel(la, lb, anga, angb, omega,
+                                    min(chunk, ra.shape[0]))
+        vals = fn(cen[ra], cen[rb],
+                  aux_basis.exponents[ra][:, :npa],
+                  aux_basis.exponents[rb][:, :npb], ca, cb)
+        i_idx = ra[:, None, None] + np.arange(nca)[:, None]
+        j_idx = rb[:, None, None] + np.arange(ncb)[None, :]
+        i_idx, j_idx = (np.broadcast_to(x, vals.shape)
+                        for x in (i_idx, j_idx))
+        out = out.at[i_idx.ravel(), j_idx.ravel()].set(vals.reshape(-1))
+        # symmetry via index swap (same rule as the 3-center scatter)
+        out = out.at[j_idx.ravel(), i_idx.ravel()].set(vals.reshape(-1))
+    if aux_basis.cart2sph is not None:
+        C = aux_basis.cart2sph
+        out = C.T @ out @ C
+    return out
+
+
 def eri3c_matrix_bucketed(basis, aux_basis, omega=None, plan=None,
                           chunk=4096):
     """(nao, nao, naux) 3-center ERI tensor via shell-class buckets.

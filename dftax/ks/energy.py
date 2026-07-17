@@ -286,7 +286,7 @@ def ao_on_grid(
 def _build_integrals(
     basis, coords, charges, grid_coords, aux_basis, materialize_ao, materialize_int3c,
     eri_quartets=None, eri_qof=None, stream_exact=False, omega=None,
-    eri3c_plan=None, pair_plan=None,
+    eri3c_plan=None, pair_plan=None, aux_pair_plan=None,
 ):
     """Build all integral arrays in one jitted pass.
 
@@ -323,7 +323,7 @@ def _build_integrals(
         # int3c (nao²×naux) is the big DF tensor; skip it when streaming RI-J.
         int3c = (eri3c_matrix(basis, aux_basis, plan=eri3c_plan)
                  if materialize_int3c else None)
-        int2c = eri2c_matrix(aux_basis)                   # (naux, naux); jit/grad-safe
+        int2c = eri2c_matrix(aux_basis, plan=aux_pair_plan)  # (naux, naux)
         # Symmetric pseudo-inverse of the Coulomb metric, dropping near-null
         # directions. Standard JK-fitting auxiliary sets are heavily overcomplete
         # for small orbital bases (metric condition number ~1e12), so a loose
@@ -339,7 +339,8 @@ def _build_integrals(
             # range-separated DF).
             int3c_lr = eri3c_matrix(basis, aux_basis, omega=omega,
                                     plan=eri3c_plan)
-            int2c_inv_lr = _metric_pinv(eri2c_matrix(aux_basis, omega=omega))
+            int2c_inv_lr = _metric_pinv(
+                eri2c_matrix(aux_basis, omega=omega, plan=aux_pair_plan))
 
     return (S, T + V, ao, dao, e_nn, eri, int3c, int2c_inv,
             eri_lr, int3c_lr, int2c_inv_lr)
@@ -506,6 +507,9 @@ class KS(eqx.Module):
             plan_eri3c(basis, aux_basis) if aux_basis is not None else None
         )
         pair_plan = plan_pairs(basis)
+        aux_pair_plan = (
+            plan_pairs(aux_basis) if aux_basis is not None else None
+        )
         (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
          eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(
             basis, coords, charges, grid_coords, aux_basis,
@@ -513,7 +517,7 @@ class KS(eqx.Module):
             (not shard_df) and not (is_df and spec.chunk is not None),
             quartets, qof, (not is_df) and spec.stream,
             omega if hf_lr != 0.0 else None,
-            eri3c_plan, pair_plan,
+            eri3c_plan, pair_plan, aux_pair_plan,
         )
         # Dispersion is P-independent: a scalar of the (traced) coordinates,
         # mirroring e_nn, so the rebuilt energies in forces/batched carry its

@@ -4,6 +4,35 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **ADIIS-accelerated SCF.** `scf(ks, accel=adiis())` runs the
+  far-from-convergence iterations with the Hu-Yang energy-model
+  extrapolation (coefficients minimized over the probability simplex, so it
+  cannot oscillate the way Pulay DIIS can) and switches to Pulay DIIS while
+  the commutator norm sits below `adiis(switch=...)` (re-entrant: a growing
+  error hands back to ADIIS). A Cr atom (UKS, core guess) where plain DIIS
+  limit-cycles for 200 iterations converges under ADIIS, to the
+  lower-energy SCF solution; benign systems reach the same fixed point at
+  the same cost.
+
+### Changed (performance)
+- **The 3-center ERI and nuclear-attraction builds are bucketed by shell
+  class.** One right-sized McMurchie-Davidson kernel per angular-momentum
+  class (E and Hermite tables built once per primitive shell triple and
+  indexed by its cartesian components, primitives trimmed per class, bra
+  symmetry exploited) replaces the molecule-padded per-element builds.
+  Ethanol/def2-svp: eri3c 318 to 6.3 s on an A100 at a 0.79 GiB peak;
+  nuclear attraction 5.8 to 0.10 s at 0.11 GiB (previously 27.5 GiB, the
+  build's memory peak). Ethanol/def2-tzvp, which could not build at all
+  (124 GiB request), now converges at a 2.8 GiB peak. Tensors are identical
+  to machine precision on both the Coulomb and erf-attenuated kernels, and
+  atom-coordinate gradients match to 2e-16; range-separated hybrids gain
+  the speedup twice (both tensor sets). The aux-sharded multi-GPU slab
+  build keeps the flat engine (slab boundaries cut shells; shell-aligned
+  slabs are follow-up).
+
 ## [0.3.0] - 2026-07-16
 
 ### Changed (numerically visible)

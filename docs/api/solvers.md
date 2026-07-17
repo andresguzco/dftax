@@ -10,6 +10,7 @@ density array for warm restarts. The guess changes the iteration count, never
 the converged fixed point.
 
 ::: dftax.ks.scf.scf
+::: dftax.ks.scf.adiis
 ::: dftax.ks.minimize.minimize
 ::: dftax.ks.scf.KSResult
 ::: dftax.ks.implicit.implicit_density

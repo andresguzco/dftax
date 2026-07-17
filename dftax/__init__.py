@@ -43,7 +43,9 @@ from dftax.integrals import (
 from dftax.ks import (
     KS, System, exact, df, mesh,
     core, sad, minao, sap,
-    scf, minimize, forces, scf_batched, KSResult, BatchedResult,
+    scf, adiis, fermi, newton, roks, minimize, forces, scf_batched,
+    KSResult,
+    BatchedResult,
     dipole, polarizability, hessian, vibrations, ir_spectrum, raman_spectrum,
     alchemical_deriv, implicit_density,
 )
@@ -66,7 +68,10 @@ __all__ = [
     # dispersion (the dispersion= argument of KS)
     "d3bj",
     # run: solver verbs + result
-    "scf", "minimize", "forces", "scf_batched", "KSResult", "BatchedResult",
+    "scf", "adiis", "fermi", "newton", "roks", "minimize", "forces",
+    "scf_batched",
+    "KSResult",
+    "BatchedResult",
     # response properties
     "dipole", "polarizability", "hessian", "vibrations", "ir_spectrum",
     "raman_spectrum", "alchemical_deriv",

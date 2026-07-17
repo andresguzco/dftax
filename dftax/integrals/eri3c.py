@@ -251,7 +251,12 @@ def _eri3c_build_chunk(basis, aux_basis) -> int:
     """
     ml, mt, _ = _eri3c_sizes(basis, aux_basis)
     nprim = int(basis.exponents.shape[1])
-    per = mt * mt * mt * nprim * nprim * ml
+    # the element evaluation vmaps THREE primitive axes (bra a, bra b, aux c);
+    # pricing only nprim² left the budget ~nprim_aux× loose (a jkfit
+    # contraction runs to ~9-12 primitives), the root of the old
+    # "conservative constant" fudge above
+    nprim_aux = int(aux_basis.exponents.shape[1])
+    per = mt * mt * mt * nprim * nprim * nprim_aux * ml
     return max(1, int((_DF_BRA_BUDGET / per) ** (1.0 / 3.0)))
 
 
@@ -340,20 +345,42 @@ def eri3c_matrix(
     basis: BasisData,
     aux_basis: BasisData,
     omega: float | None = None,
+    plan: tuple | None = None,
 ) -> Float[Array, "nao nao n_aux"]:
     """Compute 3-center ERI tensor (μν|P) in the AO basis.
 
     Pure JAX, fully differentiable w.r.t. basis.centers and aux_basis.centers.
+    Delegates to the shell-class-bucketed engine
+    (:func:`~dftax.integrals.eri3c_bucketed.eri3c_matrix_bucketed`): one
+    right-sized kernel per (l_a, l_b, l_aux) class instead of a
+    molecule-padded per-element build (50x on ethanol/def2-svp, sub-GiB
+    peak, identical to machine precision).
 
     Args:
         basis: BasisData for primary AO basis (from extract_basis_data(mol)).
         aux_basis: BasisData for auxiliary basis (from extract_basis_data(auxmol)).
         omega: None for the Coulomb kernel, a float for the long-range
             ``erf(ω·r₁₂)/r₁₂`` kernel (range-separated hybrids).
+        plan: static bucket skeleton from
+            :func:`~dftax.integrals.eri3c_bucketed.plan_eri3c`; required when
+            this build is traced with a fully-traced ``BasisData`` (the
+            jitted ``_build_integrals`` passes it), derived here otherwise.
 
     Returns:
         (μν|P) tensor, shape (nao, nao, n_aux) in spherical harmonics.
     """
+    from dftax.integrals.eri3c_bucketed import eri3c_matrix_bucketed
+
+    return eri3c_matrix_bucketed(basis, aux_basis, omega=omega, plan=plan)
+
+
+def _eri3c_matrix_flat(
+    basis: BasisData,
+    aux_basis: BasisData,
+    omega: float | None = None,
+) -> Float[Array, "nao nao n_aux"]:
+    """The original molecule-padded per-element build; kept as the reference
+    implementation for A/B validation of the bucketed engine."""
     ml, mt, mm = _eri3c_sizes(basis, aux_basis)   # size recursion to the molecule
 
     def _element(i, j, k):

@@ -4,6 +4,67 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-07-17
+
+### Added
+- **ADIIS-accelerated SCF.** `scf(ks, accel=adiis())` runs the
+  far-from-convergence iterations with the Hu-Yang energy-model
+  extrapolation (coefficients minimized over the probability simplex, so it
+  cannot oscillate the way Pulay DIIS can) and switches to Pulay DIIS while
+  the commutator norm sits below `adiis(switch=...)` (re-entrant: a growing
+  error hands back to ADIIS). A Cr atom (UKS, core guess) where plain DIIS
+  limit-cycles for 200 iterations converges under ADIIS, to the
+  lower-energy SCF solution; benign systems reach the same fixed point at
+  the same cost.
+
+- **Second-order SCF.** `newton(ks)` runs trust-region Newton on
+  occupied-virtual orbital rotations `C exp(K)`: the orbital gradient is
+  `jax.grad` of the rotated energy and the Hessian-vector products behind
+  the CG Newton step are `jax.jvp` of that gradient, so the
+  coupled-perturbed machinery costs no new code. Quadratic near a minimum
+  (water in 6 iterations vs 11 for DIIS; O(1) cleanup from a warm density)
+  and reaches tight gradient norms directly where DIIS grinds against its
+  noise floor (the coarse-grid d_tol=1e-9 case: 6 Newton iterations vs 115
+  for DIIS when DIIS closes at all). Cold starts far from a basin and
+  saddle escape (negative curvature) are the documented limitations; the
+  robust pipeline for pathological cases is `adiis` then `newton`.
+
+- **Fermi-Dirac smearing and ROKS.** `scf(ks, smearing=fermi(sigma=...))`
+  replaces the integer aufbau fill with fractional occupations (chemical
+  potential bisected per spin channel inside the loop): small-gap systems
+  converge where integer occupations flip-flop, the electron count is
+  conserved to machine precision, and the occupations are smooth in the
+  orbital energies, which keeps the energy differentiable through level
+  crossings; sigma to zero recovers the aufbau ground state. `roks(ks)` adds
+  restricted open-shell KS as shared-orbital Newton: one spatial orbital set
+  for both channels (no UKS spin contamination), the beta-inside-alpha
+  constraint holding by construction (residual ~1e-15), implemented as the
+  masked-rotation variant of `newton` with no new derivative code.
+
+### Changed (performance)
+- **The 3-center ERI and nuclear-attraction builds are bucketed by shell
+  class.** One right-sized McMurchie-Davidson kernel per angular-momentum
+  class (E and Hermite tables built once per primitive shell triple and
+  indexed by its cartesian components, primitives trimmed per class, bra
+  symmetry exploited) replaces the molecule-padded per-element builds.
+  Ethanol/def2-svp: eri3c 318 to 6.3 s on an A100 at a 0.79 GiB peak;
+  nuclear attraction 5.8 to 0.10 s at 0.11 GiB (previously 27.5 GiB, the
+  build's memory peak). Ethanol/def2-tzvp, which could not build at all
+  (124 GiB request), now converges at a 2.8 GiB peak. Tensors are identical
+  to machine precision on both the Coulomb and erf-attenuated kernels, and
+  atom-coordinate gradients match to 2e-16; range-separated hybrids gain
+  the speedup twice (both tensor sets). The aux-sharded multi-GPU slab
+  build keeps the flat engine (slab boundaries cut shells; shell-aligned
+  slabs are follow-up).
+
+### Fixed
+- **The DF chunk budgets price all three primitive loops.** The memory cost
+  models behind the materialized and streamed 3-center chunk sizes counted
+  the two bra primitive axes but not the auxiliary one, so the ~2.5e8-element
+  budget silently admitted ~nprim_aux times more (a factor ~9 with
+  def2-universal-jkfit contractions) and the chunked builds ran well past
+  their stated bound. Reported from the field against 0.3.0.
+
 ## [0.3.0] - 2026-07-16
 
 ### Changed (numerically visible)

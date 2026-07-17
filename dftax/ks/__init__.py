@@ -20,7 +20,8 @@ from dftax.ks.terms import (
     CoulombTerm, ExactCoulomb, StreamedExactCoulomb, DFCoulomb, StreamedDFCoulomb,
     XCTerm, GridXC, StreamedGridXC,
 )
-from dftax.ks.scf import scf, KSResult
+from dftax.ks.scf import scf, adiis, fermi, KSResult
+from dftax.ks.newton import newton, roks
 from dftax.ks.minimize import minimize
 from dftax.ks.forces import forces
 from dftax.ks.batched import scf_batched, BatchedResult

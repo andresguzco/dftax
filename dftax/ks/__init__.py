@@ -21,6 +21,7 @@ from dftax.ks.terms import (
     XCTerm, GridXC, StreamedGridXC,
 )
 from dftax.ks.scf import scf, adiis, KSResult
+from dftax.ks.newton import newton
 from dftax.ks.minimize import minimize
 from dftax.ks.forces import forces
 from dftax.ks.batched import scf_batched, BatchedResult

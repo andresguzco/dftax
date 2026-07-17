@@ -12,6 +12,7 @@ the converged fixed point.
 ::: dftax.ks.scf.scf
 ::: dftax.ks.scf.adiis
 ::: dftax.ks.minimize.minimize
+::: dftax.ks.newton.newton
 ::: dftax.ks.scf.KSResult
 ::: dftax.ks.implicit.implicit_density
 

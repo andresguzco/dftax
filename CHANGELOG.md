@@ -17,6 +17,18 @@ to [Semantic Versioning](https://semver.org/).
   lower-energy SCF solution; benign systems reach the same fixed point at
   the same cost.
 
+- **Second-order SCF.** `newton(ks)` runs trust-region Newton on
+  occupied-virtual orbital rotations `C exp(K)`: the orbital gradient is
+  `jax.grad` of the rotated energy and the Hessian-vector products behind
+  the CG Newton step are `jax.jvp` of that gradient, so the
+  coupled-perturbed machinery costs no new code. Quadratic near a minimum
+  (water in 6 iterations vs 11 for DIIS; O(1) cleanup from a warm density)
+  and reaches tight gradient norms directly where DIIS grinds against its
+  noise floor (the coarse-grid d_tol=1e-9 case: 6 Newton iterations vs 115
+  for DIIS when DIIS closes at all). Cold starts far from a basin and
+  saddle escape (negative curvature) are the documented limitations; the
+  robust pipeline for pathological cases is `adiis` then `newton`.
+
 ### Changed (performance)
 - **The 3-center ERI and nuclear-attraction builds are bucketed by shell
   class.** One right-sized McMurchie-Davidson kernel per angular-momentum

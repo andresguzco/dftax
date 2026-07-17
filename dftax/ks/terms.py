@@ -73,6 +73,7 @@ class DFSpec:
     auxbasis: str | BasisData = "def2-universal-jkfit"
     chunk: int | str | None = "auto"
     screen: float | None = None
+    spherical: bool | None = None
 
 
 def exact(*, screen: float | None = None, stream: bool = False) -> ExactSpec:
@@ -97,6 +98,7 @@ def df(
     *,
     chunk: int | str | None = "auto",
     screen: float | None = None,
+    spherical: bool | None = None,
 ) -> DFSpec:
     """Density-fitted (RI) Coulomb/exchange with the given auxiliary basis.
 
@@ -115,6 +117,14 @@ def df(
             exactly that chunk.
         screen: Schwarz threshold restricting the streamed RI-J bra sum to
             significant pairs; requires an explicit int ``chunk``.
+        spherical: auxiliary basis span. ``None`` (default) uses spherical
+            harmonics on the materialized path (non-redundant fit, positive
+            definite metric) and cartesian components on the streamed and
+            mesh-sharded paths (which contract cartesian auxiliary elements
+            on the fly). ``False`` forces cartesian everywhere, e.g. to
+            compare a materialized result against a streamed one in the same
+            fit space; ``True`` asserts the spherical span and raises where
+            it is unsupported.
 
     Example:
         ```python
@@ -128,7 +138,13 @@ def df(
             "df(screen=...) requires an explicit int chunk: Schwarz pair "
             "screening applies only to the streamed RI-J contraction."
         )
-    return DFSpec(auxbasis=auxbasis, chunk=chunk, screen=screen)
+    if spherical is True and isinstance(chunk, int):
+        raise ValueError(
+            "df(spherical=True, chunk=<int>) is not supported: the streamed "
+            "backend contracts cartesian auxiliary elements on the fly."
+        )
+    return DFSpec(auxbasis=auxbasis, chunk=chunk, screen=screen,
+                  spherical=spherical)
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +168,17 @@ def _metric_pinv(V: Float[Array, "naux naux"]) -> Float[Array, "naux naux"]:
     1.5e-8 Ha), and the σ = 1e-8·w_max middle ground degrades cross-backend
     force reproducibility 126x (3.3e-6 -> 4.2e-4) by re-admitting near-null
     modes whose eigenvectors rotate under backend rounding.
+
+    A plain Cholesky inverse on the spherical-aux metric (which is genuinely
+    SPD: min eigenvalue ~1e-5 water, ~1.2e-6 Cr/Fe) was also measured and
+    rejected. It makes cross-backend forces essentially exact (7.6e-10
+    GPU-vs-CPU, vs 4.9e-7 with this cutoff), but honestly retaining the
+    near-null directions the cutoff drops (amplification up to ~8e5) stalls
+    the second-order solvers: trust-region Newton hits max_iter on the
+    coarse-grid water case that it otherwise closes in 6 iterations, and
+    ROKS/ADIIS lose their open-shell regression cases. JK-fitting sets are
+    near-redundant even in spherical form; the cutoff is load-bearing
+    regularization, not a cartesian-contaminant workaround.
 
     Wrapped in a ``custom_jvp`` so its derivative uses the matrix identity
     ``d(V⁺) = -V⁺ (dV) V⁺`` rather than differentiating the eigendecomposition. eigh's

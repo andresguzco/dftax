@@ -38,3 +38,24 @@ class TestDensityFitting:
         assert res_df.P is not None
         # RI error vs the exact 4-center result: sub-mHa.
         assert abs(res_df.e_tot - e_full) < 1e-3, f"RI err {res_df.e_tot - e_full}"
+
+
+@pytest.mark.pyscf
+@pytest.mark.float64
+def test_spherical_aux_knob():
+    """df(spherical=...) controls the auxiliary span on the materialized path.
+
+    The default upgrades to spherical harmonics (fewer auxiliary functions,
+    positive definite metric); spherical=False keeps the cartesian span the
+    streamed and sharded backends use; spherical=True with a streamed chunk
+    is rejected at the factory.
+    """
+    mol = gto.M(atom=H2O, basis="sto-3g").build()
+    grid = jnp.zeros((8, 3)), jnp.zeros((8,))
+    ks_sph = KS(mol, LDA(), grid=grid, coulomb=df(AUX))
+    ks_cart = KS(mol, LDA(), grid=grid, coulomb=df(AUX, spherical=False))
+    naux_sph = ks_sph.coulomb.int3c.shape[-1]
+    naux_cart = ks_cart.coulomb.int3c.shape[-1]
+    assert naux_sph < naux_cart  # h/i cartesian contaminants dropped
+    with pytest.raises(ValueError):
+        df(AUX, chunk=50, spherical=True)

@@ -170,6 +170,18 @@ def scf_batched(
             else aux_t.centers.shape[0]
         )
         df_chunk = _resolve_df_chunk(coulomb.chunk, nao_final, naux, False)
+        if coulomb.spherical is True and df_chunk is not None:
+            raise NotImplementedError(
+                "df(spherical=True) requires the materialized backend; the "
+                "streamed path contracts cartesian auxiliary elements."
+            )
+        if df_chunk is None and coulomb.spherical is not False:
+            # materialized path: spherical aux (SPD metric), matching KS
+            aux_t, a_idx = build_basis_data(
+                symbols, mol.atom_coords(), coulomb.auxbasis,
+                return_atom_index=True, spherical=True,
+            )
+            aux_idx = jnp.asarray(a_idx)
         if forces and df_chunk is not None and float(xc.hf_coeff) != 0.0:
             raise ValueError(
                 "batched forces with a streamed hybrid RI-K have no geometry "

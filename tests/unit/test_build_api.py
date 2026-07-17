@@ -153,7 +153,9 @@ def test_df_auto_chunk_switches_to_streamed(monkeypatch):
 
     mol = Molecule.from_xyz(WATER, "sto-3g")
     grid = becke(35, 50)
-    e_mat = scf(KS(mol, LDA(), grid=grid)).e_tot
+    # spherical=False: the streamed side below is cartesian; the 1e-9
+    # energy comparison needs both runs in the same fit space.
+    e_mat = scf(KS(mol, LDA(), grid=grid, coulomb=df(spherical=False))).e_tot
     monkeypatch.setattr(energy_mod, "_DF_BUDGET", 16)
     ks_s = KS(mol, LDA(), grid=grid)
     assert isinstance(ks_s.coulomb, StreamedDFCoulomb)

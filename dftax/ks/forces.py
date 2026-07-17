@@ -129,7 +129,8 @@ def forces(
             )
         if coulomb.chunk == "auto":
             coulomb = DFSpec(
-                auxbasis=coulomb.auxbasis, chunk=None, screen=coulomb.screen
+                auxbasis=coulomb.auxbasis, chunk=None, screen=coulomb.screen,
+                spherical=coulomb.spherical,
             )
     if isinstance(coulomb, ExactSpec) and (coulomb.stream or coulomb.screen):
         raise ValueError("forces support only the plain materialized exact() backend.")
@@ -161,8 +162,11 @@ def forces(
                 "forces rebuild the auxiliary basis per geometry; pass "
                 "df(<basis-set name>), not a prebuilt BasisData."
             )
+        # spherical aux: matches the KS materialized default (forces always
+        # resolve to the materialized path)
         aux_t, a_idx = build_basis_data(
-            symbols, mol.atom_coords(), auxbasis, return_atom_index=True
+            symbols, mol.atom_coords(), auxbasis, return_atom_index=True,
+            spherical=coulomb.spherical is not False,
         )
         aux_atom_idx = jnp.asarray(a_idx)
 

@@ -231,26 +231,78 @@ def _resolve_grid(grid, symbols, coords):
     return gc, gw, None
 
 
-def _resolve_coulomb(spec, symbols, coords):
-    """Resolve a Coulomb spec's auxiliary basis name to ``BasisData``.
+def _resolve_coulomb(spec, symbols):
+    """Default and validate the Coulomb spec (the aux basis builds later).
 
     ``None`` defaults to density fitting (O(N³) memory, sub-mHa RI error);
-    a raw :class:`System` carries no element symbols to resolve the auxiliary
-    basis name, so it falls back to the exact 4-center path.
+    a raw :class:`System` carries no element symbols to resolve an auxiliary
+    basis name, so it falls back to the exact 4-center path. The auxiliary
+    basis itself is built by :func:`_resolve_aux`, once the span (spherical
+    vs cartesian) is known.
     """
     if spec is None:
         spec = df() if symbols is not None else exact()
-    if isinstance(spec, DFSpec) and not isinstance(spec.auxbasis, BasisData):
-        if symbols is None:
-            raise TypeError(
-                "df() with a basis-set name needs element symbols; pass an "
-                "already-built BasisData when building from a raw System."
-            )
-        from dftax.basis.loader import build_basis_data
-
-        aux = build_basis_data(symbols, coords, spec.auxbasis)
-        return DFSpec(auxbasis=aux, chunk=spec.chunk, screen=spec.screen)
+    if (isinstance(spec, DFSpec)
+            and not isinstance(spec.auxbasis, BasisData)
+            and symbols is None):
+        raise TypeError(
+            "df() with a basis-set name needs element symbols; pass an "
+            "already-built BasisData when building from a raw System."
+        )
     return spec
+
+
+def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
+                 sharded: bool) -> DFSpec:
+    """Pick the auxiliary span, build the basis once, resolve the policy.
+
+    The materialized unsharded path uses spherical harmonics: the redundant
+    cartesian contaminants drop out of the fit space (~15% fewer auxiliary
+    functions), tightening the RI fit and improving the metric conditioning
+    (the near-null directions that map density error into density-fitted
+    derivatives shrink to the set intrinsic to the JK-fitting basis). The
+    streamed and mesh-sharded backends contract cartesian auxiliary
+    elements on the fly and need the cartesian span. The ``"auto"`` memory
+    policy prices the intended span; only when it falls back to streaming is
+    the basis rebuilt (and the chunk re-priced) cartesian.
+    """
+    from dftax.basis.loader import build_basis_data
+
+    aux = spec.auxbasis
+    prebuilt = isinstance(aux, BasisData)
+    streamed = isinstance(spec.chunk, int)
+    if spec.spherical is True and (streamed or sharded):
+        raise NotImplementedError(
+            "df(spherical=True) requires the materialized unsharded "
+            "backend: the streamed and mesh-sharded paths contract "
+            "cartesian auxiliary elements on the fly."
+        )
+    want_sph = spec.spherical is not False and not streamed and not sharded
+    if not prebuilt:
+        aux = build_basis_data(symbols, coords, spec.auxbasis,
+                               spherical=want_sph)
+    naux = (aux.cart2sph.shape[1] if aux.cart2sph is not None
+            else aux.centers.shape[0])
+    chunk = spec.chunk
+    if chunk == "auto":
+        chunk = _resolve_df_chunk(chunk, nao, naux, sharded)
+    if (chunk is not None or sharded) and aux.cart2sph is not None:
+        if prebuilt:
+            raise NotImplementedError(
+                "streamed and mesh-sharded density fitting need a cartesian "
+                "auxiliary basis; this prebuilt BasisData is spherical."
+            )
+        # "auto" fell back to streaming: rebuild and re-price for the
+        # (larger) cartesian span.
+        aux = build_basis_data(symbols, coords, spec.auxbasis)
+        chunk = _resolve_df_chunk("auto", nao, aux.centers.shape[0], sharded)
+    if spec.spherical is True and aux.cart2sph is None:
+        raise ValueError(
+            "df(spherical=True) with a prebuilt cartesian BasisData; build "
+            "it with build_basis_data(..., spherical=True)."
+        )
+    return DFSpec(auxbasis=aux, chunk=chunk, screen=spec.screen,
+                  spherical=spec.spherical)
 
 
 def _resolve_screening(spec, basis):
@@ -326,18 +378,20 @@ def _build_integrals(
                  if materialize_int3c else None)
         int2c = eri2c_matrix(aux_basis, plan=aux_pair_plan)  # (naux, naux)
         # Symmetric pseudo-inverse of the Coulomb metric, dropping near-null
-        # directions. Standard JK-fitting auxiliary sets are heavily overcomplete
-        # for small orbital bases (metric condition number ~1e12), so a loose
-        # cutoff leaves ~1e7 amplification in the inverse that injects noise into
-        # the Fock and makes the SCF limit-cycle. A 1e-7 relative cutoff keeps
-        # the metric well-conditioned; the dropped directions are redundant so
-        # the RI error stays sub-mHa.
+        # directions (both aux spans; see the measured studies in the
+        # _metric_pinv docstring, including the rejected spherical-metric
+        # Cholesky). Standard JK-fitting sets are near-redundant even in
+        # spherical form; the 1e-7 relative cutoff keeps the inverse
+        # well-conditioned at sub-mHa RI cost.
         int2c_inv = _metric_pinv(int2c)
         eri = None
         if omega is not None:
             # The RI treatment of the long-range operator attenuates both the
             # 3-center integrals and the metric (standard, as in PySCF's
-            # range-separated DF).
+            # range-separated DF). The attenuated metric is numerically
+            # singular for either aux span: erf(wr)/r crushes tight auxiliary
+            # functions toward zero norm (condition ~1e16, smallest
+            # eigenvalues negative at machine precision).
             int3c_lr = eri3c_matrix(basis, aux_basis, omega=omega,
                                     plan=eri3c_plan)
             int2c_inv_lr = _metric_pinv(
@@ -436,7 +490,7 @@ class KS(eqx.Module):
                 nocc = _spin_counts(nelec, sys_spin)
         else:
             nocc = _spin_counts(nelec, int(spin))
-        spec = _resolve_coulomb(coulomb, symbols, coords)
+        spec = _resolve_coulomb(coulomb, symbols)
 
         coords = jnp.asarray(coords)
         charges = jnp.asarray(charges, dtype=coords.dtype)
@@ -457,24 +511,12 @@ class KS(eqx.Module):
         grid_chunk = _resolve_chunk(
             grid_chunk, -(-grid_coords.shape[0] // ndev), nao_final
         )
-        if isinstance(spec, DFSpec) and spec.chunk == "auto":
-            aux = spec.auxbasis
-            naux = (
-                aux.cart2sph.shape[1]
-                if aux.cart2sph is not None
-                else aux.centers.shape[0]
-            )
-            spec = DFSpec(
-                auxbasis=aux,
-                chunk=_resolve_df_chunk(
-                    spec.chunk, nao_final, naux, devices is not None
-                ),
-                screen=spec.screen,
-            )
-        quartets, qof, pairs = _resolve_screening(spec, basis)
         is_df = isinstance(spec, DFSpec)
-        aux_basis = spec.auxbasis if is_df else None
         shard_df = devices is not None and is_df
+        if is_df:
+            spec = _resolve_aux(spec, symbols, coords, nao_final, shard_df)
+        quartets, qof, pairs = _resolve_screening(spec, basis)
+        aux_basis = spec.auxbasis if is_df else None
         if shard_df:
             if spec.chunk is not None:
                 raise NotImplementedError(

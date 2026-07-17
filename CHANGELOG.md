@@ -4,6 +4,49 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed (numerically visible)
+- **The default density-fitting path uses a spherical auxiliary basis.**
+  The materialized, unsharded DF backend (the default `coulomb=None`
+  resolution) and the force and batched paths now build the auxiliary set
+  in spherical harmonics: the redundant cartesian h/i contaminants drop
+  out (about 15 percent fewer auxiliary functions), the fit tightens
+  (water/6-31g RI error 3.6e-4 to 4.8e-5 Ha; Fe/sto-3g 1.7 to 1.1 mHa),
+  and the metric's near-null band shrinks to the redundancy intrinsic to
+  the JK-fitting set, cutting the cross-backend density-fitted force
+  scatter about 7x (GPU-vs-CPU 3.3e-6 to 4.9e-7 on water/def2-svp PBE).
+  DF energies shift within the RI error; the streamed (`df(chunk=...)`)
+  and mesh-sharded backends keep the cartesian auxiliary basis.
+  `df(spherical=False)` opts out, e.g. to compare a materialized result
+  against a streamed or sharded one in the same fit space;
+  `df(spherical=True)` asserts the spherical span and raises where it is
+  unsupported. The metric stays with the cutoff pseudo-inverse for both
+  spans: a Cholesky inverse of the (genuinely positive definite)
+  spherical metric was measured and rejected, since honestly retaining
+  the near-null directions stalls the second-order solvers on
+  coarse-grid and transition-metal cases (the study is recorded in the
+  `_metric_pinv` docstring). Exactly degenerate atomic ground states
+  (e.g. a Cr atom) that the cartesian fit's slight symmetry breaking
+  happened to converge may now need `fermi()` smearing, which is the
+  physically appropriate treatment.
+- **Cartesian-to-spherical blocks extend to l=6.** `build_basis_data`
+  with `spherical=True` now covers h and i shells (the def2-universal-jkfit
+  sets for the 3d row), with `scripts/gen_cart2sph.py` regenerating the
+  vendored table.
+
+### Changed (performance)
+- **The 2-center Coulomb, overlap, and kinetic builds are bucketed by
+  shell class.** With the 0.4.0 eri3c and nuclear-attraction work this
+  puts every integral build in the KS path on the bucketed
+  McMurchie-Davidson engine; the flat implementations remain as A/B
+  references. eri2c on def2-universal-jkfit runs 19x faster warm (0.23 s
+  vs 4.37 s) and matches the flat build to machine precision through
+  l=6; overlap and kinetic come from one shared Obara-Saika pass per
+  primitive pair (one table per axis serves the overlap and all seven
+  kinetic terms) instead of seven molecule-padded table rebuilds per
+  element.
+
 ## [0.4.0] - 2026-07-17
 
 ### Added

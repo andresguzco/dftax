@@ -212,7 +212,7 @@ def nuclear_attraction_matrix(
     basis: BasisData,
     atom_coords: Float[Array, "n_atoms 3"],
     atom_charges: Float[Array, "n_atoms"],
-    plan=None,
+    plan: tuple | None = None,
 ) -> Float[Array, "nao nao"]:
     """Compute nuclear attraction matrix V_μν in the AO basis.
 

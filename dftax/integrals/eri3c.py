@@ -340,7 +340,7 @@ def eri3c_matrix(
     basis: BasisData,
     aux_basis: BasisData,
     omega: float | None = None,
-    plan=None,
+    plan: tuple | None = None,
 ) -> Float[Array, "nao nao n_aux"]:
     """Compute 3-center ERI tensor (μν|P) in the AO basis.
 

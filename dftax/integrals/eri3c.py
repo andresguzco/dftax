@@ -251,7 +251,12 @@ def _eri3c_build_chunk(basis, aux_basis) -> int:
     """
     ml, mt, _ = _eri3c_sizes(basis, aux_basis)
     nprim = int(basis.exponents.shape[1])
-    per = mt * mt * mt * nprim * nprim * ml
+    # the element evaluation vmaps THREE primitive axes (bra a, bra b, aux c);
+    # pricing only nprim² left the budget ~nprim_aux× loose (a jkfit
+    # contraction runs to ~9-12 primitives), the root of the old
+    # "conservative constant" fudge above
+    nprim_aux = int(aux_basis.exponents.shape[1])
+    per = mt * mt * mt * nprim * nprim * nprim_aux * ml
     return max(1, int((_DF_BRA_BUDGET / per) ** (1.0 / 3.0)))
 
 

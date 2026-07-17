@@ -284,7 +284,9 @@ def _eri3c_bra_chunk(basis, aux_basis, inflight):
     """
     ml, mt, _ = _eri3c_sizes(basis, aux_basis)
     nprim = int(basis.exponents.shape[1])
-    per = mt * mt * mt * nprim * nprim * ml * max(int(inflight), 1)
+    # all three primitive axes (bra a, bra b, aux c); see _eri3c_build_chunk
+    nprim_aux = int(aux_basis.exponents.shape[1])
+    per = mt * mt * mt * nprim * nprim * nprim_aux * ml * max(int(inflight), 1)
     return max(1, int(_DF_BRA_BUDGET // per))
 
 

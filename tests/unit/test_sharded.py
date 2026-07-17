@@ -138,7 +138,11 @@ def test_sharded_scf_and_minimize_match():
     r0 = scf(KS(mol, PBE(), grid=GRID), e_tol=1e-10, d_tol=1e-8)
     r1 = scf(KS(mol, PBE(), grid=GRID, mesh=mesh()), e_tol=1e-10, d_tol=1e-8)
     assert r0.converged and r1.converged
-    assert r1.e_tot == pytest.approx(r0.e_tot, abs=1e-10)
+    # 5e-9 (SCF-level bound, same as the batch-axis test): the unsharded
+    # build is bucketed while the sharded DF slabs keep the flat engine, and
+    # the epsilon-level tensor differences amplify through the RI metric and
+    # the solve; measured flapping at ~1.1e-10 around the old 1e-10.
+    assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)
 
     m0 = minimize(KS(mol, LDA(), grid=GRID), max_steps=1500)
     m1 = minimize(KS(mol, LDA(), grid=GRID, mesh=mesh()), max_steps=1500)

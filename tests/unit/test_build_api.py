@@ -156,7 +156,9 @@ def test_df_auto_chunk_switches_to_streamed(monkeypatch):
     # spherical=False: the streamed side below is cartesian; the 1e-9
     # energy comparison needs both runs in the same fit space.
     e_mat = scf(KS(mol, LDA(), grid=grid, coulomb=df(spherical=False))).e_tot
-    monkeypatch.setattr(energy_mod, "_DF_BUDGET", 16)
+    # Force the streamed branch: patch the resolved budget (device-aware on a
+    # GPU) down to a tiny value so the water tensor exceeds it.
+    monkeypatch.setattr(energy_mod, "_df_materialize_budget", lambda: 16)
     ks_s = KS(mol, LDA(), grid=grid)
     assert isinstance(ks_s.coulomb, StreamedDFCoulomb)
     assert abs(scf(ks_s).e_tot - e_mat) < 1e-9

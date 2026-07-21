@@ -161,25 +161,52 @@ def _resolve_system(system):
 _AO_GRID_BUDGET = 2**27
 # Per-chunk element budget when streaming (~32 MiB of AO values per chunk).
 _AO_CHUNK_BUDGET = 2**22
-# Element budget for the materialized DF 3-center tensor (nao², naux),
-# ~2 GiB in float64; above it ``df(chunk="auto")`` streams RI-J/RI-K over
-# auxiliary chunks sized to keep ~_DF_CHUNK_BUDGET elements in flight.
+# Element budget for the materialized DF 3-center tensor (nao², naux). The
+# fixed value (~2 GiB in float64) is the CPU / unknown-device fallback and a
+# floor; on a GPU ``_df_materialize_budget`` sizes it to the device pool
+# instead (see there). Above the resolved budget ``df(chunk="auto")`` streams
+# RI-J/RI-K over auxiliary chunks sized to keep ~_DF_CHUNK_BUDGET in flight.
 _DF_BUDGET = 2**28
 _DF_CHUNK_BUDGET = 2**24
+# Fraction of the device memory pool the materialized 3-center tensor may
+# claim. The RI-K exchange intermediates (~tensor/10) and the AO grid sit
+# alongside it, so a quarter of the pool keeps the materialized peak well
+# under capacity while still materializing far larger systems than the fixed
+# 2 GiB floor did (an A100's ~68 GiB pool -> ~17 GiB, ~8x more headroom).
+_DF_POOL_FRACTION = 0.25
+
+
+def _df_materialize_budget() -> int:
+    """Element budget (float64) for materializing the DF 3-center tensor.
+
+    Sized to the default device's memory pool on a GPU; falls back to the
+    fixed ``_DF_BUDGET`` on CPU or when the device does not report a limit.
+    Always at least ``_DF_BUDGET`` so the GPU never streams a system the CPU
+    fallback would have materialized.
+    """
+    try:
+        stats = jax.local_devices()[0].memory_stats()
+        limit = stats.get("bytes_limit") if stats else None
+    except Exception:
+        limit = None
+    if limit is None:
+        return _DF_BUDGET
+    return max(_DF_BUDGET, int(_DF_POOL_FRACTION * limit) // 8)
 
 
 def _resolve_df_chunk(chunk, nao: int, naux: int, sharded: bool):
     """Resolve a DF spec's chunk policy to a concrete value.
 
-    ``"auto"``: materialize the (nao², naux) tensor when it fits
-    ``_DF_BUDGET`` or when the calculation is mesh-sharded (the aux-sharded
-    backend holds per-device slabs, which is already the capacity path);
-    otherwise stream over auxiliary chunks. ``None`` forces materialized; an
-    int streams with exactly that chunk.
+    ``"auto"``: materialize the (nao², naux) tensor when it fits the
+    device-aware budget (:func:`_df_materialize_budget`) or when the
+    calculation is mesh-sharded (the aux-sharded backend holds per-device
+    slabs, which is already the capacity path); otherwise stream over
+    auxiliary chunks. ``None`` forces materialized; an int streams with
+    exactly that chunk.
     """
     if chunk != "auto":
         return chunk
-    if sharded or nao * nao * naux <= _DF_BUDGET:
+    if sharded or nao * nao * naux <= _df_materialize_budget():
         return None
     return max(8, _DF_CHUNK_BUDGET // (nao * nao))
 

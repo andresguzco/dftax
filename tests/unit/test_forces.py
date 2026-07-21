@@ -11,7 +11,7 @@ import pytest
 
 from dftax.energy.xc import LDA
 from dftax.system.molecule import Molecule
-from dftax import KS, becke, df, scf, forces
+from dftax import KS, becke, df, exact, fermi, scf, forces
 from dftax.ks.forces import _density_from_Z
 from dftax.grid import becke_grid
 
@@ -85,6 +85,40 @@ class TestForces:
         cm[1, 2] -= eps
         fd = -(energy(cp) - energy(cm)) / (2 * eps)
         assert abs(float(F[1, 2]) - fd) < 1e-4, f"F={float(F[1,2])} fd={fd}"
+
+    def test_smeared_force_matches_finite_difference(self):
+        """Mermin force under Fermi smearing: the analytic force (frozen
+        fractional natural-orbital density) must match the finite difference of
+        the re-converged free energy. C2 at 1.3 A has a near-degenerate
+        frontier, so smearing gives genuinely fractional occupations (ts > 0),
+        exercising the natural-orbital force path rather than the integer
+        projector.
+        """
+        xc = LDA()
+        c0 = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.3]])
+        sig = 0.02
+
+        def free_energy(coords):
+            m = Molecule(["C", "C"], coords, "sto-3g")
+            gc, gw = becke_grid(m.symbols, m.atom_coords(), NR, LEB)
+            return scf(KS(m, xc, grid=(gc, gw), coulomb=exact()),
+                       smearing=fermi(sigma=sig),
+                       e_tol=1e-11, d_tol=1e-9, max_iter=300).e_tot
+
+        mol = Molecule(["C", "C"], c0, "sto-3g")
+        gc, gw = becke_grid(mol.symbols, c0, NR, LEB)
+        res = scf(KS(mol, xc, grid=(gc, gw), coulomb=exact()),
+                  smearing=fermi(sigma=sig), e_tol=1e-11, d_tol=1e-9,
+                  max_iter=300)
+        assert res.converged and float(res.ts) > 1e-6   # fractional path active
+
+        F = forces(mol, xc, res, grid=becke(NR, LEB), coulomb=exact())
+        eps = 1e-3
+        cp, cm = c0.copy(), c0.copy()
+        cp[1, 2] += eps
+        cm[1, 2] -= eps
+        fd = -(float(free_energy(cp)) - float(free_energy(cm))) / (2 * eps)
+        assert abs(float(F[1, 2]) - fd) < 1e-4, f"F={float(F[1, 2])} fd={fd}"
 
     def test_stationarity_multiple_occupied(self):
         # Guards the degenerate-eigh fix: at the converged density of a system

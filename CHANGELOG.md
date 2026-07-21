@@ -18,6 +18,16 @@ to [Semantic Versioning](https://semver.org/).
   degenerate d-shell has no integer-occupation minimum, now converges under
   smearing and reports a sensible free energy (e.g. sigma=0.02: A=-1033.041,
   ts=0.099). `KSResult` gains a defaulted `ts` field (0 without smearing).
+- **Forces under smearing.** `forces()` on a smeared result freezes the full
+  fractional natural-orbital density (all natural orbitals with their
+  occupations), not the top-nocc integer projector that truncated the
+  fractional tail, so the reported force is the gradient of the Mermin free
+  energy. Because the force is evaluated at the reference geometry, the frozen
+  orbitals' symmetric orthonormalizer needs only its first-order form there
+  (`1.5 I - 0.5 ΦᵀS(R)Φ`), which is matmul-only and avoids the
+  degenerate-occupation eigendecomposition. Verified against finite difference
+  of the re-converged free energy (C2 with fractional occupations: analytic
+  vs FD agree to 5e-6). The integer-occupation force path is unchanged.
 - **Second-order SCF handles indefinite Hessians.** `newton()` and `roks()`
   previously took the trust-region step from `jax.scipy.sparse.linalg.cg`,
   which assumes a positive-definite Hessian; at an ill-conditioned or saddle

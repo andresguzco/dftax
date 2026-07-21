@@ -10,6 +10,14 @@ through the projector parametrization ``P_σ = w Z_σ (Z_σᵀ S(R) Z_σ)⁻¹ Z
 the explicit geometry derivative, which captures both the Hellmann-Feynman term
 and the Pulay terms (the latter via the S(R) dependence inside the projector and
 the moving basis centers). Native-``Molecule`` path only.
+
+Under Fermi smearing the density is not a plain projector: the frozen
+quantity is the full set of natural orbitals with their fractional
+occupations (``P_σ = Φ B diag(f) B Φᵀ``, ``B`` the symmetric orthonormalizer
+of the frozen orbitals at ``R``), and the reported force is the gradient of
+the Mermin free energy. The entropy term is frozen with the occupations, so
+it drops out of ``dA/dR`` and the force is again the explicit geometry
+derivative at the frozen density (see :func:`_density_frac`).
 """
 
 from __future__ import annotations
@@ -27,6 +35,41 @@ from dftax.ks.energy import KS, System, _resolve_chunk
 from dftax.ks.scf import KSResult
 from dftax.ks.terms import DFSpec, ExactSpec, _rik_occ_orbitals, df
 from dftax.system.molecule import Molecule
+
+
+def _natural_orbitals(P, S):
+    """S-orthonormal natural orbitals and their occupations from a density P.
+
+    Eigendecomposes ``S^{1/2} P S^{1/2}``: the eigenvalues are the occupation
+    numbers (electrons per orbital, fractional under smearing) and the
+    back-transformed eigenvectors are the S-orthonormal natural orbitals.
+    Forward-only (the coefficients and occupations are ``stop_gradient``-ed in
+    the caller, so this eigh is never differentiated).
+    """
+    sval, svec = jnp.linalg.eigh(S)
+    sval = jnp.clip(sval, 1e-12, None)
+    s_h = (svec * jnp.sqrt(sval)) @ svec.T
+    s_ih = (svec / jnp.sqrt(sval)) @ svec.T
+    f, u = jnp.linalg.eigh(s_h @ P @ s_h)
+    return s_ih @ u, f                                     # (nao, nmo), (nmo,)
+
+
+def _density_frac(Phi, f, S):
+    """Density from frozen natural orbitals ``Phi`` with occupations ``f``,
+    re-orthonormalized at the (moving) overlap ``S``:
+    ``P = Phi B diag(f) B Phiᵀ`` with ``B = (ΦᵀSΦ)^{-1/2}``.
+
+    ``B`` is the symmetric orthonormalizer of the frozen orbitals at the
+    current geometry. Because the force is taken at the reference geometry,
+    where ``M = ΦᵀSΦ = I``, ``B`` only needs to be correct to first order at
+    ``M = I``: the Taylor form ``1.5 I - 0.5 M`` has value ``I`` and derivative
+    ``-1/2`` there (matching ``M^{-1/2}``) with only matmuls -- no eigh, so no
+    degenerate-occupation blow-up. Reduces to the integer projector
+    ``w Z(ZᵀSZ)^{-1}Zᵀ`` when every occupation equals ``w``.
+    """
+    M = Phi.T @ S @ Phi
+    B = 1.5 * jnp.eye(M.shape[0], dtype=M.dtype) - 0.5 * M
+    return Phi @ (B * f) @ B @ Phi.T                       # B diag(f) B
 
 
 def _density_from_Z(Z, S):
@@ -147,11 +190,27 @@ def forces(
     # Reference-geometry overlap, needed to extract the occupied orbitals
     # from result.P (only the KSResult path uses it).
     S0 = overlap_matrix(basis_t) if isinstance(result, KSResult) else None
-    Zs = tuple(
-        jax.lax.stop_gradient(Z) for Z in _occupied_coefficients(result, S0)
-    )
-    w = 2.0 if len(Zs) == 1 else 1.0
-    spin = None if len(Zs) == 1 else Zs[0].shape[1] - Zs[1].shape[1]
+    # A smeared solve has fractional occupations spread beyond the nocc frontier
+    # (KSResult.ts > 0): freeze the full natural-orbital density instead of the
+    # top-nocc integer projector so the Mermin force is taken at the density the
+    # solver actually returned. The entropy term is frozen with the occupations,
+    # so it drops out of dA/dR and the force is d/dR of the KS energy at the
+    # frozen density (envelope theorem, as in the integer case).
+    smeared = isinstance(result, KSResult) and float(result.ts) > 1e-12
+    if smeared:
+        nchan = len(result.nocc)
+        nos = tuple(
+            tuple(jax.lax.stop_gradient(a)
+                  for a in _natural_orbitals(result.P[s], S0))
+            for s in range(nchan)
+        )
+        spin = None if nchan == 1 else result.nocc[0] - result.nocc[1]
+    else:
+        Zs = tuple(
+            jax.lax.stop_gradient(Z) for Z in _occupied_coefficients(result, S0)
+        )
+        w = 2.0 if len(Zs) == 1 else 1.0
+        spin = None if len(Zs) == 1 else Zs[0].shape[1] - Zs[1].shape[1]
     atom_idx = jnp.asarray(atom_idx)
     aux_t = None
     aux_atom_idx = None
@@ -201,7 +260,11 @@ def forces(
             xc, grid=points(gc, gw, chunk=xc_chunk), coulomb=spec, spin=spin,
             dispersion=dispersion,
         )
-        P = jnp.stack([w * (Z @ jnp.linalg.solve(Z.T @ ks.S @ Z, Z.T)) for Z in Zs])
+        if smeared:
+            P = jnp.stack([_density_frac(Phi, f, ks.S) for Phi, f in nos])
+        else:
+            P = jnp.stack(
+                [w * (Z @ jnp.linalg.solve(Z.T @ ks.S @ Z, Z.T)) for Z in Zs])
         return ks.total(P)
 
     return -jax.grad(energy)(coords0)

@@ -36,14 +36,12 @@ from dftax.energy.boys import boys
 from dftax.utils.vmap import vmap as chunked_vmap
 
 
-# Orbital angular-momentum ceiling of the integral engine. The Cartesian
-# component tables, the Obara-Saika/McMurchie-Davidson recursion sizes, and
-# the nuclear-attraction tables all top out at g (l=4), so cc-pVQZ /
-# def2-QZVP are the highest orbital bases; cc-pV5Z / cc-pV6Z (h/i functions)
-# are not yet supported. Lifting this cap is tracked as A5. Guarded eagerly
-# in the plan builders (below) rather than left to fail deep in a traced
-# build, where an over-cap basis silently balloons the recursion instead.
-_ORBITAL_L_MAX = 4
+# Orbital angular-momentum ceiling of the integral engine: i (l=6), matching
+# the auxiliary ceiling and the cart2sph/component tables, so cc-pV5Z (h) and
+# cc-pV6Z (i) orbital bases build. Guarded eagerly in the plan builders
+# (below) rather than left to fail deep in a traced build, where an over-cap
+# basis silently balloons the recursion instead.
+_ORBITAL_L_MAX = 6
 
 
 def _check_orbital_l(basis):
@@ -51,10 +49,8 @@ def _check_orbital_l(basis):
     L = int(basis.max_l)
     if L > _ORBITAL_L_MAX:
         raise ValueError(
-            f"the integral engine supports orbital angular momentum up to g "
-            f"(l={_ORBITAL_L_MAX}); got l={L}. cc-pVQZ / def2-QZVP are the "
-            f"highest supported orbital bases; 5Z/6Z (h/i functions) are not "
-            f"yet supported."
+            f"the integral engine supports orbital angular momentum up to i "
+            f"(l={_ORBITAL_L_MAX}); got l={L}."
         )
 
 

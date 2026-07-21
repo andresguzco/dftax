@@ -73,6 +73,14 @@ to [Semantic Versioning](https://semver.org/).
   vendored table.
 
 ### Added
+- **5Z and 6Z orbital bases.** The orbital-side angular-momentum ceiling
+  rises from g (l=4) to i (l=6), matching the auxiliary ceiling: cc-pV5Z /
+  aug-cc-pV5Z (h functions) and cc-pV6Z (i functions) now build and run.
+  The one-electron, 3-center and 4-center integrals at h/i match PySCF to
+  1e-10 (synthetic-shell oracles); use the density-fitting backend at these
+  sizes (the exact 4-center path is correct but its per-element cost at
+  l=6-total Hermite orders is impractical, exactly as in conventional
+  codes). Bases above i still fail eagerly with a clear error.
 - **Range-separated hybrids on the streamed and mesh-sharded DF backends.**
   The 0.3.0 guards are gone: `df(chunk=...)` streams the long-range RI-K by
   recomputing the erf-attenuated 3-center elements on the fly against the

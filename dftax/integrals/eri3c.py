@@ -218,9 +218,9 @@ def _eri3c_sizes(basis, aux_basis):
     """
     L_orb = int(basis.max_l)
     L_aux = int(aux_basis.max_l)
-    if L_orb > 4:
+    if L_orb > 6:
         raise ValueError(
-            f"eri3c supports orbital angular momentum up to g (l=4); got "
+            f"eri3c supports orbital angular momentum up to i (l=6); got "
             f"l={L_orb}."
         )
     if L_aux > 6:

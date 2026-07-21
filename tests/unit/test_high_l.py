@@ -18,7 +18,8 @@ from dftax.integrals import overlap_matrix, kinetic_matrix, nuclear_attraction_m
 
 @pytest.mark.pyscf
 @pytest.mark.float64
-@pytest.mark.parametrize("l", [3, 4])  # f shell (cc-pVTZ), g shell (cc-pVQZ)
+# f (cc-pVTZ), g (cc-pVQZ), h (cc-pV5Z), i (cc-pV6Z)
+@pytest.mark.parametrize("l", [3, 4, 5, 6])
 def test_one_electron_high_l(l):
     # One s shell + one shell of angular momentum l on a single atom.
     mol = gto.M(
@@ -46,29 +47,60 @@ def test_one_electron_high_l(l):
 @pytest.mark.pyscf
 @pytest.mark.float64
 @pytest.mark.parametrize("l", [5, 6])  # h shell (cc-pV5Z), i shell (cc-pV6Z)
-def test_orbital_above_g_cap_raises_cleanly(l):
-    """Orbital angular momentum above g (l=4) is not yet supported; every
-    integral entry must reject it with a clear ValueError rather than
-    ballooning the recursion in a deep, traced build (the default bucketed
-    path had no guard before this). The l=6 auxiliary path is unaffected:
-    that ceiling is the aux basis, not the orbital one (see test_high_l_aux).
-    """
+def test_eri3c_high_l_orbital_vs_pyscf(l):
+    """(μν|P) with an h/i ORBITAL shell matches PySCF int3c2e (the aux-side
+    h/i coverage lives in test_high_l_aux; this pins the orbital side, which
+    the 5Z/6Z bases need)."""
+    from pyscf import df as pyscf_df
+
     from dftax.integrals import eri3c_matrix
-    from dftax.integrals.eri4c import eri4c_matrix
-    from dftax.basis.loader import build_basis_data
 
-    mol = gto.M(atom="He 0 0 0", basis={"He": [[0, [1.2, 1.0]], [l, [0.8, 1.0]]]})
+    basis = {"He": [[l, [1.1, 1.0]], [0, [0.9, 1.0]]]}
+    mol = gto.M(atom="He 0 0 0; He 0 0.4 1.1", basis=basis, cart=True)
+    auxmol = gto.M(atom="He 0 0 0; He 0 0.4 1.1",
+                   basis={"He": [[1, [0.8, 1.0]], [0, [1.3, 1.0]]]}, cart=True)
     b = extract_basis_data(mol)
-    aux = build_basis_data(["He"], np.zeros((1, 3)), "def2-universal-jkfit")
+    aux = extract_basis_data(auxmol)
     assert int(b.max_l) == l
+    ours = np.asarray(eri3c_matrix(b, aux))
+    ref = pyscf_df.incore.aux_e2(mol, auxmol, intor="int3c2e")
+    assert np.abs(ours - ref).max() < 1e-10
 
-    for name, fn in (
-        ("overlap", lambda: overlap_matrix(b)),
-        ("kinetic", lambda: kinetic_matrix(b)),
-        ("nuclear", lambda: nuclear_attraction_matrix(
-            b, jnp.zeros((1, 3)), jnp.ones(1))),
-        ("eri3c", lambda: eri3c_matrix(b, aux)),
-        ("eri4c", lambda: eri4c_matrix(b)),
-    ):
-        with pytest.raises(ValueError, match="up to g"):
-            fn()
+
+@pytest.mark.pyscf
+@pytest.mark.float64
+@pytest.mark.parametrize("l", [5, 6])
+def test_grid_ao_values_high_l_vs_pyscf(l):
+    """Spherical AO values on grid points match PySCF eval_gto at h/i.
+
+    Guards the XC-path evaluation, which no matrix-level oracle covers: the
+    angular factor's integer-power unroll (safe_int_pow) silently returned
+    x^4 above its old g cap, poisoning only the grid AO values. The
+    symptom was a spurious 85 mHa SCF minimum at cc-pV5Z with density
+    poured into h shells, while every S/T/V/eri oracle stayed 1e-10-exact.
+    """
+    from dftax.energy.gto import eval_gto
+
+    mol = gto.M(atom="He 0 0 0; He 0 0.4 1.1",
+                basis={"He": [[0, [1.2, 1.0]], [l, [0.8, 1.0]]]}, cart=False)
+    b = extract_basis_data(mol)
+    pts = np.array([[0.1, 0.2, 0.3], [0.5, -0.4, 0.8], [1.0, 1.0, 0.2],
+                    [-0.3, 0.9, 1.4]])
+    ao = np.stack([np.asarray(eval_gto(b, jnp.asarray(p))) for p in pts])
+    ao_ref = mol.eval_gto("GTOval_sph", pts)
+    assert np.abs(ao - ao_ref).max() < 1e-12
+
+
+def test_orbital_above_i_cap_raises_cleanly():
+    """The engine ceiling is i (l=6); a basis claiming more must fail loudly
+    at every eagerly-guarded entry, not deep in a traced build. l=7 has no
+    Cartesian component table, so the probe is a hand-built BasisData whose
+    static max_l field says 7."""
+    from dftax.energy.gto import BasisData
+    from dftax.integrals.eri3c_bucketed import _check_orbital_l
+
+    fake = BasisData(centers=jnp.zeros((1, 3)), exponents=jnp.ones((1, 1)),
+                     coefficients=jnp.ones((1, 1)),
+                     angular=jnp.asarray([[7, 0, 0]]), cart2sph=None, max_l=7)
+    with pytest.raises(ValueError, match="up to i"):
+        _check_orbital_l(fake)

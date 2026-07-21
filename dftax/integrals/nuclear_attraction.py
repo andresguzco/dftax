@@ -24,12 +24,12 @@ from dftax.integrals.overlap import _prepare_shell_pairs, _MAX_COMP
 from dftax.utils.vmap import vmap as chunked_vmap
 
 
-# Max angular momentum supported: l=4 (g-type), matching the other integral
+# Max angular momentum supported: l=6 (i-type), matching the other integral
 # builders (overlap/kinetic/eri). The McMurchie-Davidson recursion below is
 # generic in L; only these static sizes set the cap.
-_MAX_L = 5   # max l per center + 1 (supports s, p, d, f, g)
-_MAX_T = 9   # max Hermite index = 2*_MAX_L - 1
-_MAX_M = 13  # max auxiliary index = 3 * (_MAX_L - 1) + 1
+_MAX_L = 7   # max l per center + 1 (supports s through i)
+_MAX_T = 13  # max Hermite index = 2*_MAX_L - 1
+_MAX_M = 19  # max auxiliary index = 3 * (_MAX_L - 1) + 1
 
 
 # ---------------------------------------------------------------------------

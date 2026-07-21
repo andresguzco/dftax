@@ -41,3 +41,34 @@ def test_one_electron_high_l(l):
     assert np.max(np.abs(S - mol.intor("int1e_ovlp"))) < 1e-10
     assert np.max(np.abs(T - mol.intor("int1e_kin"))) < 1e-10
     assert np.max(np.abs(V - mol.intor("int1e_nuc"))) < 1e-10
+
+
+@pytest.mark.pyscf
+@pytest.mark.float64
+@pytest.mark.parametrize("l", [5, 6])  # h shell (cc-pV5Z), i shell (cc-pV6Z)
+def test_orbital_above_g_cap_raises_cleanly(l):
+    """Orbital angular momentum above g (l=4) is not yet supported; every
+    integral entry must reject it with a clear ValueError rather than
+    ballooning the recursion in a deep, traced build (the default bucketed
+    path had no guard before this). The l=6 auxiliary path is unaffected:
+    that ceiling is the aux basis, not the orbital one (see test_high_l_aux).
+    """
+    from dftax.integrals import eri3c_matrix
+    from dftax.integrals.eri4c import eri4c_matrix
+    from dftax.basis.loader import build_basis_data
+
+    mol = gto.M(atom="He 0 0 0", basis={"He": [[0, [1.2, 1.0]], [l, [0.8, 1.0]]]})
+    b = extract_basis_data(mol)
+    aux = build_basis_data(["He"], np.zeros((1, 3)), "def2-universal-jkfit")
+    assert int(b.max_l) == l
+
+    for name, fn in (
+        ("overlap", lambda: overlap_matrix(b)),
+        ("kinetic", lambda: kinetic_matrix(b)),
+        ("nuclear", lambda: nuclear_attraction_matrix(
+            b, jnp.zeros((1, 3)), jnp.ones(1))),
+        ("eri3c", lambda: eri3c_matrix(b, aux)),
+        ("eri4c", lambda: eri4c_matrix(b)),
+    ):
+        with pytest.raises(ValueError, match="up to g"):
+            fn()

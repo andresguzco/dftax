@@ -35,6 +35,28 @@ from dftax.energy.boys import boys
 from dftax.utils.vmap import vmap as chunked_vmap
 
 
+# Orbital angular-momentum ceiling of the integral engine. The Cartesian
+# component tables, the Obara-Saika/McMurchie-Davidson recursion sizes, and
+# the nuclear-attraction tables all top out at g (l=4), so cc-pVQZ /
+# def2-QZVP are the highest orbital bases; cc-pV5Z / cc-pV6Z (h/i functions)
+# are not yet supported. Lifting this cap is tracked as A5. Guarded eagerly
+# in the plan builders (below) rather than left to fail deep in a traced
+# build, where an over-cap basis silently balloons the recursion instead.
+_ORBITAL_L_MAX = 4
+
+
+def _check_orbital_l(basis):
+    """Reject orbital bases above the engine's angular-momentum ceiling."""
+    L = int(basis.max_l)
+    if L > _ORBITAL_L_MAX:
+        raise ValueError(
+            f"the integral engine supports orbital angular momentum up to g "
+            f"(l={_ORBITAL_L_MAX}); got l={L}. cc-pVQZ / def2-QZVP are the "
+            f"highest supported orbital bases; 5Z/6Z (h/i functions) are not "
+            f"yet supported."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Phase 1: the eager, static plan (python ints only; hashable)
 # ---------------------------------------------------------------------------
@@ -68,6 +90,7 @@ def plan_eri3c(basis, aux_basis):
     in nested tuples, safe to pass through ``eqx.filter_jit`` as a static
     argument.
     """
+    _check_orbital_l(basis)
     bra, ang_b = _shells(basis.angular, basis.exponents)
     aux, ang_a = _shells(aux_basis.angular, aux_basis.exponents)
     buckets = defaultdict(lambda: ([], [], []))
@@ -260,6 +283,11 @@ def plan_pairs(basis):
 
     Same contract as :func:`plan_eri3c`: python ints only, computed where the
     basis metadata is concrete, safe as a static jit argument.
+
+    No orbital-l guard here: this plan also serves the 2-center aux build
+    (``eri2c_matrix_bucketed``), whose aux basis legitimately reaches l=6.
+    The orbital ceiling is enforced by the callers that know their basis is
+    an orbital one (``overlap_kinetic_bucketed``, ``nuclear_attraction_bucketed``).
     """
     bra, ang = _shells(basis.angular, basis.exponents)
     buckets = defaultdict(lambda: ([], []))
@@ -345,6 +373,7 @@ def nuclear_attraction_bucketed(basis, atom_coords, atom_charges, plan=None,
     for ethanol/def2-svp, the KS build's memory peak). Differentiable
     w.r.t. ``basis.centers`` and ``atom_coords``.
     """
+    _check_orbital_l(basis)
     if plan is None:
         plan = plan_pairs(basis)
     nao, classes = plan
@@ -464,6 +493,7 @@ def overlap_kinetic_bucketed(basis, plan=None, chunk=4096):
     other builds; its per-element formula is b-sided, so the swapped write
     holds to the same rounding the flat engine's own T = T.T asymmetry has.
     """
+    _check_orbital_l(basis)
     if plan is None:
         plan = plan_pairs(basis)
     nao, classes = plan

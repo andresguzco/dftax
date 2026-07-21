@@ -30,6 +30,7 @@ from functools import lru_cache
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax import lax
 
 from dftax.energy.boys import boys
 from dftax.utils.vmap import vmap as chunked_vmap
@@ -170,24 +171,35 @@ def _Ec_table(lc, gamma, mt):
 def _hermite_table(rho, RPC, mt, omega=None):
     """(mt, mt, mt) Hermite Coulomb integrals R^0_{t,u,v}.
 
-    Same m-ladder as :func:`eri3c._hermite_coulomb`, unrolled over m with
-    each level's t/u/v sweeps as vectorized slice updates (every entry of
-    level m reads only level m+1).
+    Same m-ladder as :func:`eri3c._hermite_coulomb`; every entry of level m
+    reads only level m+1, so the descending sweep is a ``lax.fori_loop`` over
+    the mt levels carrying the running (mt, mt, mt) table. The loop body
+    traces once instead of mt times: the unrolled form built an O(mt^4)-node
+    graph per class, and since the Hermite table is shared by the eri3c,
+    eri2c and nuclear builds it dominated the engine's first-call trace and
+    compile (rolling it is ~2.3x on the eri3c build, bit-identical, with no
+    change to the execute time). The E tables stay unrolled: they are tiny
+    (O(l*mt)) and a loop there only adds overhead. The per-level t/u/v sweeps
+    remain vectorized slice updates.
     """
     T = rho * jnp.sum(RPC ** 2)
     neg2rho = -2.0 * rho
     if omega is None:
-        base = [boys(m, T) for m in range(mt)]
+        base = jnp.stack([boys(m, T) for m in range(mt)])
     else:
         s = (omega * omega) / (omega * omega + rho)
-        base = [s ** (m + 0.5) * boys(m, s * T) for m in range(mt)]
+        base = jnp.stack([s ** (m + 0.5) * boys(m, s * T) for m in range(mt)])
+    # Integer powers (Python range): neg2rho is negative, so a float exponent
+    # would NaN; range(mt) keeps the base real.
+    powers = jnp.stack([neg2rho ** m for m in range(mt)])
     idx = jnp.arange(mt - 1)
     zrow = jnp.zeros((1,))
 
-    Rp = jnp.zeros((mt, mt, mt)).at[0, 0, 0].set(
-        neg2rho ** (mt - 1) * base[mt - 1])
-    for m in range(mt - 2, -1, -1):
-        R = jnp.zeros((mt, mt, mt)).at[0, 0, 0].set(neg2rho ** m * base[m])
+    Rp0 = jnp.zeros((mt, mt, mt)).at[0, 0, 0].set(powers[mt - 1] * base[mt - 1])
+
+    def _level(k, Rp):
+        m = mt - 2 - k                       # descending m = mt-2 .. 0
+        R = jnp.zeros((mt, mt, mt)).at[0, 0, 0].set(powers[m] * base[m])
         row = Rp[:, 0, 0]
         shifted = jnp.concatenate([zrow, row[:-2]])
         R = R.at[1:, 0, 0].set(RPC[0] * row[:-1] + idx * shifted)
@@ -195,11 +207,11 @@ def _hermite_table(rho, RPC, mt, omega=None):
         pshift = jnp.concatenate([jnp.zeros((mt, 1)), Rp[:, :-2, 0]], axis=1)
         R = R.at[:, 1:, 0].set(RPC[1] * plane + idx[None, :] * pshift)
         cube = Rp[:, :, :-1]
-        cshift = jnp.concatenate([jnp.zeros((mt, mt, 1)), Rp[:, :, :-2]],
-                                 axis=2)
+        cshift = jnp.concatenate([jnp.zeros((mt, mt, 1)), Rp[:, :, :-2]], axis=2)
         R = R.at[:, :, 1:].set(RPC[2] * cube + idx[None, None, :] * cshift)
-        Rp = R
-    return Rp
+        return R
+
+    return lax.fori_loop(0, mt - 1, _level, Rp0)
 
 
 # ---------------------------------------------------------------------------

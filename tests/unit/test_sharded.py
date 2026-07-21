@@ -11,7 +11,7 @@ import pytest
 
 from dftax import KS, Molecule, becke, df, mesh, minimize, scf, scf_batched
 from dftax.ks.terms import GridXC, ShardedDFCoulomb, ShardedGridXC, StreamedGridXC
-from dftax.energy.xc import LDA, PBE, PBE0
+from dftax.energy.xc import CAMB3LYP, LDA, PBE, PBE0
 
 jax.config.update("jax_enable_x64", True)
 
@@ -123,6 +123,30 @@ def test_sharded_df_hybrid_matches_unsharded():
     ks0 = KS(mol, PBE0(), grid=GRID, coulomb=df(AUX, spherical=False))
     P = scf(ks0).P
     ksm = KS(mol, PBE0(), grid=GRID, coulomb=df(AUX), mesh=mesh())
+    e0 = float(ks0.coulomb.energy(P, ks0.S, ks0.nocc))
+    em = float(ksm.coulomb.energy(P, ksm.S, ksm.nocc))
+    assert em == pytest.approx(e0, rel=1e-10)
+
+    r0 = scf(ks0, e_tol=1e-10, d_tol=1e-8)
+    r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8)
+    assert r0.converged and r1.converged
+    assert r1.e_tot == pytest.approx(r0.e_tot, abs=1e-9)
+
+
+@multi
+@pytest.mark.float64
+def test_sharded_rsh_matches_unsharded():
+    """Sharded range-separated exchange: the long-range RI-K runs the same
+    slab-wise all-to-all rounds on the attenuated tensor against the
+    attenuated metric. Fixed-density J+K+K_lr and the full CAM-B3LYP SCF
+    match the single-device materialized DF."""
+    AUX = "def2-universal-jkfit"
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    # spherical=False: sharded slabs are cartesian; same fit space both sides.
+    ks0 = KS(mol, CAMB3LYP(), grid=GRID, coulomb=df(AUX, spherical=False))
+    P = scf(ks0).P
+    ksm = KS(mol, CAMB3LYP(), grid=GRID, coulomb=df(AUX), mesh=mesh())
+    assert ksm.coulomb.int3c_lr is not None
     e0 = float(ks0.coulomb.energy(P, ks0.S, ks0.nocc))
     em = float(ksm.coulomb.energy(P, ksm.S, ksm.nocc))
     assert em == pytest.approx(e0, rel=1e-10)

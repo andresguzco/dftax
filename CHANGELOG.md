@@ -73,6 +73,17 @@ to [Semantic Versioning](https://semver.org/).
   vendored table.
 
 ### Added
+- **Range-separated hybrids on the streamed and mesh-sharded DF backends.**
+  The 0.3.0 guards are gone: `df(chunk=...)` streams the long-range RI-K by
+  recomputing the erf-attenuated 3-center elements on the fly against the
+  attenuated metric (only the small `naux x naux` attenuated metric is
+  stored, so the streamed backend's memory profile is unchanged), and
+  `mesh=` runs the long-range exchange as the same slab-wise all-to-all
+  rounds on an attenuated slab tensor. CAM-B3LYP parity vs the materialized
+  attenuated tensors: streamed fixed-density 1.4e-10 / SCF 2.2e-10; sharded
+  (4 GPUs) fixed-density rel 9.4e-12 / SCF 4e-11. `exact(stream=True)`
+  still rejects RSH (a materialized alternative always exists at
+  exact()-viable sizes).
 - **Materialized Schwarz compact gather.** `df(screen=...)` now also applies
   to the default materialized backend, not only the streamed RI-J path: the
   3-center build omits the Cauchy-Schwarz-negligible bra shell-pairs (a

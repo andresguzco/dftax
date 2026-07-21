@@ -419,8 +419,12 @@ def _build_integrals(
             # singular for either aux span: erf(wr)/r crushes tight auxiliary
             # functions toward zero norm (condition ~1e16, smallest
             # eigenvalues negative at machine precision).
-            int3c_lr = eri3c_matrix(basis, aux_basis, omega=omega,
-                                    plan=eri3c_plan)
+            # The attenuated 3-center is only materialized alongside the
+            # full-range one; the streamed backend recomputes its elements on
+            # the fly and needs just the (small) attenuated metric inverse.
+            int3c_lr = (eri3c_matrix(basis, aux_basis, omega=omega,
+                                     plan=eri3c_plan)
+                        if materialize_int3c else None)
             int2c_inv_lr = _metric_pinv(
                 eri2c_matrix(aux_basis, omega=omega, plan=aux_pair_plan))
 
@@ -552,18 +556,15 @@ class KS(eqx.Module):
                     "that memory regime; use df(auxbasis) with mesh=."
                 )
         # Range-separated hybrids: build the erf(ω·r₁₂)/r₁₂ tensors alongside
-        # the Coulomb ones (memory doubles; materialized backends only).
+        # the Coulomb ones (memory doubles on the materialized backends; the
+        # streamed DF backend stores only the attenuated metric and recomputes
+        # the attenuated 3-center on the fly).
         hf_lr = float(getattr(xc, "hf_coeff_lr", 0.0))
         omega = float(getattr(xc, "omega", 0.0)) if hf_lr != 0.0 else 0.0
         if hf_lr != 0.0 and omega == 0.0:
             raise ValueError(
                 f"{type(xc).__name__} sets hf_coeff_lr={hf_lr} but omega=0; "
                 f"a range-separated functional must define its ω."
-            )
-        if hf_lr != 0.0 and shard_df:
-            raise NotImplementedError(
-                "range-separated hybrids are not supported with mesh= yet; "
-                "run single-device with df(chunk=None) or exact()."
             )
         if hf_lr != 0.0 and (not is_df) and spec.stream:
             raise NotImplementedError(
@@ -622,14 +623,28 @@ class KS(eqx.Module):
                 jnp.zeros((nauxp, nauxp), int2c_inv.dtype)
                 .at[:naux, :naux].set(int2c_inv)
             )
+            int3c_lr_s = None
+            vinv_lr = None
+            if hf_lr != 0.0:
+                # Attenuated slabs + padded attenuated metric for the
+                # long-range exchange rounds (same layout as the full-range).
+                int3c_lr_s, _ = _build_int3c_sharded(
+                    basis, aux_basis, devices, omega=omega
+                )
+                vinv_lr = (
+                    jnp.zeros((nauxp, nauxp), int2c_inv_lr.dtype)
+                    .at[:naux, :naux].set(int2c_inv_lr)
+                )
             self.coulomb = ShardedDFCoulomb(
                 int3c=int3c_s, int2c_inv=vinv, devices=devices,
                 hf_coeff=float(xc.hf_coeff),
+                int3c_lr=int3c_lr_s, int2c_inv_lr=vinv_lr,
+                hf_coeff_lr=hf_lr,
             )
         else:
             self.coulomb = _make_coulomb(
                 spec, basis, eri, int3c, int2c_inv, pairs, float(xc.hf_coeff),
-                eri_lr, int3c_lr, int2c_inv_lr, hf_lr,
+                eri_lr, int3c_lr, int2c_inv_lr, hf_lr, omega,
             )
         if devices is not None:
             # Pad the quadrature to the mesh and lay it out sharded; the AO

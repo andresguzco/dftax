@@ -89,7 +89,7 @@ def _slice_basis(basis, lo, hi):
     )
 
 
-def _build_int3c_sharded(basis, aux_basis, devices):
+def _build_int3c_sharded(basis, aux_basis, devices, omega=None):
     """Build the DF 3-center tensor directly in aux-axis shards, one slab per
     device; no device ever materializes more than its (nao², naux/ndev) slice,
     which is the whole capacity point.
@@ -97,6 +97,8 @@ def _build_int3c_sharded(basis, aux_basis, devices):
     Returns ``(int3c, naux_pad)``: the globally-sharded ``(nao, nao, naux_pad)``
     array (aux axis zero-padded to a multiple of the device count; padded
     columns contribute exactly zero to γ) and the padded aux dimension.
+    ``omega`` builds the erf-attenuated tensor instead (the long-range slab of
+    a range-separated hybrid).
     """
     import numpy as np
 
@@ -115,7 +117,9 @@ def _build_int3c_sharded(basis, aux_basis, devices):
         lo, hi = d * slab, min((d + 1) * slab, naux)
         aux_d = _slice_basis(aux_basis, lo, hi)
         with jax.default_device(dev):
-            blk = jax.jit(_eri3c_matrix_flat)(basis, aux_d)  # (nao, nao, hi-lo)
+            blk = jax.jit(
+                lambda b, a: _eri3c_matrix_flat(b, a, omega)
+            )(basis, aux_d)                                  # (nao, nao, hi-lo)
             if hi - lo < slab:
                 blk = jnp.pad(blk, ((0, 0), (0, 0), (0, slab - (hi - lo))))
             blk.block_until_ready()

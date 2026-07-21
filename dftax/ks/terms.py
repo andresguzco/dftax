@@ -290,14 +290,14 @@ def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk):
 # Streamed RI-J (Coulomb): auxiliary-chunk, O(chunk·nao²) memory
 # ---------------------------------------------------------------------------
 
-def _eri3c_elem(basis, aux_basis, i, j, k):
+def _eri3c_elem(basis, aux_basis, i, j, k, omega=None):
     ml, mt, mm = _eri3c_sizes(basis, aux_basis)   # per-molecule recursion sizes
     return _contracted_eri3c(
         basis.exponents[i], basis.coefficients[i], basis.centers[i], basis.angular[i],
         basis.exponents[j], basis.coefficients[j], basis.centers[j], basis.angular[j],
         aux_basis.exponents[k], aux_basis.coefficients[k],
         aux_basis.centers[k], aux_basis.angular[k],
-        ml, mt, mm,
+        ml, mt, mm, omega,
     )
 
 
@@ -393,11 +393,13 @@ def _rik_cholesky(int2c_inv):
     return U * jnp.sqrt(jnp.clip(w, 0.0, None))            # (naux, naux)
 
 
-def _rik_bmj(basis, aux_basis, Lf, cj, n, naux):
+def _rik_bmj(basis, aux_basis, Lf, cj, n, naux, omega=None):
     """Metric-fitted half-transformed 3-center for one occupied orbital (cartesian).
 
     ``B_mx = Σ_P (mj|P) L_Px`` with ``(mj|P) = Σ_l c_j[l] (ml|P)``; the 3-center is
-    recomputed (never stored), so memory is O(nao·naux) per orbital.
+    recomputed (never stored), so memory is O(nao·naux) per orbital. ``omega``
+    switches the operator to the attenuated ``erf(ω·r₁₂)/r₁₂`` (long-range RI-K
+    of a range-separated hybrid; pair with the attenuated metric's ``Lf``).
     """
     idx = jnp.arange(n)
     aux_idx = jnp.arange(naux)
@@ -407,7 +409,8 @@ def _rik_bmj(basis, aux_basis, Lf, cj, n, naux):
     m_chunk = _eri3c_bra_chunk(basis, aux_basis, inflight=naux * n)
 
     def entry(m, k):
-        col = jax.vmap(lambda l: _eri3c_elem(basis, aux_basis, m, l, k))(idx)
+        col = jax.vmap(
+            lambda l: _eri3c_elem(basis, aux_basis, m, l, k, omega))(idx)
         return col @ cj
     def row_m(m):
         return jax.vmap(lambda k: entry(m, k))(aux_idx)                     # (naux,)
@@ -415,7 +418,7 @@ def _rik_bmj(basis, aux_basis, Lf, cj, n, naux):
     return M @ Lf                                                            # (n, naux)
 
 
-def _rik_energy(basis, aux_basis, int2c_inv, Cocc):
+def _rik_energy(basis, aux_basis, int2c_inv, Cocc, omega=None):
     """Raw exchange sum ``Σ_ijx B_ijx²`` streamed over occupied orbitals (the energy
     is ``energy_pref · this``; O(nao·naux) memory)."""
     Lf = _rik_cholesky(int2c_inv)
@@ -424,13 +427,13 @@ def _rik_energy(basis, aux_basis, int2c_inv, Cocc):
     n, naux = Cc.shape[0], Lf.shape[0]
 
     def body(acc, cj):
-        Bij = Cc.T @ _rik_bmj(basis, aux_basis, Lf, cj, n, naux)    # (nocc, naux)
+        Bij = Cc.T @ _rik_bmj(basis, aux_basis, Lf, cj, n, naux, omega)
         return acc + jnp.sum(Bij * Bij), None
     ek, _ = jax.lax.scan(jax.checkpoint(body), jnp.array(0.0), Cc.T)
     return ek
 
 
-def _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc):
+def _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc, omega=None):
     """Raw exchange kernel ``KK_mn = Σ_jx B_mjx B_njx`` (spherical); the analytic
     gradient is ``grad_pref · KK``."""
     Lf = _rik_cholesky(int2c_inv)
@@ -439,14 +442,14 @@ def _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc):
     n, naux = Cc.shape[0], Lf.shape[0]
 
     def body(Ka, cj):
-        B = _rik_bmj(basis, aux_basis, Lf, cj, n, naux)            # (n, naux)
+        B = _rik_bmj(basis, aux_basis, Lf, cj, n, naux, omega)     # (n, naux)
         return Ka + (B @ B.T), None
     Kc, _ = jax.lax.scan(jax.checkpoint(body), jnp.zeros((n, n)), Cc.T)
     return c2s.T @ Kc @ c2s if c2s is not None else Kc
 
 
 def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
-                     dscale, energy_pref, grad_pref):
+                     dscale, energy_pref, grad_pref, omega=None):
     """Streamed RI-K exchange energy with an exact analytic gradient.
 
     Orbital-chunk RI-K: ``E_K = energy_pref · Σ_ijx (Σ_P (ij|P) L_Px)²`` (``V⁻¹=LLᵀ``),
@@ -473,14 +476,16 @@ def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
     @jax.custom_vjp
     def rik(P):
         Cocc = _rik_occ_orbitals(P, S, nocc, dscale)
-        return energy_pref * _rik_energy(basis, aux_basis, int2c_inv, Cocc)
+        return energy_pref * _rik_energy(basis, aux_basis, int2c_inv, Cocc,
+                                         omega)
 
     def fwd(P):
         Cocc = _rik_occ_orbitals(P, S, nocc, dscale)
-        return energy_pref * _rik_energy(basis, aux_basis, int2c_inv, Cocc), Cocc
+        return (energy_pref
+                * _rik_energy(basis, aux_basis, int2c_inv, Cocc, omega)), Cocc
 
     def bwd(Cocc, g):
-        KK = _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc)
+        KK = _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc, omega)
         return (g * grad_pref * KK,)
 
     rik.defvjp(fwd, bwd)
@@ -632,6 +637,11 @@ class ShardedDFCoulomb(CoulombTerm):
     int2c_inv: Float[Array, "nauxp nauxp"]
     devices: tuple = eqx.field(static=True)
     hf_coeff: float = eqx.field(static=True, default=0.0)
+    # Range-separated hybrids: the attenuated slab tensor, the (padded)
+    # attenuated metric inverse, and the long-range exchange fraction.
+    int3c_lr: Float[Array, "nao nao nauxp"] | None = None
+    int2c_inv_lr: Float[Array, "nauxp nauxp"] | None = None
+    hf_coeff_lr: float = eqx.field(static=True, default=0.0)
 
     def energy(self, P, S, nocc):
         import numpy as np
@@ -642,23 +652,20 @@ class ShardedDFCoulomb(CoulombTerm):
         ndev = len(self.devices)
         slab = self.int3c.shape[2] // ndev
         ax = self.hf_coeff
+        ax_lr = self.hf_coeff_lr
         nspin = P.shape[0]
         Lf = _rik_cholesky(self.int2c_inv) if ax != 0.0 else self.int2c_inv
+        Lf_lr = (_rik_cholesky(self.int2c_inv_lr)
+                 if ax_lr != 0.0 else self.int2c_inv)
 
-        def part(t3, vinv, Lfull, Pst):
-            Ptot = jnp.sum(Pst, axis=0)
-            g_local = jnp.einsum("mnP,mn->P", t3, Ptot)         # local aux slice
-            g = jax.lax.all_gather(g_local, "aux", tiled=True)   # (nauxp,) replicated
-            e = 0.5 * jnp.dot(g, vinv @ g)
-            if ax == 0.0:
-                return e
-
+        def exchange(t3x, Lfull, Pst):
+            """Σ_σ tr(P_σ K P_σ) partials for one operator's slab tensor."""
             my = jax.lax.axis_index("aux")
             rows = jax.lax.dynamic_slice_in_dim(Lfull, my * slab, slab, axis=0)
-            W = jnp.zeros_like(t3)                               # (nao, nao, slab)
+            W = jnp.zeros_like(t3x)                              # (nao, nao, slab)
             for d in range(ndev):                                # all-to-all rounds
                 part_d = jnp.einsum(
-                    "mnP,PX->mnX", t3, rows[:, d * slab:(d + 1) * slab]
+                    "mnP,PX->mnX", t3x, rows[:, d * slab:(d + 1) * slab]
                 )
                 W = jnp.where(my == d, jax.lax.psum(part_d, "aux"), W)
 
@@ -669,22 +676,44 @@ class ShardedDFCoulomb(CoulombTerm):
                 )
 
             if nspin == 1:
-                return e - 0.25 * ax * tr_pkp(Pst[0])
-            return e - 0.5 * ax * (tr_pkp(Pst[0]) + tr_pkp(Pst[1]))
+                return 0.5 * tr_pkp(Pst[0])
+            return tr_pkp(Pst[0]) + tr_pkp(Pst[1])
 
+        def part(t3, vinv, Lfull, t3lr, Llr, Pst):
+            Ptot = jnp.sum(Pst, axis=0)
+            g_local = jnp.einsum("mnP,mn->P", t3, Ptot)         # local aux slice
+            g = jax.lax.all_gather(g_local, "aux", tiled=True)   # (nauxp,) replicated
+            e = 0.5 * jnp.dot(g, vinv @ g)
+            if ax != 0.0:
+                e = e - 0.5 * ax * exchange(t3, Lfull, Pst)
+            if ax_lr != 0.0:
+                e = e - 0.5 * ax_lr * exchange(t3lr, Llr, Pst)
+            return e
+
+        # The LR slots ride along as (unused) aliases of the full-range arrays
+        # when hf_coeff_lr == 0, keeping one shard_map signature; the static
+        # branch above means they are never touched in that graph.
+        t3lr = self.int3c_lr if ax_lr != 0.0 else self.int3c
         # check_vma=False: the static replication checker cannot prove the
         # post-all_gather value is replicated (it is; every device computes
         # the identical quadratic form after the gather).
         return shard_map(
             part, mesh=jmesh,
-            in_specs=(spec(None, None, "aux"), spec(), spec(), spec()),
+            in_specs=(spec(None, None, "aux"), spec(), spec(),
+                      spec(None, None, "aux"), spec(), spec()),
             out_specs=spec(), check_vma=False,
-        )(self.int3c, self.int2c_inv, Lf, P)
+        )(self.int3c, self.int2c_inv, Lf, t3lr, Lf_lr, P)
 
 
 class StreamedDFCoulomb(CoulombTerm):
     """Streamed density fitting: RI-J over auxiliary chunks, per-spin streamed
-    RI-K for hybrids (see the gradient caveats on :func:`_streamed_df_rik`)."""
+    RI-K for hybrids (see the gradient caveats on :func:`_streamed_df_rik`).
+
+    For range-separated hybrids ``int2c_inv_lr`` holds the attenuated metric
+    inverse, ``hf_coeff_lr`` the long-range exchange fraction and ``omega``
+    the attenuation; the long-range RI-K streams exactly like the full-range
+    one, with the attenuated 3-center elements recomputed on the fly.
+    """
 
     basis: BasisData
     aux_basis: BasisData
@@ -693,6 +722,22 @@ class StreamedDFCoulomb(CoulombTerm):
     pairs: tuple[Array, Array, Float[Array, "npair"]] | None
     chunk: int = eqx.field(static=True)
     hf_coeff: float = eqx.field(static=True)
+    int2c_inv_lr: Float[Array, "naux naux"] | None = None
+    hf_coeff_lr: float = eqx.field(static=True, default=0.0)
+    omega: float = eqx.field(static=True, default=0.0)
+
+    def _rik_sum(self, e, P, S, nocc, metric_inv, ax, omega):
+        if P.shape[0] == 1:                            # closed shell: P = 2 C Cᵀ
+            return e + _streamed_df_rik(
+                self.basis, self.aux_basis, metric_inv,
+                S, nocc[0], P[0], 0.5, -ax, -ax, omega,
+            )
+        for Ps, n in zip(P, nocc):                     # one spin channel: P_σ = C Cᵀ
+            e = e + _streamed_df_rik(
+                self.basis, self.aux_basis, metric_inv,
+                S, n, Ps, 1.0, -0.5 * ax, -ax, omega,
+            )
+        return e
 
     def energy(self, P, S, nocc):
         Ptot = jnp.sum(P, axis=0)
@@ -700,18 +745,11 @@ class StreamedDFCoulomb(CoulombTerm):
             self.basis, self.aux_basis, self.int2c_inv, Ptot, self.chunk, self.pairs
         )
         if self.hf_coeff != 0.0:
-            ax = self.hf_coeff
-            if P.shape[0] == 1:                        # closed shell: P = 2 C Cᵀ
-                e = e + _streamed_df_rik(
-                    self.basis, self.aux_basis, self.int2c_inv,
-                    S, nocc[0], P[0], 0.5, -ax, -ax,
-                )
-            else:                                      # one spin channel: P_σ = C Cᵀ
-                for Ps, n in zip(P, nocc):
-                    e = e + _streamed_df_rik(
-                        self.basis, self.aux_basis, self.int2c_inv,
-                        S, n, Ps, 1.0, -0.5 * ax, -ax,
-                    )
+            e = self._rik_sum(e, P, S, nocc, self.int2c_inv, self.hf_coeff,
+                              None)
+        if self.hf_coeff_lr != 0.0:
+            e = self._rik_sum(e, P, S, nocc, self.int2c_inv_lr,
+                              self.hf_coeff_lr, self.omega)
         return e
 
 
@@ -879,12 +917,13 @@ class ShardedGridXC(XCTerm):
 
 def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                   eri_lr=None, int3c_lr=None, int2c_inv_lr=None,
-                  hf_coeff_lr=0.0):
+                  hf_coeff_lr=0.0, omega=0.0):
     """Wrap the integral arrays built for ``spec`` into the matching Coulomb term.
 
-    ``hf_coeff_lr`` (with the ``*_lr`` attenuated tensors) is the long-range
-    exchange fraction of a range-separated hybrid; only the materialized
-    backends support it.
+    ``hf_coeff_lr`` (with the ``*_lr`` attenuated tensors and ``omega``) is the
+    long-range exchange fraction of a range-separated hybrid; the materialized
+    backends hold the attenuated tensors, the streamed DF backend recomputes
+    the attenuated 3-center on the fly against ``int2c_inv_lr``.
     """
     if isinstance(spec, DFSpec):
         if not isinstance(spec.auxbasis, BasisData):
@@ -893,15 +932,11 @@ def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                 "the public constructors resolve basis-set names."
             )
         if spec.chunk is not None:
-            if hf_coeff_lr != 0.0:
-                raise NotImplementedError(
-                    "range-separated hybrids need the materialized DF "
-                    "backend: use df(chunk=None) (the streamed RI-K has no "
-                    "long-range variant yet)."
-                )
             return StreamedDFCoulomb(
                 basis=basis, aux_basis=spec.auxbasis, int2c_inv=int2c_inv,
                 pairs=pairs, chunk=spec.chunk, hf_coeff=hf_coeff,
+                int2c_inv_lr=int2c_inv_lr, hf_coeff_lr=hf_coeff_lr,
+                omega=omega,
             )
         return DFCoulomb(
             int3c=int3c, int2c_inv=int2c_inv, hf_coeff=hf_coeff,

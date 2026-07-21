@@ -64,17 +64,25 @@ def test_screened_scf_matches_unscreened(water_mol):
 
 
 @pytest.mark.pyscf
-def test_eri_screen_is_exact_path_only(water_mol):
-    # Materialized density fitting has no 4-center tensor to screen: df()
-    # rejects a bare Schwarz threshold (it applies only to the streamed RI-J
-    # path), so an ERI screen can never leak into the DF backend.
-    with pytest.raises(ValueError):
-        df(AUX, screen=1e-10)
-    mf = dft.RKS(water_mol)
-    mf.xc = "slater,vwn5"
-    mf.grids.level = 1
-    mf.verbose = 0
-    mf.kernel()
-    grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks = KS(water_mol, LDA(), grid=(grid[0], grid[1]), coulomb=df(AUX))
-    assert isinstance(ks.coulomb, DFCoulomb)
+def test_df_materialized_screen_compact_gather():
+    # df(screen=...) on the materialized DF path is a shell-pair compact
+    # gather: the negligible cross-fragment bra pairs are omitted from the
+    # 3-center build and stay exactly zero, so the RI tensor matches the dense
+    # build where it kept (to the screening tolerance) while being sparser.
+    # Two water molecules 12 A apart: the diffuse def2-svp cross-molecule
+    # pairs are the ones dropped.
+    two_water = ("O 0 0 0; H 0.76 0 0.59; H -0.76 0 0.59; "
+                 "O 12 0 0; H 12.76 0 0.59; H 11.24 0 0.59")
+    mol = gto.M(atom=two_water, basis="def2-svp").build()
+
+    ks_dense = KS(mol, LDA(), coulomb=df(AUX))
+    ks_screen = KS(mol, LDA(), coulomb=df(AUX, screen=1e-6))
+    assert isinstance(ks_screen.coulomb, DFCoulomb)
+
+    dense = np.asarray(ks_dense.coulomb.int3c)
+    screened = np.asarray(ks_screen.coulomb.int3c)
+    # Screening zeroed whole cross-molecule blocks the dense build fills in.
+    assert (screened == 0.0).sum() > (dense == 0.0).sum(), "no pairs dropped"
+    # Everywhere it kept, the tensor is unchanged to the screening tolerance
+    # (the dropped entries are Schwarz-negligible, so max drift is tiny).
+    assert np.abs(dense - screened).max() < 1e-8

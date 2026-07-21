@@ -35,7 +35,23 @@ to [Semantic Versioning](https://semver.org/).
   sets for the 3d row), with `scripts/gen_cart2sph.py` regenerating the
   vendored table.
 
+### Added
+- **Materialized Schwarz compact gather.** `df(screen=...)` now also applies
+  to the default materialized backend, not only the streamed RI-J path: the
+  3-center build omits the Cauchy-Schwarz-negligible bra shell-pairs (a
+  relative threshold on the shell-pair Schwarz factor), which stay exactly
+  zero in the tensor, so extended systems build O(N) rather than O(N^2)
+  shell-pairs. `screen=None` (the default) keeps every pair and is
+  bit-identical to before. On two water molecules 12 A apart, `screen=1e-10`
+  drops ~48 percent of the triples and shifts the SCF energy by ~1e-10 Ha.
+
 ### Changed (performance)
+- **The density-fitting materialize-vs-stream budget is device-aware.** The
+  `df(chunk="auto")` policy sized the materialized-tensor threshold to a
+  fixed 2 GiB; it now sizes to a quarter of the default device's memory pool
+  (reported via `memory_stats`), falling back to the fixed value on CPU. On
+  an A100 that is ~17 GiB, so far larger systems take the faster materialized
+  path instead of streaming; the batched and force paths inherit the policy.
 - **Lower first-call trace/compile in the bucketed engine.** The bucketed
   engine's first-call cost is dominated by Python tracing (per-process, so
   the persistent compile cache cannot reduce it), and the dominant graph

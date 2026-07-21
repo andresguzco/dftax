@@ -83,13 +83,50 @@ def _shells(angular, exponents):
             for s, e in zip(bounds[:-1], bounds[1:])], ang
 
 
-def plan_eri3c(basis, aux_basis):
+def _shell_pair_keep(basis, thresh):
+    """Kept bra shell-pairs ``(ia, ib)`` with ``ia <= ib`` under a relative
+    Schwarz cutoff (the shell-level analogue of
+    :func:`~dftax.integrals.eri4c.significant_pairs`).
+
+    A bra shell-pair enters ``(μν|P)`` only through its own charge density, so
+    ``|(μν|P)| <= Q_μν · √(P|P)`` with ``Q_μν = √(μν|μν)``; a shell-pair whose
+    largest component ``Q`` falls below ``thresh`` (relative to the global max)
+    is negligible for every auxiliary ``P``. Screening whole shell-pairs (keep
+    if any component survives) matches the bucketed engine's shell batching and
+    is conservative w.r.t. the per-AO test. Geometry-only, host-side; for
+    extended systems the survivors are O(N).
+    """
+    from dftax.integrals.eri4c import schwarz_diagonal
+
+    shells, _ = _shells(basis.angular, basis.exponents)
+    nao = int(np.asarray(basis.angular).shape[0])
+    row_shell = np.empty(nao, dtype=np.int64)
+    for si, (_l, row0, ncomp, _np) in enumerate(shells):
+        row_shell[row0:row0 + ncomp] = si
+    Q = np.asarray(schwarz_diagonal(basis))              # √(μν|μν), tril μ>=ν
+    pa, pb = np.tril_indices(nao)
+    lo = np.minimum(row_shell[pa], row_shell[pb])
+    hi = np.maximum(row_shell[pa], row_shell[pb])
+    ns = len(shells)
+    Qsh = np.zeros((ns, ns))
+    np.maximum.at(Qsh, (hi, lo), Q)                      # max over components
+    qmax = float(Qsh.max()) if Qsh.size else 0.0
+    hi_idx, lo_idx = np.nonzero(Qsh >= thresh * qmax)
+    return {(int(a), int(b)) for b, a in zip(hi_idx, lo_idx)}  # (ia<=ib)
+
+
+def plan_eri3c(basis, aux_basis, keep_pairs=None):
     """Static bucket plan for :func:`eri3c_matrix_bucketed`.
 
     Must be called where the basis metadata is concrete (KS.__init__, or a
     closure over the basis template): everything it returns is python ints
     in nested tuples, safe to pass through ``eqx.filter_jit`` as a static
     argument.
+
+    ``keep_pairs`` (from :func:`_shell_pair_keep`) optionally restricts the
+    build to the Schwarz-significant bra shell-pairs; screened pairs are absent
+    from the plan and stay exactly zero in the scattered tensor. ``None`` keeps
+    every pair (the default, bit-identical build).
     """
     _check_orbital_l(basis)
     bra, ang_b = _shells(basis.angular, basis.exponents)
@@ -97,7 +134,9 @@ def plan_eri3c(basis, aux_basis):
     buckets = defaultdict(lambda: ([], [], []))
     nprims = {}
     for ia, (la, ra, nca, npa) in enumerate(bra):
-        for lb, rb, ncb, npb in bra[ia:]:
+        for jb_off, (lb, rb, ncb, npb) in enumerate(bra[ia:]):
+            if keep_pairs is not None and (ia, ia + jb_off) not in keep_pairs:
+                continue
             for lc, rc, ncc, npc in aux:
                 key = (la, lb, lc)
                 b = buckets[key]

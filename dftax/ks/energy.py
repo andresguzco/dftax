@@ -61,7 +61,7 @@ from dftax.integrals import (
     eri2c_matrix,
 )
 from dftax.integrals.eri3c_bucketed import (
-    overlap_kinetic_bucketed, plan_eri3c, plan_pairs,
+    _shell_pair_keep, overlap_kinetic_bucketed, plan_eri3c, plan_pairs,
 )
 from dftax.integrals.eri4c import (
     eri4c_matrix,
@@ -573,8 +573,18 @@ class KS(eqx.Module):
         # The bucket plan reads static basis metadata and must be derived
         # outside the jitted build (inside, every BasisData leaf is traced);
         # same eager-vs-traced split as the Schwarz quartet list above.
+        # df(screen=...) on the materialized path is a shell-pair compact
+        # gather: the plan omits the Schwarz-negligible bra shell-pairs, which
+        # then stay exactly zero in the 3-center tensor (streamed df keeps the
+        # AO-level significant_pairs above).
+        screen_keep = (
+            _shell_pair_keep(basis, float(spec.screen))
+            if is_df and spec.chunk is None and spec.screen is not None
+            else None
+        )
         eri3c_plan = (
-            plan_eri3c(basis, aux_basis) if aux_basis is not None else None
+            plan_eri3c(basis, aux_basis, keep_pairs=screen_keep)
+            if aux_basis is not None else None
         )
         pair_plan = plan_pairs(basis)
         aux_pair_plan = (

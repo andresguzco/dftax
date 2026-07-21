@@ -115,8 +115,13 @@ def df(
             otherwise streams RI-J/RI-K over budget-derived auxiliary chunks;
             ``None`` forces the materialized tensor; an int streams with
             exactly that chunk.
-        screen: Schwarz threshold restricting the streamed RI-J bra sum to
-            significant pairs; requires an explicit int ``chunk``.
+        screen: relative Cauchy-Schwarz threshold dropping negligible bra
+            pairs (survivors are O(N) for extended systems). On the
+            materialized path it is a shell-pair compact gather that omits
+            the screened shell-pairs from the 3-center build (they stay
+            exactly zero); with an int ``chunk`` it restricts the streamed
+            RI-J bra sum to the significant AO pairs. ``None`` (default)
+            keeps every pair, a bit-identical build.
         spherical: auxiliary basis span. ``None`` (default) uses spherical
             harmonics on the materialized path (non-redundant fit, positive
             definite metric) and cartesian components on the streamed and
@@ -133,11 +138,6 @@ def df(
         KS(mol, xc, coulomb=df("def2-universal-jkfit", chunk=64))  # streamed
         ```
     """
-    if screen is not None and not isinstance(chunk, int):
-        raise ValueError(
-            "df(screen=...) requires an explicit int chunk: Schwarz pair "
-            "screening applies only to the streamed RI-J contraction."
-        )
     if spherical is True and isinstance(chunk, int):
         raise ValueError(
             "df(spherical=True, chunk=<int>) is not supported: the streamed "

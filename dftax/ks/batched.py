@@ -226,7 +226,7 @@ def scf_batched(
         ks = _build(coords)
         X = _lowdin(ks.S)
         P0 = _initial_density(resolved_guess, ks, X)
-        e, P, C, eps, conv, n = _scf_solve(
+        e, P, C, eps, conv, n, _ = _scf_solve(
             ks, X, P0, max_iter, e_tol, d_tol, diis_space, False, level_shift
         )
         out = {"e": e, "conv": conv, "n": n, "e_disp": ks.e_disp}

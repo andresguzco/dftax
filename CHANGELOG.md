@@ -7,6 +7,17 @@ to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Smearing reports the Mermin free energy.** Under `fermi()` the reported
+  `e_tot` was the Kohn-Sham energy at the smeared density, which is not
+  variational. It is now the Mermin free energy `A = E - sigma·S` (the KS
+  energy minus the electronic-entropy term), the quantity the
+  finite-temperature SCF makes stationary and whose gradient is the force;
+  `sigma -> 0` sends it to the aufbau ground-state energy. The entropy term
+  is exposed as `KSResult.ts` (>= 0), so the KS energy (`e_tot + ts`) and the
+  `sigma -> 0` estimate (`e_tot + 0.5·ts`) are recoverable. A Cr atom, whose
+  degenerate d-shell has no integer-occupation minimum, now converges under
+  smearing and reports a sensible free energy (e.g. sigma=0.02: A=-1033.041,
+  ts=0.099). `KSResult` gains a defaulted `ts` field (0 without smearing).
 - **Second-order SCF handles indefinite Hessians.** `newton()` and `roks()`
   previously took the trust-region step from `jax.scipy.sparse.linalg.cg`,
   which assumes a positive-definite Hessian; at an ill-conditioned or saddle

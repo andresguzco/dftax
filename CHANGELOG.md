@@ -6,6 +6,22 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Second-order SCF handles indefinite Hessians.** `newton()` and `roks()`
+  previously took the trust-region step from `jax.scipy.sparse.linalg.cg`,
+  which assumes a positive-definite Hessian; at an ill-conditioned or saddle
+  point the Hessian is indefinite, plain CG returns a poor direction, and the
+  decrease-only trust region stalls. The step is now Steihaug-Toint truncated
+  CG, which follows the first direction of negative curvature to the trust
+  boundary (and stops at the boundary when a CG step would cross it), so it is
+  always a genuine model decrease. Strongly stretched N2 (2.5 A), where the
+  old step stalled without converging, now reaches a critical point in ~20
+  Newton iterations; the easy and warm-start cases are unchanged (water 6, an
+  Fe cleanup 2) and still converge to the same minimum as DIIS. The change is
+  step robustness (anti-stall on indefinite Hessians), not global
+  optimization; genuinely degenerate ground states (a Cr atom) remain a
+  smearing case, not a saddle escape.
+
 ### Changed (numerically visible)
 - **The default density-fitting path uses a spherical auxiliary basis.**
   The materialized, unsharded DF backend (the default `coulomb=None`

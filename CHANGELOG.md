@@ -36,6 +36,17 @@ to [Semantic Versioning](https://semver.org/).
   vendored table.
 
 ### Changed (performance)
+- **Lower first-call trace/compile in the bucketed engine.** The bucketed
+  engine's first-call cost is dominated by Python tracing (per-process, so
+  the persistent compile cache cannot reduce it), and the dominant graph
+  was the Hermite Coulomb table, which unrolled its mt-level recursion into
+  an O(mt^4)-node graph per shell class and is shared by the 3-center,
+  2-center and nuclear builds. Rolling that ladder into a `lax.fori_loop`
+  (traced once instead of mt times) cuts the 3-center build's trace+compile
+  about 2.3x (ethanol/def2-svp and def2-tzvp), bit-identical to the unrolled
+  form with no change in execute time. Further first-call reduction is
+  bounded by the per-class kernel count and is folded into the engine
+  small-batch work.
 - **The 2-center Coulomb, overlap, and kinetic builds are bucketed by
   shell class.** With the 0.4.0 eri3c and nuclear-attraction work this
   puts every integral build in the KS path on the bucketed

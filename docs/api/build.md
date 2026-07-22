@@ -6,5 +6,6 @@ for the tour.
 
 ::: dftax.ks.energy.KS
 ::: dftax.energy.d3.d3bj
+::: dftax.energy.d4.d4
 ::: dftax.system.molecule.Molecule
 ::: dftax.ks.energy.System

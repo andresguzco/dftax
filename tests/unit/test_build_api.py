@@ -111,8 +111,11 @@ def test_molecule_spherical_field():
 def test_spec_factories_reject_inert_combinations():
     with pytest.raises(ValueError):
         exact(screen=1e-10, stream=True)
+    # df(screen=...) without a chunk is now the materialized shell-pair
+    # compact gather (valid); the remaining inert df combination is a
+    # spherical span on the streamed backend.
     with pytest.raises(ValueError):
-        df(AUX, screen=1e-10)                              # screen needs chunk
+        df(AUX, chunk=50, spherical=True)
     with pytest.raises(TypeError):
         KS("not a system", LDA())
 

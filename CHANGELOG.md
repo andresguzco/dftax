@@ -73,6 +73,17 @@ to [Semantic Versioning](https://semver.org/).
   vendored table.
 
 ### Added
+- **D3 Axilrod-Teller-Muto three-body dispersion.** `d3bj(atm=True)` adds
+  the repulsive triple-dipole term: `C9 = sqrt(C6_AB C6_AC C6_BC)` from the
+  same CN-interpolated C6 as the two-body term, the Heron-form angular
+  factor, and zero-damping on geometric means of the pairwise van-der-Waals
+  radii (`rs9 = 4/3`, `alpha = 14`). Off by default (the common two-body
+  D3(BJ) convention), independent of the BJ damping parameters, fully
+  differentiable (forces via autodiff). Matches tad-dftd3's
+  `dispersion_atm` to machine precision when its `rs9` is given as exact
+  float64 4/3 (tad's own signature default is a float32-rounded tensor; the
+  published D3 constant is exactly 4/3, and the pinned test references use
+  it). The vendored table gains the pairwise van-der-Waals radii.
 - **5Z and 6Z orbital bases.** The orbital-side angular-momentum ceiling
   rises from g (l=4) to i (l=6), matching the auxiliary ceiling: cc-pV5Z /
   aug-cc-pV5Z (h functions) and cc-pV6Z (i functions) now build and run.

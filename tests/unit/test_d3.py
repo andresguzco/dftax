@@ -109,3 +109,49 @@ def test_forces_include_dispersion_gradient():
 
     fd = -(e_at(step) - e_at(-step)) / (2 * step)
     assert abs(F[1, 2] - fd) < 1e-5
+
+
+# ATM three-body references: tad-dftd3 0.6.0 dispersion_atm with s9=1 and
+# rs9 = 4/3 in float64. tad's own signature default is a float32 tensor
+# (1.3333...) upcast at runtime, shifting its answer by ~5e-7 relative;
+# the published D3 rs9 is exactly 4/3, so the references pin the exact-
+# float64 evaluation, which this implementation matches to machine
+# precision. The term is independent of the BJ damping parameters.
+ATM_REFS = {
+    "water": 1.788760012928768e-10,
+    "ethanol": 2.710664747091920e-06,
+}
+
+
+@pytest.mark.parametrize("system", sorted(ATM_REFS))
+def test_d3_atm_energy_vs_tad_dftd3(system):
+    from dftax.energy.d3 import d3_atm_energy
+
+    z, xyz = (WATER_Z, WATER_XYZ) if system == "water" else (ETHANOL_Z, ETHANOL_XYZ)
+    e = float(d3_atm_energy(xyz, z))
+    assert e > 0.0                                    # ATM is repulsive
+    assert abs(e - ATM_REFS[system]) < 1e-14
+
+
+def test_d3_atm_forces_match_finite_difference():
+    from dftax.energy.d3 import d3_atm_energy
+
+    g = np.asarray(jax.grad(lambda c: d3_atm_energy(c, ETHANOL_Z))(
+        jnp.asarray(ETHANOL_XYZ)))
+    step = 1e-5
+    for (a, k) in [(0, 0), (2, 2), (5, 1)]:
+        cp = ETHANOL_XYZ.copy(); cp[a, k] += step
+        cm = ETHANOL_XYZ.copy(); cm[a, k] -= step
+        fd = (d3_atm_energy(cp, ETHANOL_Z) - d3_atm_energy(cm, ETHANOL_Z)) / (2 * step)
+        assert abs(g[a, k] - float(fd)) < 1e-9
+
+
+def test_d3bj_atm_knob_adds_repulsive_term():
+    from dftax.energy.d3 import _resolve_dispersion
+    from dftax.energy.xc import PBE
+    from dftax import d3bj
+
+    z = np.asarray(ETHANOL_Z, dtype=np.float64)
+    e2 = float(_resolve_dispersion(d3bj(), PBE(), z)(jnp.asarray(ETHANOL_XYZ)))
+    e3 = float(_resolve_dispersion(d3bj(atm=True), PBE(), z)(jnp.asarray(ETHANOL_XYZ)))
+    assert abs((e3 - e2) - ATM_REFS["ethanol"]) < 1e-14

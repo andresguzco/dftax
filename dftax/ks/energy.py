@@ -661,11 +661,20 @@ class KS(eqx.Module):
                 )
             self.xc_term = ShardedGridXC(inner=inner, devices=devices)
         elif grid_chunk is None:
-            self.xc_term = GridXC(ao=ao, dao=dao, weights=weights, xc=xc)
+            self.xc_term = GridXC(ao=ao, dao=dao, weights=weights, xc=xc,
+                                  coords=grid_coords)
         else:
             self.xc_term = StreamedGridXC(
                 basis=basis, grid_coords=grid_coords, weights=weights,
                 chunk=grid_chunk, xc=xc,
+            )
+        if float(getattr(xc, "nlc_b", 0.0)) != 0.0 and not isinstance(
+                self.xc_term, GridXC):
+            raise NotImplementedError(
+                "VV10 nonlocal correlation needs the materialized XC grid: "
+                "the double-grid pair quadrature is nonlocal across grid "
+                "chunks and mesh shards. Use becke(...) without chunk= and "
+                "no mesh= for VV10 functionals (wB97X-V)."
             )
         self.atom_coords = coords
         self.nelec = nelec

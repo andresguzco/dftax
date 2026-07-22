@@ -73,6 +73,19 @@ to [Semantic Versioning](https://semver.org/).
   vendored table.
 
 ### Added
+- **VV10 nonlocal correlation and wB97X-V.** The VV10 double-grid pair
+  quadrature runs on the XC grid, streamed over outer-point chunks so the
+  O(ng²) pair tensor is never materialized, and is differentiable in both
+  the density and the (traced) grid coordinates, so SCF potentials and
+  nuclear forces come from autodiff. The kernel matches PySCF's `_vv10nlc`
+  bit-for-bit on identical inputs. `WB97XV()` is the 10-parameter
+  Mardirossian-Head-Gordon range-separated hybrid with VV10 (b=6, C=0.01,
+  declared on the functional via `nlc_b`/`nlc_c`): the B97 series
+  coefficients were recovered from libxc by exact linear fit (residual
+  1e-9), and the full solve matches PySCF `wb97x-v` to 2e-13 on matched
+  grids with the exact Coulomb backend. VV10 functionals require the
+  materialized XC grid (the pair quadrature is nonlocal across grid chunks
+  and mesh shards); the streamed and sharded XC paths raise.
 - **DFT-D4 dispersion.** `dispersion=d4()` brings the charge-dependent D4
   model: EEQ partial charges from a differentiable bordered linear solve
   (plain `jnp.linalg.solve`, no custom rules), electronegativity-weighted

@@ -766,12 +766,19 @@ class XCTerm(eqx.Module):
 
 
 class GridXC(XCTerm):
-    """XC on precomputed AO grid values (O(ng·nao) memory)."""
+    """XC on precomputed AO grid values (O(ng·nao) memory).
+
+    ``coords`` (the grid points) ride along for functionals that declare
+    VV10 nonlocal correlation (``xc.nlc_b != 0``): the double-grid pair
+    quadrature needs the point positions, and traced coordinates keep the
+    NLC term differentiable for forces.
+    """
 
     ao: Float[Array, "ng nao"]
     dao: Float[Array, "ng nao 3"]
     weights: Float[Array, "ng"]
     xc: XCFunctional = eqx.field(static=True)
+    coords: Float[Array, "ng 3"] | None = None
 
     def density(
         self, P: Float[Array, "nspin nao nao"]
@@ -796,12 +803,21 @@ class GridXC(XCTerm):
         if P.shape[0] == 1:
             rho, grad_rho = self.density(P)
             if self.xc.xc_type == "MGGA":
-                return xc_energy(
+                e = xc_energy(
                     self.xc, rho, self.weights, grad_rho=grad_rho,
                     tau=self._tau(P[0]),
                 )
-            gr = grad_rho if self.xc.xc_type == "GGA" else None
-            return xc_energy(self.xc, rho, self.weights, grad_rho=gr)
+            else:
+                gr = grad_rho if self.xc.xc_type == "GGA" else None
+                e = xc_energy(self.xc, rho, self.weights, grad_rho=gr)
+            if self.xc.nlc_b != 0.0:                     # static branch
+                from dftax.energy.vv10 import vv10_energy
+
+                e = e + vv10_energy(
+                    rho, jnp.sum(grad_rho * grad_rho, axis=-1), self.coords,
+                    self.weights, self.xc.nlc_b, self.xc.nlc_c,
+                )
+            return e
 
         # Spin-polarized: ε_xc(ρα, ρβ, ∇ρα, ∇ρβ) integrated against ρ_tot, with a
         # per-spin nan-safe double-``where``. Unlike the closed shell
@@ -838,7 +854,16 @@ class GridXC(XCTerm):
             eps = xc_potential(self.xc, rho_stack, grad_rho=grad_stack)
         else:
             eps = xc_potential(self.xc, rho_stack)
-        return jnp.sum(jnp.where(mask, self.weights * eps * rho_tot, 0.0))
+        e = jnp.sum(jnp.where(mask, self.weights * eps * rho_tot, 0.0))
+        if self.xc.nlc_b != 0.0:                         # static branch
+            from dftax.energy.vv10 import vv10_energy
+
+            grad_tot = grad_a + grad_b
+            e = e + vv10_energy(
+                rho_tot, jnp.sum(grad_tot * grad_tot, axis=-1), self.coords,
+                self.weights, self.xc.nlc_b, self.xc.nlc_c,
+            )
+        return e
 
 
 class StreamedGridXC(XCTerm):

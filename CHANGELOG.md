@@ -73,6 +73,20 @@ to [Semantic Versioning](https://semver.org/).
   vendored table.
 
 ### Added
+- **DFT-D4 dispersion.** `dispersion=d4()` brings the charge-dependent D4
+  model: EEQ partial charges from a differentiable bordered linear solve
+  (plain `jnp.linalg.solve`, no custom rules), electronegativity-weighted
+  D4 coordination numbers, zeta charge scaling of the Gaussian reference
+  weights, and pairwise C6 from the vendored Casimir-Polder reference
+  table; Becke-Johnson two-body damping with D4 parameter sets (pbe, pbe0,
+  b3lyp, cam-b3lyp, r2scan) and an optional ATM term (`d4(atm=True)`)
+  damped on the BJ critical radii (a D4 convention: unlike D3, the D4
+  three-body term depends on the functional's damping parameters). The
+  total molecular charge feeds the EEQ solve, so ions disperse less than
+  neutrals out of the box. Fully differentiable; validated against
+  tad-dftd4 0.8.0 to machine precision at every level (EEQ charges 5e-14,
+  two-body 3e-18, with-ATM 3e-18) with references pinned for five
+  functionals; tables vendored via `scripts/gen_d4_data.py`.
 - **D3 Axilrod-Teller-Muto three-body dispersion.** `d3bj(atm=True)` adds
   the repulsive triple-dipole term: `C9 = sqrt(C6_AB C6_AC C6_BC)` from the
   same CN-interpolated C6 as the two-body term, the Heron-form angular

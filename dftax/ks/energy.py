@@ -604,7 +604,7 @@ class KS(eqx.Module):
         # mirroring e_nn, so the rebuilt energies in forces/batched carry its
         # gradient automatically. Atomic numbers come from the charges (works
         # on the raw System path too).
-        disp_fn = _resolve_dispersion(dispersion, xc, charges)
+        disp_fn = _resolve_dispersion(dispersion, xc, charges, nelec)
         self.e_disp = (
             disp_fn(coords) if disp_fn is not None else jnp.asarray(0.0)
         )

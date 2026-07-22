@@ -30,6 +30,7 @@ directly for the full surface.
 """
 
 from dftax.energy.d3 import d3bj
+from dftax.energy.d4 import d4
 from dftax.energy.gto import BasisData, extract_basis_data, eval_gto
 from dftax.grid import becke, points
 from dftax.integrals import (
@@ -67,6 +68,7 @@ __all__ = [
     "core", "sad", "minao", "sap",
     # dispersion (the dispersion= argument of KS)
     "d3bj",
+    "d4",
     # run: solver verbs + result
     "scf", "adiis", "fermi", "newton", "roks", "minimize", "forces",
     "scf_batched",

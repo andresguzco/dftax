@@ -187,20 +187,32 @@ def d3_atm_energy(coords, numbers, s9: float = 1.0):
     return jnp.sum(triple * ang * fdamp * c9) / 6.0
 
 
-def _resolve_dispersion(spec, xc, charges):
+def _resolve_dispersion(spec, xc, charges, nelec=None):
     """Resolve a dispersion spec against the functional and atomic numbers.
 
     Returns a zero-argument-of-P energy closure of the (traced) coordinates,
     or ``None``. Atomic numbers come from the nuclear charges, so the raw
-    :class:`~dftax.ks.energy.System` path works too.
+    :class:`~dftax.ks.energy.System` path works too. ``nelec`` supplies the
+    electron count for D4's total molecular charge (EEQ); ``None`` means
+    neutral.
     """
+    from dftax.energy.d4 import D4Spec, _d4_params, d4_energy
+
     if spec is None:
         return None
+    numbers = np.rint(np.asarray(charges)).astype(np.int64)
+    if isinstance(spec, D4Spec):
+        method = spec.method if spec.method is not None else xc.name.lower()
+        params = _d4_params(method)
+        qtot = (float(np.sum(numbers)) - float(nelec)
+                if nelec is not None else 0.0)
+        atm = spec.atm
+        return lambda coords: d4_energy(coords, numbers, params, qtot, atm)
     if not isinstance(spec, D3BJSpec):
-        raise TypeError(f"dispersion must be a d3bj() spec, got {spec!r}")
+        raise TypeError(
+            f"dispersion must be a d3bj() or d4() spec, got {spec!r}")
     method = spec.method if spec.method is not None else xc.name.lower()
     params = _d3_params(method)
-    numbers = np.rint(np.asarray(charges)).astype(np.int64)
     if spec.atm:
         return lambda coords: (d3bj_energy(coords, numbers, params)
                                + d3_atm_energy(coords, numbers))

@@ -69,6 +69,27 @@ G4P_PYTHON=<gpu4pyscf-env>/bin/python DFTAX_GEOM_DIR=<geometric>/data \
 | cubane   | 16 | −308.81601840 | −308.81602647 | 8.1e-06 | 30 / 7  | 168 s | 3.9 s | 1.7 s | 0.7 s | 17.2 GiB | 1.5 GiB |
 | coronene | 36 | −920.09629884 | −920.09628274 | 1.6e-05 | 83 / 10 | 382 s | 47 s  | 2.8 s | 1.8 s | 38.0 GiB | 1.7 GiB |
 
+Same coronene, both engines given all four GPUs (`--ndev 4`; dftax shards the
+auxiliary axis with `mesh()`, GPU4PySCF uses its own multi-GPU path). Peak is
+summed over the four devices, so divide by four for the per-device figure:
+
+| engine | E (Ha) | iters | cold | warm | peak (4 GPUs) | per device |
+|---|---:|---:|---:|---:|---:|---:|
+| dftax, 4-GPU mesh | −920.09629887 | 101 | 852 s | 44.0 s | 39.6 GiB | 9.9 GiB |
+| dftax, 1 GPU      | −920.09629884 |  83 | 382 s | 46.6 s | 38.0 GiB | 38.0 GiB |
+| GPU4PySCF, 4 GPUs | −920.09628274 |  10 | 4.0 s | 2.4 s |  3.6 GiB | 0.9 GiB |
+| GPU4PySCF, 1 GPU  | −920.09628274 |  10 | 2.8 s | 1.8 s |  1.7 GiB | 1.7 GiB |
+
+**Sharding buys capacity, not speed, at this size.** Per-device memory falls
+about fourfold (38 → 9.9 GiB), which is the whole point of the aux-sharded
+backend and it delivers; the warm wall does not move (46.6 → 44.0 s), and the
+cold wall gets worse (382 → 852 s) because the slabs are built one device at a
+time and each recompiles its own shell-class kernels. Worth noting that
+GPU4PySCF does not get faster on four GPUs either (1.8 → 2.4 s warm), which
+matches its own documentation calling multi-GPU scaling efficiency low. So
+multi-GPU is not where either code turns a corner: it is what lets dftax hold
+a system whose tensors do not fit on one device.
+
 **The energies agree**; everything else is a gap, and this is the honest
 picture at this size. Three separate causes, worth separating because they
 have different fixes:
@@ -86,6 +107,12 @@ have different fixes:
   one-off per shape: irrelevant when the shape is reused (geometry
   optimization, conformer batches, anything differentiated), and the entire
   cost when it is not.
+
+**On the wall-clock columns.** This is a shared cluster node, and the cold
+column is host-CPU-bound (it is XLA compiling), so it carries the node's load
+as noise; other work was running during this run. The iteration counts and the
+memory columns do not depend on that, and the ratios here are far larger than
+the noise, but treat the seconds as indicative rather than exact.
 
 **What is matched.** PySCF prunes the angular grid per shell by default; the
 harness turns that off (`grids.prune = None`, `atom_grid = (75, 302)`) so both

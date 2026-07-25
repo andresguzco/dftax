@@ -6,18 +6,53 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Multi-node execution.** `distributed()` joins the processes of a
+  multi-task job into one JAX process group (the coordinator, the process
+  count and the ids come from the SLURM environment), after which `mesh()`
+  spans every GPU of every node and nothing else about the calculation
+  changes: the auxiliary slabs and the quadrature shard across the union of
+  the devices while the dense matrices stay replicated. Each process builds
+  only the slabs it can address and the pieces are assembled into global
+  arrays; the replicated build outputs are promoted to global replicas so
+  they can feed a computation over the whole mesh. `barrier()` and
+  `is_coordinator()` cover the points where the processes stop being
+  symmetric (printing, file I/O, teardown), and
+  `scripts/gpu/validate_distributed.py` runs the parity check in-run, either
+  as one process per GPU on a node or one task per node
+  (`scripts/gpu/distributed.sbatch`): PBE0/water on 4 processes reproduces
+  the single-device solve to 2.1e-10 Ha. Batch-axis sharding
+  (`scf_batched(mesh=...)`) stays single-process and now says so at build
+  time; across nodes, shard a single calculation instead.
+
 ### Changed (performance)
 - **The mesh-sharded DF backend builds shell-aligned auxiliary slabs.** Slab
   boundaries now fall on shell boundaries (a greedy partition balanced on
   per-device function counts), which unlocks the two things arbitrary
   function-index slabs forbade: each slab builds on the shell-class-bucketed
-  engine (class kernels are shared across slabs) instead of the flat
-  reference engine, and the sharded path uses the spherical auxiliary basis
-  like the materialized default (same fit space, so the cross-backend pins
-  in the parity tests are gone and `df(spherical=True)` is legal with
-  `mesh=`). Shell alignment makes slabs unequal; each pads to the largest
-  and the metric inverse is embedded at the padded positions, preserving
-  the exact-zero padding invariants the sharded Coulomb term relies on.
+  engine instead of the flat reference engine, and the sharded path uses the
+  spherical auxiliary basis like the materialized default (same fit space, so
+  the cross-backend pins in the parity tests are gone and
+  `df(spherical=True)` is legal with `mesh=`). Shell alignment makes slabs
+  unequal; each pads to the largest and the metric inverse is embedded at the
+  padded positions, preserving the exact-zero padding invariants the sharded
+  Coulomb term relies on. Measured against the single-device build: on
+  ethanol/def2-svp the slabbed tensor reproduces it to the last bit of every
+  reduction checked (sum, sum of squares, max), and peak device memory falls
+  from 0.88 GiB to 0.23 GiB, the largest of the four slabs; on water/sto-3g
+  the largest element-wise difference is 9e-16, about one ulp, which the RI
+  metric's pseudo-inverse turns into 5e-10 in the total energy.
+
+### Fixed
+- **`import dftax` no longer starts an XLA backend.** Importing the package
+  used to build three JAX arrays at module scope (the Boys interpolation
+  table, the PW92/PBE constants, the 3-center sign array), which brought up
+  the backend and made `jax.distributed.initialize` impossible afterwards,
+  the one thing a multi-node run must do first. All three are numpy now. The
+  Boys table is rebuilt by the standard stable scheme (ascending series at a
+  top order past `2·t_max`, then the damping downward recursion) instead of
+  an incomplete gamma with a temporary x64 flip, and agrees with the exact
+  reference to 3e-14 relative across the whole table.
 
 ## [0.5.0] - 2026-07-25
 

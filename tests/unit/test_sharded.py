@@ -50,11 +50,13 @@ def test_sharded_xc_matches_unsharded():
     # sharded and unsharded partial sums round differently (was 1e-12 when the
     # summation orders coincided); still fixed-density, no SCF amplification.
     assert float(ks_m.e_xc(P)) == pytest.approx(float(ks0.e_xc(P)), abs=1e-10)
-    # 1e-9 for the total: both sides run the shell-class-bucketed int3c on the
-    # same spherical aux span, but the sharded build batches each shell class
-    # per slab and pads, so its epsilon-level summation differences amplify
-    # through the RI metric inverse to a few 1e-10 at a fixed density.
-    assert float(ks_m.total(P)) == pytest.approx(float(ks0.total(P)), abs=1e-9)
+    # 5e-9 for the total, which is the floor this comparison can have. The
+    # whole difference is the Coulomb term (e_xc above agrees to 2e-15): the
+    # slabbed 3-center tensor differs from the single-device one by ~9e-16,
+    # one ulp, and the RI metric is a pseudo-inverse with a 1e-7 cutoff, so it
+    # amplifies that by ~1e6. Measured 5e-10 and 1.0e-9 on water/sto-3g at a
+    # fixed density, i.e. the same scale as the SCF-level bounds below.
+    assert float(ks_m.total(P)) == pytest.approx(float(ks0.total(P)), abs=5e-9)
 
     ks_s = KS(mol, PBE(), grid=becke(35, 50, chunk=200), mesh=mesh())
     assert isinstance(ks_s.xc_term.inner, StreamedGridXC)

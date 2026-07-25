@@ -14,13 +14,10 @@ from jaxtyping import Float, Int, Array
 from dftax.energy.gto import BasisData, _CART_COMPONENTS
 
 
-# Precomputed Cartesian components as JAX arrays, keyed by total angular momentum
-CART_COMPONENTS_ARRAYS = {
-    l: jnp.array(_CART_COMPONENTS[l], dtype=jnp.int32)  # (n_comp, 3)
-    for l in range(7)  # l = 0..6 (h/i appear only in auxiliary DF bases)
-}
-
-# Number of Cartesian components per angular momentum
+# Number of Cartesian components per angular momentum (l = 0..6; h/i appear
+# only in auxiliary DF bases). Kept as plain ints: nothing at import time may
+# build a JAX array, or the backend comes up before a multi-node run has had
+# the chance to join its process group (see dftax.ks.distributed).
 N_CART = {l: len(_CART_COMPONENTS[l]) for l in range(7)}
 
 

@@ -82,6 +82,10 @@ from dftax.energy.xc import PBE0
 scf(KS(mol, PBE0(), coulomb=df("def2-universal-jkfit"), mesh=mesh()))
 ```
 
+The same mesh spans several nodes: launch the script once per node and call
+`distributed()` first, and the auxiliary slabs shard across every GPU of the
+allocation (`scripts/gpu/distributed.sbatch` is a working template).
+
 ## Accuracy
 
 Against PySCF on water / sto-3g (see

@@ -69,7 +69,8 @@ from dftax.integrals.eri4c import (
     significant_pairs,
 )
 from dftax.ks.shard import (
-    MeshSpec, _build_int3c_sharded, _pad_shard_grid, _resolve_mesh,
+    MeshSpec, _build_int3c_sharded, _pad_shard_grid, _replicate_tree,
+    _resolve_mesh,
 )
 from dftax.ks.terms import (
     CoulombTerm,
@@ -685,6 +686,16 @@ class KS(eqx.Module):
         self.nelec = nelec
         self.nocc = nocc
         self.symbols = tuple(symbols) if symbols is not None else None
+        if devices is not None and jax.process_count() > 1:
+            # Multi-node: the replicated part of the build ran per process on
+            # its own default device, but a computation over the global mesh
+            # needs global inputs. The sharded leaves (the aux slabs, the
+            # grid, whatever jit made from them) already carry their mesh
+            # sharding and are left exactly as they are.
+            for _name in ("S", "hcore", "e_nn", "e_disp", "basis", "coulomb",
+                          "xc_term", "atom_coords"):
+                setattr(self, _name,
+                        _replicate_tree(getattr(self, _name), devices))
 
     def e_xc(self, P: Float[Array, "nspin nao nao"]) -> Scalar:
         """Exchange-correlation energy ``∫ ε_xc ρ`` (DFT part only)."""

@@ -267,6 +267,15 @@ def scf_batched(
         import numpy as np
         from jax import shard_map
 
+        if jax.process_count() > 1:
+            raise NotImplementedError(
+                "batch-axis sharding is single-process: the conformer batch "
+                "is a process-local array, and the per-device solves run "
+                "with no collectives to make it global. Across nodes, shard "
+                "a single calculation instead (KS(..., mesh=mesh()) after "
+                "distributed()), or run one batch per process."
+            )
+
         n_pad = (-B) % len(devices)
         cb = coords_batch
         if n_pad:

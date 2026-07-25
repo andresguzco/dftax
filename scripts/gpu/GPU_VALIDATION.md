@@ -41,6 +41,43 @@ anchor correctness):
   4-GPU `test_sharded`). DF force comparisons across independently converged
   solves need matched densities or tight `d_tol` (see `_metric_pinv`).
 
+## Update 2026-07-25 (multi-process: the mesh across processes)
+
+Same node, four processes of one GPU each, which is the multi-node code path
+(global arrays, non-addressable devices, real collectives) with the
+interconnect replaced by NVLink. Reproduce with:
+
+```bash
+python scripts/gpu/validate_distributed.py --local-world 4 --mol water \
+    --basis sto-3g --xc PBE0
+```
+
+| quantity | value |
+|---|---|
+| local solve (1 GPU, no collectives) | -75.245969939768 Ha |
+| sharded solve (4 GPUs, 4 processes) | -75.245969939557 Ha |
+| difference | 2.1e-10 Ha |
+| build / solve wall (distributed) | 36.1 s / 3.8 s |
+
+Both solves converge; the difference is the usual RI-metric-amplified
+reassociation (see the tolerance note in `tests/unit/test_sharded.py`). Still
+unvalidated: a genuine two-node run, which only adds the interconnect to the
+picture (`scripts/gpu/distributed.sbatch` is the template).
+
+Slab-build characterization on ethanol/def2-svp, four slabs of a 335-function
+auxiliary basis (84/85/81/85):
+
+| build | wall (cold) | peak device memory |
+|---|---|---|
+| single device, whole tensor | 115 s | 0.88 GiB |
+| four shell-aligned slabs | 392 s | 0.23 GiB (largest slab) |
+
+The memory is the point of the sharded path and it behaves; the cold wall does
+not, and the cause is compilation, not arithmetic: the slab loop builds one
+device at a time, and each slab recompiles its shell-class kernels because the
+per-class triple counts (and so the chunk sizes and shapes) differ from slab to
+slab. Sharing those compilations across slabs is the open follow-up.
+
 ## Environment
 
 | | |

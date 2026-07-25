@@ -298,13 +298,16 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
     aux = spec.auxbasis
     prebuilt = isinstance(aux, BasisData)
     streamed = isinstance(spec.chunk, int)
-    if spec.spherical is True and (streamed or sharded):
+    if spec.spherical is True and streamed:
         raise NotImplementedError(
-            "df(spherical=True) requires the materialized unsharded "
-            "backend: the streamed and mesh-sharded paths contract "
-            "cartesian auxiliary elements on the fly."
+            "df(spherical=True) requires a materialized backend: the "
+            "streamed path contracts cartesian auxiliary elements on the "
+            "fly."
         )
-    want_sph = spec.spherical is not False and not streamed and not sharded
+    # Spherical harmonics on the materialized paths, including the
+    # mesh-sharded one (its slabs are shell-aligned, so the block-diagonal
+    # cart2sph slices per slab); the streamed path keeps the cartesian span.
+    want_sph = spec.spherical is not False and not streamed
     if not prebuilt:
         aux = build_basis_data(symbols, coords, spec.auxbasis,
                                spherical=want_sph)
@@ -313,11 +316,11 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
     chunk = spec.chunk
     if chunk == "auto":
         chunk = _resolve_df_chunk(chunk, nao, naux, sharded)
-    if (chunk is not None or sharded) and aux.cart2sph is not None:
+    if chunk is not None and aux.cart2sph is not None:
         if prebuilt:
             raise NotImplementedError(
-                "streamed and mesh-sharded density fitting need a cartesian "
-                "auxiliary basis; this prebuilt BasisData is spherical."
+                "streamed density fitting needs a cartesian auxiliary "
+                "basis; this prebuilt BasisData is spherical."
             )
         # "auto" fell back to streaming: rebuild and re-price for the
         # (larger) cartesian span.
@@ -617,23 +620,25 @@ class KS(eqx.Module):
             # device ever holds more than its naux/ndev slice of the
             # O(nao²·naux) tensor. The metric inverse is zero-padded to the
             # padded aux dimension (padded γ entries are exact zeros).
-            int3c_s, nauxp = _build_int3c_sharded(basis, aux_basis, devices)
-            naux = int2c_inv.shape[0]
+            int3c_s, nauxp, pos = _build_int3c_sharded(
+                basis, aux_basis, devices)
+            # Shell-aligned slabs pad interleaved, not at the tail: embed the
+            # metric inverse at the padded positions (padded rows/cols zero).
             vinv = (
                 jnp.zeros((nauxp, nauxp), int2c_inv.dtype)
-                .at[:naux, :naux].set(int2c_inv)
+                .at[pos[:, None], pos[None, :]].set(int2c_inv)
             )
             int3c_lr_s = None
             vinv_lr = None
             if hf_lr != 0.0:
                 # Attenuated slabs + padded attenuated metric for the
                 # long-range exchange rounds (same layout as the full-range).
-                int3c_lr_s, _ = _build_int3c_sharded(
+                int3c_lr_s, _, _ = _build_int3c_sharded(
                     basis, aux_basis, devices, omega=omega
                 )
                 vinv_lr = (
                     jnp.zeros((nauxp, nauxp), int2c_inv_lr.dtype)
-                    .at[:naux, :naux].set(int2c_inv_lr)
+                    .at[pos[:, None], pos[None, :]].set(int2c_inv_lr)
                 )
             self.coulomb = ShardedDFCoulomb(
                 int3c=int3c_s, int2c_inv=vinv, devices=devices,

@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -1478,15 +1478,17 @@
 <span class="n">dEdZ</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">alchemical_deriv</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">()))</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">alchemical gradient dE/dZ (Ha/charge):&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="n">dEdZ</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code>dipole moment: 1.9240 Debye  [ 1.924 -0.     0.   ]
+<div class="highlight"><pre><span></span><code>E0725 14:03:15.966964 1249443 numa_hwloc.cc:121] Call to hwloc_set_cpubind() failed: Invalid argument [22]
 </code></pre></div>
-<div class="highlight"><pre><span></span><code>isotropic polarizability (FD):       2.1318 a.u.
+<div class="highlight"><pre><span></span><code>dipole moment: 1.9238 Debye  [ 1.9238  0.     -0.    ]
 </code></pre></div>
-<div class="highlight"><pre><span></span><code>isotropic polarizability (analytic): 2.1318 a.u.
+<div class="highlight"><pre><span></span><code>isotropic polarizability (FD):       2.1320 a.u.
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>isotropic polarizability (analytic): 2.1320 a.u.
 </code></pre></div>
 <div class="highlight"><pre><span></span><code>IR-active modes (vibrational):
-    2377.3 cm^-1      0.00 km/mol
-    5026.9 cm^-1      0.04 km/mol
+    2376.9 cm^-1      0.00 km/mol
+    5026.0 cm^-1      0.04 km/mol
     5456.3 cm^-1      0.06 km/mol
 </code></pre></div>
 <div class="highlight"><pre><span></span><code>alchemical gradient dE/dZ (Ha/charge): [-22.0529  -1.0029  -1.0029]
@@ -1543,7 +1545,7 @@
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "toc.integrate", "header.autohide", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
         <script src="../../_static/mathjax.js"></script>
       

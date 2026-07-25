@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -1610,14 +1610,24 @@ builder:</p>
 <li><strong>system</strong>: a <code>Molecule</code>, a PySCF <code>Mole</code> (setup only; nothing PySCF enters the
   compute path), or a raw <code>System(basis, coords, charges, nelec, spin)</code> for
   advanced differentiable rebuilds.</li>
-<li><strong>xc</strong>: <code>LDA()</code>, <code>PBE()</code>, or the hybrids <code>PBE0()</code> / <code>B3LYP()</code>. Functionals are
-  Equinox modules; hybrids simply carry an exact-exchange coefficient.</li>
+<li><strong>xc</strong>: <code>LDA()</code>, <code>PBE()</code>, the hybrids <code>PBE0()</code> / <code>B3LYP()</code>, the
+  range-separated <code>CAMB3LYP()</code> / <code>WB97X()</code> / <code>WB97XV()</code> (the last with VV10
+  nonlocal correlation), or the meta-GGA <code>R2SCAN()</code>. Functionals are Equinox
+  modules; hybrids simply carry exact-exchange coefficients (range-separated
+  ones add <code>omega</code>, and the engine builds the attenuated integrals on every
+  DF backend).</li>
 <li><strong>grid</strong>: <code>becke(n_radial, lebedev, chunk=...)</code> (default 75×302), an explicit
   <code>(coords, weights)</code> tuple, or <code>points(coords, weights, chunk=...)</code>. A <code>chunk</code>
   streams the XC integral (O(chunk·nao) memory).</li>
-<li><strong>coulomb</strong>: <code>exact(screen=..., stream=...)</code> (default) or
-  <code>df(auxbasis, chunk=..., screen=...)</code>. Each knob lives on the backend it
-  configures; combinations that would do nothing raise at the factory.</li>
+<li><strong>coulomb</strong>: <code>df(auxbasis, chunk=..., screen=..., spherical=...)</code> (the
+  default: density fitting with a spherical auxiliary basis and a
+  device-aware materialize-vs-stream policy) or <code>exact(screen=...,
+  stream=...)</code> for small systems and reference comparisons. Each knob lives
+  on the backend it configures; combinations that would do nothing raise at
+  the factory.</li>
+<li><strong>dispersion</strong>: <code>d3bj(method, atm=...)</code> or the charge-dependent
+  <code>d4(method, atm=...)</code>; parameters resolve from the functional when the
+  method is omitted.</li>
 <li><strong>spin</strong>: <code>None</code> infers from the system (spin 0 → one closed-shell channel);
   an explicit value (= 2S, <em>including</em> 0) forces spin-polarized α/β channels.</li>
 <li><strong>mesh</strong>: <code>mesh()</code> shards the calculation across a device mesh
@@ -1631,7 +1641,14 @@ builder:</p>
 </code></pre></div>
 <p><code>scf</code> is Pulay DIIS with an autodiff Fock; the whole self-consistency loop runs
 on device in one <code>lax.while_loop</code>. <code>level_shift</code> (Saunders-Hillier) damps
-oscillation on small-gap cases without changing the fixed point.</p>
+oscillation on small-gap cases without changing the fixed point;
+<code>accel=adiis()</code> runs the far-from-convergence iterations with the ADIIS
+energy-model extrapolation; <code>smearing=fermi(sigma=...)</code> replaces the integer
+aufbau fill with Fermi-Dirac occupations and reports the Mermin free energy
+(<code>res.ts</code> carries the entropy term). For second-order convergence there are
+<code>newton(ks)</code> (trust-region Newton on orbital rotations, saddle-robust
+Steihaug-Toint steps) and its shared-orbital variant <code>roks(ks)</code> for
+restricted open-shell systems (see <a href="../api/solvers/">Solvers</a>).</p>
 <p>The result is a <code>KSResult</code>: <code>e_tot</code>, <code>e_elec</code>, <code>converged</code>, <code>n_iter</code>, <code>nocc</code>,
 <code>mo_energy</code>, <code>mo_coeff</code>, <code>P</code>. Orbital and density fields are spin-stacked
 with a leading <code>nspin</code> axis: a closed shell has <code>nspin = 1</code> (<code>res.P[0]</code> is the
@@ -1742,7 +1759,7 @@ grids, performance).</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "toc.integrate", "header.autohide", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
         <script src="../_static/mathjax.js"></script>
       

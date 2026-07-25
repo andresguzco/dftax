@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -1479,19 +1479,19 @@ density, with no field stepping.</p>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;analytic polarizability (a.u.):</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">alpha</span><span class="p">))</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code>analytic polarizability (a.u.):
- [[ 3.63668612e+00  1.39507933e-16  2.99760217e-15]
- [ 1.39507933e-16  1.24669654e-02 -2.44913410e-16]
- [ 2.99760217e-15 -2.44913410e-16  2.74638085e+00]]
+ [[ 3.63690551e+00 -4.55636293e-16 -4.14868558e-13]
+ [-4.55636293e-16  1.24682744e-02 -5.52033694e-16]
+ [-4.14868558e-13 -5.52033694e-16  2.74677412e+00]]
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><span class="n">alpha_fd</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">polarizability</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;fd&quot;</span><span class="p">,</span> <span class="n">grid</span><span class="o">=</span><span class="n">becke</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">110</span><span class="p">)))</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;finite-field reference:</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">alpha_fd</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;max |diff| =&quot;</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">alpha</span><span class="p">)</span> <span class="o">-</span> <span class="n">alpha_fd</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">()))</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code>finite-field reference:
- [[ 3.63668680e+00 -1.73523455e-12  2.08166817e-13]
- [-1.73523455e-12  1.24675044e-02  9.75348978e-14]
- [ 2.08166817e-13  9.75348978e-14  2.74636579e+00]]
-max |diff| = 1.5059176729614876e-05
+ [[ 3.63690617e+00 -1.92407201e-09  5.34711164e-10]
+ [-1.92407201e-09  1.24688180e-02 -2.12468931e-11]
+ [ 5.34711164e-10 -2.12468931e-11  2.74675871e+00]]
+max |diff| = 1.5413626930360635e-05
 </code></pre></div>
 
 
@@ -1545,7 +1545,7 @@ max |diff| = 1.5059176729614876e-05
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "toc.integrate", "header.autohide", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
         <script src="../../_static/mathjax.js"></script>
       

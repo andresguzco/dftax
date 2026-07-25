@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -1571,8 +1571,16 @@ combinations raise at the factory.</p>
 <p>Resolution-of-identity reduces the 4-center integral to 2- and 3-center pieces against an
 auxiliary basis (functions up to i, so transition metals work): O(N³) compute,
 O(N²·N_aux) memory for the materialized 3-center tensor, and the <code>chunk="auto"</code> policy
-switches to the streamed contraction when that tensor would exceed the memory budget.
+switches to the streamed contraction when that tensor would exceed a device-aware
+memory budget (a fraction of the GPU pool; a fixed fallback on CPU).
 The RI error against the exact path is sub-mHa with the JK-fitting set.</p>
+<p>On the materialized path the auxiliary basis is built in spherical harmonics
+(fewer functions, a tighter fit, and better cross-backend force
+reproducibility); the streamed and mesh-sharded backends keep the cartesian
+span. <code>df(spherical=False)</code> pins a common fit space when comparing across
+backends, and <code>df(screen=...)</code> without a <code>chunk</code> runs a shell-pair Schwarz
+compact gather on the materialized build (screened pairs stay exactly zero),
+so extended systems build O(N) rather than O(N²) shell pairs.</p>
 <h2 id="exact-4-center-eris">Exact 4-center ERIs<a class="headerlink" href="#exact-4-center-eris" title="Permanent link">¤</a></h2>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">exact</span>
 
@@ -1606,6 +1614,14 @@ many points, O(chunk·nao) memory. Hybrids stream RI-K the same way.</p>
 on the fly (<code>exchange_k_4c</code>); under density fitting it uses streamed RI-K. The L ≥ 2 exact
 path is compile- and memory-bounded by scanning the bra primitive pair in the ERI kernel
 (so cc-pVDZ compiles in seconds rather than OOMing).</p>
+<p>Range-separated hybrids (<code>CAMB3LYP</code>, <code>WB97X</code>, <code>WB97XV</code>) split the exchange into
+short- and long-range parts via <code>erf(ω·r₁₂)/r₁₂</code> integrals and run on every DF
+backend: the materialized path holds the attenuated tensors, the streamed path
+recomputes attenuated 3-center elements on the fly (only the small attenuated
+metric is stored), and the mesh-sharded path runs the long-range exchange as
+slab-wise all-to-all rounds. <code>exact(stream=True)</code> is the one backend without an
+attenuated variant. <code>WB97XV</code> additionally carries VV10 nonlocal correlation,
+which needs the materialized XC grid (no <code>becke(chunk=...)</code> or <code>mesh=</code>).</p>
 <h2 id="choosing-a-backend">Choosing a backend<a class="headerlink" href="#choosing-a-backend" title="Permanent link">¤</a></h2>
 <table>
 <thead>
@@ -1696,7 +1712,7 @@ build time. A one-device mesh is a no-op.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "toc.integrate", "header.autohide", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
         <script src="../../_static/mathjax.js"></script>
       

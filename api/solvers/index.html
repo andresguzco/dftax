@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -1639,10 +1639,15 @@
 
 
 <h1 id="solvers-and-results">Solvers and results<a class="headerlink" href="#solvers-and-results" title="Permanent link">¤</a></h1>
-<p>Two verbs over one built functional, one result type. <code>implicit_density</code>
-exposes the converged density as a differentiable function of the functional
-(CPHF via <code>custom_vjp</code>).</p>
-<p>Both solvers (and <code>scf_batched</code>) take a <code>guess=</code>: an initial-density spec
+<p>Four verbs over one built functional, one result type: <code>scf</code> (DIIS, with
+optional <code>accel=adiis()</code> far-from-convergence extrapolation and
+<code>smearing=fermi()</code> fractional occupations reporting the Mermin free energy),
+<code>newton</code> (trust-region second order on orbital rotations, saddle-robust
+Steihaug-Toint steps), <code>roks</code> (its shared-orbital restricted open-shell
+variant), and <code>minimize</code> (direct orbital optimization with any optax
+optimizer). <code>implicit_density</code> exposes the converged density as a
+differentiable function of the functional (CPHF via <code>custom_vjp</code>).</p>
+<p>All solvers (and <code>scf_batched</code>) take a <code>guess=</code>: an initial-density spec
 from <code>core</code> / <code>sad</code> / <code>minao</code> / <code>sap</code>, or an explicit <code>(nspin, nao, nao)</code>
 density array for warm restarts. The guess changes the iteration count, never
 the converged fixed point.</p>
@@ -1975,9 +1980,13 @@ stretched bonds, clusters) converge where integer aufbau occupations
 flip-flop between quasi-degenerate configurations, and the occupations
 become a smooth function of the orbital energies, which keeps the energy
 differentiable through level crossings.</p>
-<p>The reported <code>e_tot</code> is the Kohn-Sham energy at the smeared density
-(the Mermin entropy term is not added); take <code>sigma</code> to zero to
-recover the integer-occupation ground state.</p>
+<p>The reported <code>e_tot</code> is the Mermin free energy <code>A = E - sigma·S</code> (the
+Kohn-Sham energy at the smeared density minus the electronic-entropy term),
+which is the quantity the finite-temperature SCF makes stationary and whose
+gradient is the force. The entropy term is returned as <code>KSResult.ts</code> so
+the KS energy (<code>e_tot + ts</code>) and the <code>sigma -&gt; 0</code> estimate
+(<code>e_tot + 0.5·ts</code>) are recoverable; taking <code>sigma</code> to zero sends the
+free energy to the integer-occupation ground-state energy.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2866,6 +2875,28 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 
 </div>
 
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.ks.scf.KSResult.ts" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="n">ts</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+  </span>
+
+<a href="#dftax.ks.scf.KSResult.ts" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Convert a string or number to a floating-point number, if possible.</p>
+
+    </div>
+
+</div>
+
 
 
 
@@ -2889,7 +2920,7 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 
 
 <h5 id="dftax.ks.scf.KSResult.__init__" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="fm">__init__</span><span class="p">(</span><span class="n">e_tot</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">e_elec</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">converged</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">n_iter</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">nocc</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="n">mo_energy</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nspin nmo&#39;</span><span class="p">],</span> <span class="n">mo_coeff</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nspin nao nmo&#39;</span><span class="p">],</span> <span class="n">P</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nspin nao nao&#39;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="fm">__init__</span><span class="p">(</span><span class="n">e_tot</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">e_elec</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">converged</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">n_iter</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">nocc</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="n">mo_energy</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nspin nmo&#39;</span><span class="p">],</span> <span class="n">mo_coeff</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nspin nao nmo&#39;</span><span class="p">],</span> <span class="n">P</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nspin nao nao&#39;</span><span class="p">],</span> <span class="n">ts</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span></code>
 
 <a href="#dftax.ks.scf.KSResult.__init__" class="headerlink" title="Permanent link">¤</a></h5>
 
@@ -3167,7 +3198,7 @@ not depend on a converged atomic density.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "toc.integrate", "header.autohide", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
         <script src="../../_static/mathjax.js"></script>
       

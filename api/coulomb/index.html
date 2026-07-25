@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -1514,8 +1514,11 @@
 <h1 id="coulomb-backends">Coulomb backends<a class="headerlink" href="#coulomb-backends" title="Permanent link">¤</a></h1>
 <p>Two-electron strategies as values. Each knob lives on the backend it
 configures; inert combinations raise at the factory. Density fitting is the
-default (<code>df()</code> = <code>def2-universal-jkfit</code> with the <code>chunk="auto"</code> memory
-policy, auxiliary functions up to i); <code>exact()</code> is the O(N⁴) reference path.
+default (<code>df()</code> = <code>def2-universal-jkfit</code> with the <code>chunk="auto"</code>,
+device-aware memory policy, auxiliary functions up to i, and a spherical
+auxiliary span on the materialized path; see <code>df(spherical=...)</code>);
+<code>exact()</code> is the O(N⁴) reference path. Range-separated hybrids run on every
+DF backend, materialized, streamed, or mesh-sharded.
 The <a href="../../tutorials/coulomb-backends/">Coulomb backends tutorial</a> has the
 backend-choice table.</p>
 
@@ -1591,7 +1594,7 @@ tensor (O(N²) memory, slower; incompatible with <code>screen</code>).</p>
 
 
 <h4 id="dftax.ks.terms.df" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">terms</span><span class="o">.</span><span class="n">df</span><span class="p">(</span><span class="n">auxbasis</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">BasisData</span> <span class="o">=</span> <span class="s1">&#39;def2-universal-jkfit&#39;</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">&#39;auto&#39;</span><span class="p">,</span> <span class="n">screen</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DFSpec</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">terms</span><span class="o">.</span><span class="n">df</span><span class="p">(</span><span class="n">auxbasis</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">BasisData</span> <span class="o">=</span> <span class="s1">&#39;def2-universal-jkfit&#39;</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">&#39;auto&#39;</span><span class="p">,</span> <span class="n">screen</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">spherical</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DFSpec</span></code>
 
 <a href="#dftax.ks.terms.df" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -1662,8 +1665,36 @@ exactly that chunk.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Schwarz threshold restricting the streamed RI-J bra sum to
-significant pairs; requires an explicit int <code>chunk</code>.</p>
+                <p>relative Cauchy-Schwarz threshold dropping negligible bra
+pairs (survivors are O(N) for extended systems). On the
+materialized path it is a shell-pair compact gather that omits
+the screened shell-pairs from the 3-center build (they stay
+exactly zero); with an int <code>chunk</code> it restricts the streamed
+RI-J bra sum to the significant AO pairs. <code>None</code> (default)
+keeps every pair, a bit-identical build.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>spherical</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>auxiliary basis span. <code>None</code> (default) uses spherical
+harmonics on the materialized path (non-redundant fit, positive
+definite metric) and cartesian components on the streamed and
+mesh-sharded paths (which contract cartesian auxiliary elements
+on the fly). <code>False</code> forces cartesian everywhere, e.g. to
+compare a materialized result against a streamed one in the same
+fit space; <code>True</code> asserts the spherical span and raises where
+it is unsupported.</p>
               </div>
             </td>
             <td>
@@ -1737,7 +1768,7 @@ significant pairs; requires an explicit int <code>chunk</code>.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "toc.integrate", "header.autohide", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
         <script src="../../_static/mathjax.js"></script>
       

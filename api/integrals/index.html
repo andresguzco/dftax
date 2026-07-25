@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -1609,7 +1609,7 @@ never call these directly.</p>
 
 
 <h4 id="dftax.integrals.overlap_matrix" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">overlap_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao nao&#39;</span><span class="p">]</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">overlap_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">plan</span><span class="p">:</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao nao&#39;</span><span class="p">]</span></code>
 
 <a href="#dftax.integrals.overlap_matrix" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -1617,7 +1617,10 @@ never call these directly.</p>
     <div class="doc doc-contents first">
 
         <p>Compute the overlap matrix S_μν in the AO basis.</p>
-<p>Pure JAX, fully differentiable w.r.t. basis.centers.</p>
+<p>Pure JAX, fully differentiable w.r.t. basis.centers. Delegates to the
+shell-class-bucketed engine (see :mod:<code>dftax.integrals.eri3c_bucketed</code>);
+<code>plan</code> is a static :func:<code>~dftax.integrals.eri3c_bucketed.plan_pairs</code>
+skeleton, derived here when the basis metadata is concrete.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -1682,7 +1685,7 @@ never call these directly.</p>
 
 
 <h4 id="dftax.integrals.kinetic_matrix" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">kinetic_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao nao&#39;</span><span class="p">]</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">kinetic_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">plan</span><span class="p">:</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao nao&#39;</span><span class="p">]</span></code>
 
 <a href="#dftax.integrals.kinetic_matrix" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -1690,7 +1693,8 @@ never call these directly.</p>
     <div class="doc doc-contents first">
 
         <p>Compute the kinetic energy matrix T_μν in the AO basis.</p>
-<p>Pure JAX, fully differentiable w.r.t. basis.centers.</p>
+<p>Pure JAX, fully differentiable w.r.t. basis.centers. Delegates to the
+shell-class-bucketed engine (see :mod:<code>dftax.integrals.eri3c_bucketed</code>).</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2165,7 +2169,7 @@ errors defaults to 'strict'.</p>
 
 
 <h4 id="dftax.integrals.eri2c_matrix" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">eri2c_matrix</span><span class="p">(</span><span class="n">aux_basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">omega</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;n_aux n_aux&#39;</span><span class="p">]</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">eri2c_matrix</span><span class="p">(</span><span class="n">aux_basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">omega</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">plan</span><span class="p">:</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;n_aux n_aux&#39;</span><span class="p">]</span></code>
 
 <a href="#dftax.integrals.eri2c_matrix" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -2173,7 +2177,8 @@ errors defaults to 'strict'.</p>
     <div class="doc doc-contents first">
 
         <p>Compute 2-center Coulomb matrix J_{PQ} = (P|Q).</p>
-<p>Pure JAX, fully differentiable w.r.t. aux_basis.centers.</p>
+<p>Pure JAX, fully differentiable w.r.t. aux_basis.centers. Delegates to the
+shell-class-bucketed engine (see :mod:<code>dftax.integrals.eri3c_bucketed</code>).</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2201,6 +2206,40 @@ errors defaults to 'strict'.</p>
             </td>
             <td>
                 <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>omega</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>None for the Coulomb kernel, a float for the long-range one.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>plan</code>
+            </td>
+            <td>
+                  <code><span title="tuple">tuple</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>static pair skeleton from
+:func:<code>~dftax.integrals.eri3c_bucketed.plan_pairs</code>; required when
+traced with a fully-traced <code>BasisData</code>, derived here otherwise.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
       </tbody>
@@ -3084,7 +3123,7 @@ JAX autodiff and compatible with jit and vmap.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "toc.integrate", "header.autohide", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
         <script src="../../_static/mathjax.js"></script>
       

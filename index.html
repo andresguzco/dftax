@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
@@ -1546,14 +1546,25 @@ or Maple. PySCF appears only as a test-time reference oracle.</p>
 <h2 id="highlights">Highlights<a class="headerlink" href="#highlights" title="Permanent link">¤</a></h2>
 <ul>
 <li>Closed- and open-shell (spin-polarized) DFT through one spin-stacked <code>KS</code>
-  functional; LDA, PBE, PBE0, B3LYP.</li>
-<li>Two solvers: on-device DIIS SCF (optional level shifting) and differentiable
-  direct minimization with any <a href="https://optax.readthedocs.io/">optax</a> optimizer.</li>
-<li>Coulomb/exchange backends: exact 4-center ERIs, RI density fitting
-  (RI-J / RI-K), and streamed, Schwarz-screened paths for larger systems.</li>
-<li>Analytic forces (Pulay terms included), implicit-diff SCF response (CPHF),
-  dipole, polarizability, Hessian, frequencies, IR/Raman, and alchemical
-  derivatives.</li>
+  functional; LDA, PBE, PBE0, B3LYP, CAM-B3LYP, ωB97X, ωB97X-V (with VV10
+  nonlocal correlation), and r2SCAN, with orbital bases up to 5Z/6Z
+  (h and i shells).</li>
+<li>Solvers for every regime: on-device DIIS SCF (optional level shifting and
+  ADIIS acceleration), trust-region Newton (<code>newton</code>, saddle-robust
+  Steihaug-Toint steps) and restricted open-shell <code>roks</code>, Fermi smearing
+  with the Mermin free energy for metallic and degenerate systems, and
+  differentiable direct minimization with any
+  <a href="https://optax.readthedocs.io/">optax</a> optimizer.</li>
+<li>Coulomb/exchange backends: RI density fitting by default (spherical
+  auxiliary basis, device-aware memory policy), exact 4-center ERIs, and
+  streamed, Schwarz-screened paths for larger systems; range-separated
+  exchange runs on all DF backends.</li>
+<li>Dispersion as a value: <code>d3bj()</code> (with an optional ATM three-body term)
+  and the charge-dependent <code>d4()</code> (differentiable EEQ charges), matched to
+  their reference implementations at machine precision.</li>
+<li>Analytic forces (Pulay terms included, and Mermin forces under smearing),
+  implicit-diff SCF response (CPHF), dipole, polarizability, Hessian,
+  frequencies, IR/Raman, and alchemical derivatives.</li>
 <li>Batched energies and forces over many geometries via <code>vmap</code>.</li>
 <li>Multi-GPU: one <code>mesh()</code> value shards the quadrature and the DF tensors
   across a device mesh, still fully differentiable.</li>
@@ -1571,8 +1582,8 @@ pip<span class="w"> </span>install<span class="w"> </span>dftax<span class="o">[
 <span class="kn">from</span><span class="w"> </span><span class="nn">dftax.energy.xc</span><span class="w"> </span><span class="kn">import</span> <span class="n">PBE</span>
 
 <span class="n">water</span> <span class="o">=</span> <span class="n">Molecule</span><span class="o">.</span><span class="n">from_xyz</span><span class="p">(</span><span class="s2">&quot;O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043&quot;</span><span class="p">,</span> <span class="s2">&quot;sto-3g&quot;</span><span class="p">)</span>
-<span class="n">ks</span>  <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">water</span><span class="p">,</span> <span class="n">PBE</span><span class="p">())</span>                      <span class="c1"># exact ERI + default becke() grid (75, 302)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">)</span><span class="o">.</span><span class="n">e_tot</span><span class="p">)</span>                        <span class="c1"># -75.146751...</span>
+<span class="n">ks</span>  <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">water</span><span class="p">,</span> <span class="n">PBE</span><span class="p">())</span>                      <span class="c1"># density fitting + default becke() grid (75, 302)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">)</span><span class="o">.</span><span class="n">e_tot</span><span class="p">)</span>                        <span class="c1"># -75.146...</span>
 </code></pre></div>
 <p><code>KS(system, xc, *, grid=None, coulomb=None, spin=None)</code> assembles the energy
 functional (every choice is a value passed to the builder) and <code>scf</code> /
@@ -1648,7 +1659,7 @@ The examples are also plain scripts in
       <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.sections", "toc.integrate", "header.autohide", "content.code.copy"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
       
         <script src="_static/mathjax.js"></script>
       

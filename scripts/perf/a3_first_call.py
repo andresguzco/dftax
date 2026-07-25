@@ -17,7 +17,6 @@ import jax
 
 jax.config.update("jax_enable_x64", True)
 
-import numpy as np
 from pyscf import gto
 
 from dftax.basis.loader import build_basis_data

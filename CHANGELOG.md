@@ -4,7 +4,7 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] - 2026-07-25
 
 ### Changed
 - **Smearing reports the Mermin free energy.** Under `fermi()` the reported

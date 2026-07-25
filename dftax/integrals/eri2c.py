@@ -123,17 +123,34 @@ def _contracted_eri2c(alpha_a, coeff_a, center_a, ang_a,
 def eri2c_matrix(
     aux_basis: BasisData,
     omega: float | None = None,
+    plan: tuple | None = None,
 ) -> Float[Array, "n_aux n_aux"]:
     """Compute 2-center Coulomb matrix J_{PQ} = (P|Q).
 
-    Pure JAX, fully differentiable w.r.t. aux_basis.centers.
+    Pure JAX, fully differentiable w.r.t. aux_basis.centers. Delegates to the
+    shell-class-bucketed engine (see :mod:`dftax.integrals.eri3c_bucketed`).
 
     Args:
         aux_basis: BasisData for auxiliary basis (from extract_basis_data(auxmol)).
+        omega: None for the Coulomb kernel, a float for the long-range one.
+        plan: static pair skeleton from
+            :func:`~dftax.integrals.eri3c_bucketed.plan_pairs`; required when
+            traced with a fully-traced ``BasisData``, derived here otherwise.
 
     Returns:
         J matrix, shape (n_aux, n_aux) in spherical harmonics.
     """
+    from dftax.integrals.eri3c_bucketed import eri2c_matrix_bucketed
+
+    return eri2c_matrix_bucketed(aux_basis, omega=omega, plan=plan)
+
+
+def _eri2c_matrix_flat(
+    aux_basis: BasisData,
+    omega: float | None = None,
+) -> Float[Array, "n_aux n_aux"]:
+    """The original per-element build; kept as the reference implementation
+    for A/B validation of the bucketed engine."""
     ml, mt, mm = _eri2c_sizes(aux_basis)      # size the recursion to the basis
 
     def _element(i, j):

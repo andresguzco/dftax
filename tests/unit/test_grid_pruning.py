@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from dftax import KS, Molecule, becke, scf
+from dftax import KS, Molecule, becke, exact, scf
 from dftax.energy.xc import PBE
 from dftax.grid import becke_grid, becke_grid_size, lebedev_grid
 from dftax.grid.becke import becke_partition, becke_radial, bragg_radius
@@ -113,8 +113,11 @@ def test_pruned_energy_vs_pyscf_reference(water_mol, water_ks):
 
 def test_weight_cutoff_compresses_eager_path():
     mol = Molecule.from_xyz(WATER, "sto-3g")
-    ks_cut = KS(mol, PBE())                                      # cutoff=1e-15
-    ks_all = KS(mol, PBE(), grid=becke(cutoff=None))
+    # exact(): this compares two separately converged SCF runs, and the test
+    # targets the weight cutoff; on the DF backend the stopping-tolerance
+    # flap through the RI metric (~5e-9) would drown the 1e-9 bound.
+    ks_cut = KS(mol, PBE(), coulomb=exact())                     # cutoff=1e-15
+    ks_all = KS(mol, PBE(), grid=becke(cutoff=None), coulomb=exact())
     assert ks_cut.xc_term.ao.shape[0] < ks_all.xc_term.ao.shape[0]
     assert abs(scf(ks_cut).e_tot - scf(ks_all).e_tot) < 1e-9
 

@@ -1,10 +1,15 @@
 # Solvers and results
 
-Two verbs over one built functional, one result type. `implicit_density`
-exposes the converged density as a differentiable function of the functional
-(CPHF via `custom_vjp`).
+Four verbs over one built functional, one result type: `scf` (DIIS, with
+optional `accel=adiis()` far-from-convergence extrapolation and
+`smearing=fermi()` fractional occupations reporting the Mermin free energy),
+`newton` (trust-region second order on orbital rotations, saddle-robust
+Steihaug-Toint steps), `roks` (its shared-orbital restricted open-shell
+variant), and `minimize` (direct orbital optimization with any optax
+optimizer). `implicit_density` exposes the converged density as a
+differentiable function of the functional (CPHF via `custom_vjp`).
 
-Both solvers (and `scf_batched`) take a `guess=`: an initial-density spec
+All solvers (and `scf_batched`) take a `guess=`: an initial-density spec
 from `core` / `sad` / `minao` / `sap`, or an explicit `(nspin, nao, nao)`
 density array for warm restarts. The guess changes the iteration count, never
 the converged fixed point.

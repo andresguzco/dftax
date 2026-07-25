@@ -11,7 +11,7 @@ import pytest
 
 from dftax import KS, Molecule, becke, df, mesh, minimize, scf, scf_batched
 from dftax.ks.terms import GridXC, ShardedDFCoulomb, ShardedGridXC, StreamedGridXC
-from dftax.energy.xc import LDA, PBE, PBE0
+from dftax.energy.xc import CAMB3LYP, LDA, PBE, PBE0
 
 jax.config.update("jax_enable_x64", True)
 
@@ -41,7 +41,10 @@ def test_sharded_xc_matches_unsharded():
     """Sharded e_xc == single-device e_xc at a fixed density, for both the
     materialized and the streamed inner term, closed and open shell."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
-    ks0 = KS(mol, PBE(), grid=GRID)
+    # spherical=False: the sharded DF slabs keep the cartesian aux basis, so
+    # the unsharded reference must sit in the same fit space for the tight
+    # total-energy comparison below.
+    ks0 = KS(mol, PBE(), grid=GRID, coulomb=df(spherical=False))
     P = scf(ks0).P
     ks_m = KS(mol, PBE(), grid=GRID, mesh=mesh())
     assert isinstance(ks_m.xc_term, ShardedGridXC)
@@ -74,7 +77,8 @@ def test_sharded_df_matches_unsharded():
     tensor, and the Coulomb energy / full SCF match the single-device DF."""
     AUX = "def2-universal-jkfit"
     mol = Molecule.from_xyz(WATER, "sto-3g")
-    ks0 = KS(mol, PBE(), grid=GRID, coulomb=df(AUX))
+    # spherical=False: sharded slabs are cartesian; same fit space both sides.
+    ks0 = KS(mol, PBE(), grid=GRID, coulomb=df(AUX, spherical=False))
     P = scf(ks0).P
     ksm = KS(mol, PBE(), grid=GRID, coulomb=df(AUX), mesh=mesh())
     assert isinstance(ksm.coulomb, ShardedDFCoulomb)
@@ -115,9 +119,34 @@ def test_sharded_df_hybrid_matches_unsharded():
     hybrid J+K energy and the full PBE0 SCF match the single-device DF."""
     AUX = "def2-universal-jkfit"
     mol = Molecule.from_xyz(WATER, "sto-3g")
-    ks0 = KS(mol, PBE0(), grid=GRID, coulomb=df(AUX))
+    # spherical=False: sharded slabs are cartesian; same fit space both sides.
+    ks0 = KS(mol, PBE0(), grid=GRID, coulomb=df(AUX, spherical=False))
     P = scf(ks0).P
     ksm = KS(mol, PBE0(), grid=GRID, coulomb=df(AUX), mesh=mesh())
+    e0 = float(ks0.coulomb.energy(P, ks0.S, ks0.nocc))
+    em = float(ksm.coulomb.energy(P, ksm.S, ksm.nocc))
+    assert em == pytest.approx(e0, rel=1e-10)
+
+    r0 = scf(ks0, e_tol=1e-10, d_tol=1e-8)
+    r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8)
+    assert r0.converged and r1.converged
+    assert r1.e_tot == pytest.approx(r0.e_tot, abs=1e-9)
+
+
+@multi
+@pytest.mark.float64
+def test_sharded_rsh_matches_unsharded():
+    """Sharded range-separated exchange: the long-range RI-K runs the same
+    slab-wise all-to-all rounds on the attenuated tensor against the
+    attenuated metric. Fixed-density J+K+K_lr and the full CAM-B3LYP SCF
+    match the single-device materialized DF."""
+    AUX = "def2-universal-jkfit"
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    # spherical=False: sharded slabs are cartesian; same fit space both sides.
+    ks0 = KS(mol, CAMB3LYP(), grid=GRID, coulomb=df(AUX, spherical=False))
+    P = scf(ks0).P
+    ksm = KS(mol, CAMB3LYP(), grid=GRID, coulomb=df(AUX), mesh=mesh())
+    assert ksm.coulomb.int3c_lr is not None
     e0 = float(ks0.coulomb.energy(P, ks0.S, ks0.nocc))
     em = float(ksm.coulomb.energy(P, ksm.S, ksm.nocc))
     assert em == pytest.approx(e0, rel=1e-10)
@@ -135,7 +164,10 @@ def test_sharded_scf_and_minimize_match():
     psum-reduced shard_map) and the DIIS loop must reproduce the single-device
     solve; minimize proves the end-to-end-differentiable path."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
-    r0 = scf(KS(mol, PBE(), grid=GRID), e_tol=1e-10, d_tol=1e-8)
+    # spherical=False on the unsharded runs: the mesh side shards cartesian
+    # aux slabs, and these are same-fit-space solver parity checks.
+    r0 = scf(KS(mol, PBE(), grid=GRID, coulomb=df(spherical=False)),
+             e_tol=1e-10, d_tol=1e-8)
     r1 = scf(KS(mol, PBE(), grid=GRID, mesh=mesh()), e_tol=1e-10, d_tol=1e-8)
     assert r0.converged and r1.converged
     # 5e-9 (SCF-level bound, same as the batch-axis test): the unsharded
@@ -144,7 +176,8 @@ def test_sharded_scf_and_minimize_match():
     # the solve; measured flapping at ~1.1e-10 around the old 1e-10.
     assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)
 
-    m0 = minimize(KS(mol, LDA(), grid=GRID), max_steps=1500)
+    m0 = minimize(KS(mol, LDA(), grid=GRID, coulomb=df(spherical=False)),
+                  max_steps=1500)
     m1 = minimize(KS(mol, LDA(), grid=GRID, mesh=mesh()), max_steps=1500)
     assert m1.e_tot == pytest.approx(m0.e_tot, abs=1e-8)
 

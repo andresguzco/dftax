@@ -346,13 +346,21 @@ def safe_int_pow(x, n):
     This implements x^n via repeated multiplication and jnp.where, which
     only uses * (correct derivatives to all orders) and costs ~0.02ms extra.
 
-    Supports n in {0, 1, 2, 3, 4} (sufficient for g-orbital GTOs).
+    Supports n in {0, .., 6}, the engine's i-shell ceiling. This cap MUST
+    match the integral engines' orbital ceiling: an exponent beyond the
+    unroll silently returns x^6, which poisons only the grid AO values (the
+    integral recursions are separate), i.e. the XC term at a density with
+    weight on the affected shells -- an error every matrix-level oracle
+    misses (this is how the 5Z enablement initially produced a spurious
+    85 mHa SCF minimum from wrong h-orbital grid values).
     """
     result = jnp.ones_like(x)
     result = jnp.where(n >= 1, result * x, result)
     result = jnp.where(n >= 2, result * x, result)
     result = jnp.where(n >= 3, result * x, result)
     result = jnp.where(n >= 4, result * x, result)
+    result = jnp.where(n >= 5, result * x, result)
+    result = jnp.where(n >= 6, result * x, result)
     return result
 
 

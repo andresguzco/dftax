@@ -44,14 +44,24 @@ builder:
 - **system**: a `Molecule`, a PySCF `Mole` (setup only; nothing PySCF enters the
   compute path), or a raw `System(basis, coords, charges, nelec, spin)` for
   advanced differentiable rebuilds.
-- **xc**: `LDA()`, `PBE()`, or the hybrids `PBE0()` / `B3LYP()`. Functionals are
-  Equinox modules; hybrids simply carry an exact-exchange coefficient.
+- **xc**: `LDA()`, `PBE()`, the hybrids `PBE0()` / `B3LYP()`, the
+  range-separated `CAMB3LYP()` / `WB97X()` / `WB97XV()` (the last with VV10
+  nonlocal correlation), or the meta-GGA `R2SCAN()`. Functionals are Equinox
+  modules; hybrids simply carry exact-exchange coefficients (range-separated
+  ones add `omega`, and the engine builds the attenuated integrals on every
+  DF backend).
 - **grid**: `becke(n_radial, lebedev, chunk=...)` (default 75×302), an explicit
   `(coords, weights)` tuple, or `points(coords, weights, chunk=...)`. A `chunk`
   streams the XC integral (O(chunk·nao) memory).
-- **coulomb**: `exact(screen=..., stream=...)` (default) or
-  `df(auxbasis, chunk=..., screen=...)`. Each knob lives on the backend it
-  configures; combinations that would do nothing raise at the factory.
+- **coulomb**: `df(auxbasis, chunk=..., screen=..., spherical=...)` (the
+  default: density fitting with a spherical auxiliary basis and a
+  device-aware materialize-vs-stream policy) or `exact(screen=...,
+  stream=...)` for small systems and reference comparisons. Each knob lives
+  on the backend it configures; combinations that would do nothing raise at
+  the factory.
+- **dispersion**: `d3bj(method, atm=...)` or the charge-dependent
+  `d4(method, atm=...)`; parameters resolve from the functional when the
+  method is omitted.
 - **spin**: `None` infers from the system (spin 0 → one closed-shell channel);
   an explicit value (= 2S, *including* 0) forces spin-polarized α/β channels.
 - **mesh**: `mesh()` shards the calculation across a device mesh
@@ -68,7 +78,14 @@ res.e_tot, res.converged, res.n_iter
 
 `scf` is Pulay DIIS with an autodiff Fock; the whole self-consistency loop runs
 on device in one `lax.while_loop`. `level_shift` (Saunders-Hillier) damps
-oscillation on small-gap cases without changing the fixed point.
+oscillation on small-gap cases without changing the fixed point;
+`accel=adiis()` runs the far-from-convergence iterations with the ADIIS
+energy-model extrapolation; `smearing=fermi(sigma=...)` replaces the integer
+aufbau fill with Fermi-Dirac occupations and reports the Mermin free energy
+(`res.ts` carries the entropy term). For second-order convergence there are
+`newton(ks)` (trust-region Newton on orbital rotations, saddle-robust
+Steihaug-Toint steps) and its shared-orbital variant `roks(ks)` for
+restricted open-shell systems (see [Solvers](api/solvers.md)).
 
 The result is a `KSResult`: `e_tot`, `e_elec`, `converged`, `n_iter`, `nocc`,
 `mo_energy`, `mo_coeff`, `P`. Orbital and density fields are spin-stacked

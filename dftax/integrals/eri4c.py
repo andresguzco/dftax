@@ -279,7 +279,12 @@ def eri4c_matrix(
     quartets are evaluated and screened-out positions are exactly zero. When
     omitted, the full 8-fold-unique set is used.
     """
-    L = basis.max_l                              # size the recursion to the molecule
+    L = int(basis.max_l)                         # size the recursion to the molecule
+    if L > 6:
+        raise ValueError(
+            f"the integral engine supports orbital angular momentum up to i "
+            f"(l=6); got l={L}."
+        )
     ml, mt, mm = L + 1, 4 * L + 1, 4 * L + 1
     n = basis.centers.shape[0]
     if quartets is None:

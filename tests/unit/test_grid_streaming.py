@@ -11,7 +11,7 @@ import pytest
 from pyscf import dft
 
 from dftax.energy.xc import LDA, PBE
-from dftax import KS, points, scf
+from dftax import KS, exact, points, scf
 
 
 @pytest.mark.pyscf
@@ -25,9 +25,15 @@ def test_streamed_matches_materialized(xc_cls, pyscf_xc, water_mol):
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
 
-    e_mat = scf(KS(water_mol, xc_cls(), grid=(grid[0], grid[1]))).e_tot
+    # exact(): the test targets grid streaming, and the two separately
+    # converged runs must not ride on the DF stopping-tolerance flap
+    # through the RI metric (~5e-9, above the 1e-9 bound here).
+    e_mat = scf(
+        KS(water_mol, xc_cls(), grid=(grid[0], grid[1]), coulomb=exact())
+    ).e_tot
     res = scf(
-        KS(water_mol, xc_cls(), grid=points(grid[0], grid[1], chunk=2000))
+        KS(water_mol, xc_cls(), grid=points(grid[0], grid[1], chunk=2000),
+           coulomb=exact())
     )
     assert res.converged
     assert abs(res.e_tot - e_mat) < 1e-9, f"streamed {res.e_tot} vs mat {e_mat}"

@@ -13,7 +13,7 @@ import pytest
 from pyscf import dft, gto
 
 from dftax.energy.xc import LDA
-from dftax import KS, scf
+from dftax import KS, exact, scf
 
 
 @pytest.mark.pyscf
@@ -25,7 +25,9 @@ def test_rks_level_shift_invariant(water_mol):
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks = KS(water_mol, LDA(), grid=(grid[0], grid[1]))
+    # exact(): the invariance bound compares two separately converged runs
+    # at 1e-9, below the DF stopping-tolerance flap through the RI metric.
+    ks = KS(water_mol, LDA(), grid=(grid[0], grid[1]), coulomb=exact())
     r0 = scf(ks, level_shift=0.0)
     r1 = scf(ks, level_shift=0.5)
     assert r0.converged and r1.converged
@@ -45,7 +47,8 @@ def test_uks_level_shift_invariant():
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks = KS(mol, LDA(), grid=(grid[0], grid[1]), spin=mol.spin)
+    ks = KS(mol, LDA(), grid=(grid[0], grid[1]), spin=mol.spin,
+            coulomb=exact())
     r0 = scf(ks, level_shift=0.0)
     r1 = scf(ks, level_shift=0.5)
     assert r0.converged and r1.converged

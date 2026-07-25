@@ -4,6 +4,170 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-07-25
+
+### Changed
+- **Smearing reports the Mermin free energy.** Under `fermi()` the reported
+  `e_tot` was the Kohn-Sham energy at the smeared density, which is not
+  variational. It is now the Mermin free energy `A = E - sigma·S` (the KS
+  energy minus the electronic-entropy term), the quantity the
+  finite-temperature SCF makes stationary and whose gradient is the force;
+  `sigma -> 0` sends it to the aufbau ground-state energy. The entropy term
+  is exposed as `KSResult.ts` (>= 0), so the KS energy (`e_tot + ts`) and the
+  `sigma -> 0` estimate (`e_tot + 0.5·ts`) are recoverable. A Cr atom, whose
+  degenerate d-shell has no integer-occupation minimum, now converges under
+  smearing and reports a sensible free energy (e.g. sigma=0.02: A=-1033.041,
+  ts=0.099). `KSResult` gains a defaulted `ts` field (0 without smearing).
+- **Forces under smearing.** `forces()` on a smeared result freezes the full
+  fractional natural-orbital density (all natural orbitals with their
+  occupations), not the top-nocc integer projector that truncated the
+  fractional tail, so the reported force is the gradient of the Mermin free
+  energy. Because the force is evaluated at the reference geometry, the frozen
+  orbitals' symmetric orthonormalizer needs only its first-order form there
+  (`1.5 I - 0.5 ΦᵀS(R)Φ`), which is matmul-only and avoids the
+  degenerate-occupation eigendecomposition. Verified against finite difference
+  of the re-converged free energy (C2 with fractional occupations: analytic
+  vs FD agree to 5e-6). The integer-occupation force path is unchanged.
+- **Second-order SCF handles indefinite Hessians.** `newton()` and `roks()`
+  previously took the trust-region step from `jax.scipy.sparse.linalg.cg`,
+  which assumes a positive-definite Hessian; at an ill-conditioned or saddle
+  point the Hessian is indefinite, plain CG returns a poor direction, and the
+  decrease-only trust region stalls. The step is now Steihaug-Toint truncated
+  CG, which follows the first direction of negative curvature to the trust
+  boundary (and stops at the boundary when a CG step would cross it), so it is
+  always a genuine model decrease. Strongly stretched N2 (2.5 A), where the
+  old step stalled without converging, now reaches a critical point in ~20
+  Newton iterations; the easy and warm-start cases are unchanged (water 6, an
+  Fe cleanup 2) and still converge to the same minimum as DIIS. The change is
+  step robustness (anti-stall on indefinite Hessians), not global
+  optimization; genuinely degenerate ground states (a Cr atom) remain a
+  smearing case, not a saddle escape.
+
+### Changed (numerically visible)
+- **The default density-fitting path uses a spherical auxiliary basis.**
+  The materialized, unsharded DF backend (the default `coulomb=None`
+  resolution) and the force and batched paths now build the auxiliary set
+  in spherical harmonics: the redundant cartesian h/i contaminants drop
+  out (about 15 percent fewer auxiliary functions), the fit tightens
+  (water/6-31g RI error 3.6e-4 to 4.8e-5 Ha; Fe/sto-3g 1.7 to 1.1 mHa),
+  and the metric's near-null band shrinks to the redundancy intrinsic to
+  the JK-fitting set, cutting the cross-backend density-fitted force
+  scatter about 7x (GPU-vs-CPU 3.3e-6 to 4.9e-7 on water/def2-svp PBE).
+  DF energies shift within the RI error; the streamed (`df(chunk=...)`)
+  and mesh-sharded backends keep the cartesian auxiliary basis.
+  `df(spherical=False)` opts out, e.g. to compare a materialized result
+  against a streamed or sharded one in the same fit space;
+  `df(spherical=True)` asserts the spherical span and raises where it is
+  unsupported. The metric stays with the cutoff pseudo-inverse for both
+  spans: a Cholesky inverse of the (genuinely positive definite)
+  spherical metric was measured and rejected, since honestly retaining
+  the near-null directions stalls the second-order solvers on
+  coarse-grid and transition-metal cases (the study is recorded in the
+  `_metric_pinv` docstring). Exactly degenerate atomic ground states
+  (e.g. a Cr atom) that the cartesian fit's slight symmetry breaking
+  happened to converge may now need `fermi()` smearing, which is the
+  physically appropriate treatment.
+- **Cartesian-to-spherical blocks extend to l=6.** `build_basis_data`
+  with `spherical=True` now covers h and i shells (the def2-universal-jkfit
+  sets for the 3d row), with `scripts/gen_cart2sph.py` regenerating the
+  vendored table.
+
+### Added
+- **VV10 nonlocal correlation and wB97X-V.** The VV10 double-grid pair
+  quadrature runs on the XC grid, streamed over outer-point chunks so the
+  O(ng²) pair tensor is never materialized, and is differentiable in both
+  the density and the (traced) grid coordinates, so SCF potentials and
+  nuclear forces come from autodiff. The kernel matches PySCF's `_vv10nlc`
+  bit-for-bit on identical inputs. `WB97XV()` is the 10-parameter
+  Mardirossian-Head-Gordon range-separated hybrid with VV10 (b=6, C=0.01,
+  declared on the functional via `nlc_b`/`nlc_c`): the B97 series
+  coefficients were recovered from libxc by exact linear fit (residual
+  1e-9), and the full solve matches PySCF `wb97x-v` to 2e-13 on matched
+  grids with the exact Coulomb backend. VV10 functionals require the
+  materialized XC grid (the pair quadrature is nonlocal across grid chunks
+  and mesh shards); the streamed and sharded XC paths raise.
+- **DFT-D4 dispersion.** `dispersion=d4()` brings the charge-dependent D4
+  model: EEQ partial charges from a differentiable bordered linear solve
+  (plain `jnp.linalg.solve`, no custom rules), electronegativity-weighted
+  D4 coordination numbers, zeta charge scaling of the Gaussian reference
+  weights, and pairwise C6 from the vendored Casimir-Polder reference
+  table; Becke-Johnson two-body damping with D4 parameter sets (pbe, pbe0,
+  b3lyp, cam-b3lyp, r2scan) and an optional ATM term (`d4(atm=True)`)
+  damped on the BJ critical radii (a D4 convention: unlike D3, the D4
+  three-body term depends on the functional's damping parameters). The
+  total molecular charge feeds the EEQ solve, so ions disperse less than
+  neutrals out of the box. Fully differentiable; validated against
+  tad-dftd4 0.8.0 to machine precision at every level (EEQ charges 5e-14,
+  two-body 3e-18, with-ATM 3e-18) with references pinned for five
+  functionals; tables vendored via `scripts/gen_d4_data.py`.
+- **D3 Axilrod-Teller-Muto three-body dispersion.** `d3bj(atm=True)` adds
+  the repulsive triple-dipole term: `C9 = sqrt(C6_AB C6_AC C6_BC)` from the
+  same CN-interpolated C6 as the two-body term, the Heron-form angular
+  factor, and zero-damping on geometric means of the pairwise van-der-Waals
+  radii (`rs9 = 4/3`, `alpha = 14`). Off by default (the common two-body
+  D3(BJ) convention), independent of the BJ damping parameters, fully
+  differentiable (forces via autodiff). Matches tad-dftd3's
+  `dispersion_atm` to machine precision when its `rs9` is given as exact
+  float64 4/3 (tad's own signature default is a float32-rounded tensor; the
+  published D3 constant is exactly 4/3, and the pinned test references use
+  it). The vendored table gains the pairwise van-der-Waals radii.
+- **5Z and 6Z orbital bases.** The orbital-side angular-momentum ceiling
+  rises from g (l=4) to i (l=6), matching the auxiliary ceiling: cc-pV5Z /
+  aug-cc-pV5Z (h functions) and cc-pV6Z (i functions) now build and run.
+  The one-electron, 3-center and 4-center integrals at h/i match PySCF to
+  1e-10 (synthetic-shell oracles); use the density-fitting backend at these
+  sizes (the exact 4-center path is correct but its per-element cost at
+  l=6-total Hermite orders is impractical, exactly as in conventional
+  codes). Bases above i still fail eagerly with a clear error.
+- **Range-separated hybrids on the streamed and mesh-sharded DF backends.**
+  The 0.3.0 guards are gone: `df(chunk=...)` streams the long-range RI-K by
+  recomputing the erf-attenuated 3-center elements on the fly against the
+  attenuated metric (only the small `naux x naux` attenuated metric is
+  stored, so the streamed backend's memory profile is unchanged), and
+  `mesh=` runs the long-range exchange as the same slab-wise all-to-all
+  rounds on an attenuated slab tensor. CAM-B3LYP parity vs the materialized
+  attenuated tensors: streamed fixed-density 1.4e-10 / SCF 2.2e-10; sharded
+  (4 GPUs) fixed-density rel 9.4e-12 / SCF 4e-11. `exact(stream=True)`
+  still rejects RSH (a materialized alternative always exists at
+  exact()-viable sizes).
+- **Materialized Schwarz compact gather.** `df(screen=...)` now also applies
+  to the default materialized backend, not only the streamed RI-J path: the
+  3-center build omits the Cauchy-Schwarz-negligible bra shell-pairs (a
+  relative threshold on the shell-pair Schwarz factor), which stay exactly
+  zero in the tensor, so extended systems build O(N) rather than O(N^2)
+  shell-pairs. `screen=None` (the default) keeps every pair and is
+  bit-identical to before. On two water molecules 12 A apart, `screen=1e-10`
+  drops ~48 percent of the triples and shifts the SCF energy by ~1e-10 Ha.
+
+### Changed (performance)
+- **The density-fitting materialize-vs-stream budget is device-aware.** The
+  `df(chunk="auto")` policy sized the materialized-tensor threshold to a
+  fixed 2 GiB; it now sizes to a quarter of the default device's memory pool
+  (reported via `memory_stats`), falling back to the fixed value on CPU. On
+  an A100 that is ~17 GiB, so far larger systems take the faster materialized
+  path instead of streaming; the batched and force paths inherit the policy.
+- **Lower first-call trace/compile in the bucketed engine.** The bucketed
+  engine's first-call cost is dominated by Python tracing (per-process, so
+  the persistent compile cache cannot reduce it), and the dominant graph
+  was the Hermite Coulomb table, which unrolled its mt-level recursion into
+  an O(mt^4)-node graph per shell class and is shared by the 3-center,
+  2-center and nuclear builds. Rolling that ladder into a `lax.fori_loop`
+  (traced once instead of mt times) cuts the 3-center build's trace+compile
+  about 2.3x (ethanol/def2-svp and def2-tzvp), bit-identical to the unrolled
+  form with no change in execute time. Further first-call reduction is
+  bounded by the per-class kernel count and is folded into the engine
+  small-batch work.
+- **The 2-center Coulomb, overlap, and kinetic builds are bucketed by
+  shell class.** With the 0.4.0 eri3c and nuclear-attraction work this
+  puts every integral build in the KS path on the bucketed
+  McMurchie-Davidson engine; the flat implementations remain as A/B
+  references. eri2c on def2-universal-jkfit runs 19x faster warm (0.23 s
+  vs 4.37 s) and matches the flat build to machine precision through
+  l=6; overlap and kinetic come from one shared Obara-Saika pass per
+  primitive pair (one table per axis serves the overlap and all seven
+  kinetic terms) instead of seven molecule-padded table rebuilds per
+  element.
+
 ## [0.4.0] - 2026-07-17
 
 ### Added

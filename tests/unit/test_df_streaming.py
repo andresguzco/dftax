@@ -2,7 +2,10 @@
 
 The streamed path forms γ_P (and, for hybrids, the orbital-chunk RI-K exchange)
 without materializing the nao²×naux 3-center tensor; the DF energy must match the
-materialized DF path.
+materialized DF path. The materialized references pin ``spherical=False``: the
+streamed backend contracts cartesian auxiliary elements, and these tests verify
+the streaming mechanics, which needs both sides in the same fit space (the
+default materialized path upgrades to a spherical auxiliary basis).
 """
 
 import jax
@@ -46,7 +49,7 @@ def test_streamed_rij_matches_materialized(water_mol):
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
 
-    ks = KS(water_mol, LDA(), grid=(grid[0], grid[1]), coulomb=df(AUX))
+    ks = KS(water_mol, LDA(), grid=(grid[0], grid[1]), coulomb=df(AUX, spherical=False))
     P = scf(ks).P[0]
 
     aux = build_basis_data(
@@ -72,7 +75,7 @@ def test_df_chunk_hybrid_matches_materialized(water_mol):
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks_mat = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX))
+    ks_mat = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, spherical=False))
     P = scf(ks_mat).P[0]
     ks_str = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50))
     e_mat = float(_e2_rks(ks_mat, P))
@@ -93,7 +96,7 @@ def test_screened_df_chunk_matches_dense(water_mol):
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
     ks_dense = KS(water_mol, PBE(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50))
-    P = scf(KS(water_mol, PBE(), grid=(grid[0], grid[1]), coulomb=df(AUX))).P[0]
+    P = scf(KS(water_mol, PBE(), grid=(grid[0], grid[1]), coulomb=df(AUX, spherical=False))).P[0]
     ks_scr = KS(water_mol, PBE(), grid=(grid[0], grid[1]),
                 coulomb=df(AUX, chunk=50, screen=1e-10))
     e_dense = float(_e2_rks(ks_dense, P))
@@ -114,7 +117,7 @@ def test_streamed_rik_fock_matches_materialized(water_mol):
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks_mat = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX))
+    ks_mat = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, spherical=False))
     P = scf(ks_mat).P[0]
     ks_str = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50))
 
@@ -139,7 +142,7 @@ def test_streamed_uks_hybrid_empty_beta():
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks_mat = KS(mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX), spin=mol.spin)
+    ks_mat = KS(mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, spherical=False), spin=mol.spin)
     Pa, Pb = scf(ks_mat).P
     ks_str = KS(
         mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50), spin=mol.spin
@@ -162,7 +165,7 @@ def test_streamed_uks_rik_matches_materialized():
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    ks_mat = KS(mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX), spin=mol.spin)
+    ks_mat = KS(mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, spherical=False), spin=mol.spin)
     Pa, Pb = scf(ks_mat).P
     ks_str = KS(
         mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50), spin=mol.spin

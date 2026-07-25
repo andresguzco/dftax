@@ -130,7 +130,7 @@ def implicit_density(ks: KS):
         raise NotImplementedError("implicit_density supports closed shells only.")
     X = canonical_orthonormalizer(ks.S)
     P0 = density_from_guess(ks, None, X)
-    _, P, _, _, _, _ = _scf_solve(ks, X, P0, 128, 1e-10, 1e-8, 8, False, 0.0)
+    _, P, *_ = _scf_solve(ks, X, P0, 128, 1e-10, 1e-8, 8, False, 0.0)
     return P[0]
 
 

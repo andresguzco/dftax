@@ -204,10 +204,14 @@ def _contracted_integral(alpha_a, coeff_a, center_a, ang_a,
 # Full matrix builders
 # ---------------------------------------------------------------------------
 
-def overlap_matrix(basis: BasisData) -> Float[Array, "nao nao"]:
+def overlap_matrix(basis: BasisData,
+                   plan: tuple | None = None) -> Float[Array, "nao nao"]:
     """Compute the overlap matrix S_μν in the AO basis.
 
-    Pure JAX, fully differentiable w.r.t. basis.centers.
+    Pure JAX, fully differentiable w.r.t. basis.centers. Delegates to the
+    shell-class-bucketed engine (see :mod:`dftax.integrals.eri3c_bucketed`);
+    ``plan`` is a static :func:`~dftax.integrals.eri3c_bucketed.plan_pairs`
+    skeleton, derived here when the basis metadata is concrete.
 
     Args:
         basis: BasisData from extract_basis_data(mol).
@@ -215,6 +219,13 @@ def overlap_matrix(basis: BasisData) -> Float[Array, "nao nao"]:
     Returns:
         S matrix, shape (nao, nao) where nao = nao_cart (or nao_sph if cart2sph).
     """
+    from dftax.integrals.eri3c_bucketed import overlap_kinetic_bucketed
+
+    return overlap_kinetic_bucketed(basis, plan=plan)[0]
+
+
+def _overlap_matrix_flat(basis: BasisData) -> Float[Array, "nao nao"]:
+    """The original per-element build; kept for A/B validation."""
     def _element(i, j):
         return _contracted_integral(
             basis.exponents[i], basis.coefficients[i], basis.centers[i], basis.angular[i],
@@ -269,10 +280,12 @@ def cross_overlap_matrix(
     return S
 
 
-def kinetic_matrix(basis: BasisData) -> Float[Array, "nao nao"]:
+def kinetic_matrix(basis: BasisData,
+                   plan: tuple | None = None) -> Float[Array, "nao nao"]:
     """Compute the kinetic energy matrix T_μν in the AO basis.
 
-    Pure JAX, fully differentiable w.r.t. basis.centers.
+    Pure JAX, fully differentiable w.r.t. basis.centers. Delegates to the
+    shell-class-bucketed engine (see :mod:`dftax.integrals.eri3c_bucketed`).
 
     Args:
         basis: BasisData from extract_basis_data(mol).
@@ -280,6 +293,13 @@ def kinetic_matrix(basis: BasisData) -> Float[Array, "nao nao"]:
     Returns:
         T matrix, shape (nao, nao).
     """
+    from dftax.integrals.eri3c_bucketed import overlap_kinetic_bucketed
+
+    return overlap_kinetic_bucketed(basis, plan=plan)[1]
+
+
+def _kinetic_matrix_flat(basis: BasisData) -> Float[Array, "nao nao"]:
+    """The original per-element build; kept for A/B validation."""
     def _element(i, j):
         return _contracted_integral(
             basis.exponents[i], basis.coefficients[i], basis.centers[i], basis.angular[i],
@@ -308,9 +328,9 @@ def kinetic_matrix(basis: BasisData) -> Float[Array, "nao nao"]:
 # Single JIT compilation: all shell pairs are padded to uniform shape and
 # processed in one vmap call. Differentiable w.r.t. basis.centers.
 
-_MAX_L = 7   # overlap recursion table index. Kinetic reads S(a, b+2), so for g-type
-             # (l=4) it needs index l+2 = 6; a _MAX_L of 5 was out of bounds there.
-_MAX_COMP = 15  # max Cartesian components (g-type, l=4); caps the supported shell l
+_MAX_L = 9   # overlap recursion table index. Kinetic reads S(a, b+2), so for i-type
+             # (l=6, the engine ceiling) it needs index l+2 = 8.
+_MAX_COMP = 28  # max Cartesian components (i-type, l=6); caps the supported shell l
 
 
 # ---------------------------------------------------------------------------

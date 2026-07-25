@@ -111,8 +111,11 @@ def test_molecule_spherical_field():
 def test_spec_factories_reject_inert_combinations():
     with pytest.raises(ValueError):
         exact(screen=1e-10, stream=True)
+    # df(screen=...) without a chunk is now the materialized shell-pair
+    # compact gather (valid); the remaining inert df combination is a
+    # spherical span on the streamed backend.
     with pytest.raises(ValueError):
-        df(AUX, screen=1e-10)                              # screen needs chunk
+        df(AUX, chunk=50, spherical=True)
     with pytest.raises(TypeError):
         KS("not a system", LDA())
 
@@ -153,8 +156,12 @@ def test_df_auto_chunk_switches_to_streamed(monkeypatch):
 
     mol = Molecule.from_xyz(WATER, "sto-3g")
     grid = becke(35, 50)
-    e_mat = scf(KS(mol, LDA(), grid=grid)).e_tot
-    monkeypatch.setattr(energy_mod, "_DF_BUDGET", 16)
+    # spherical=False: the streamed side below is cartesian; the 1e-9
+    # energy comparison needs both runs in the same fit space.
+    e_mat = scf(KS(mol, LDA(), grid=grid, coulomb=df(spherical=False))).e_tot
+    # Force the streamed branch: patch the resolved budget (device-aware on a
+    # GPU) down to a tiny value so the water tensor exceeds it.
+    monkeypatch.setattr(energy_mod, "_df_materialize_budget", lambda: 16)
     ks_s = KS(mol, LDA(), grid=grid)
     assert isinstance(ks_s.coulomb, StreamedDFCoulomb)
     assert abs(scf(ks_s).e_tot - e_mat) < 1e-9

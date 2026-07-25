@@ -64,6 +64,9 @@ class KSResult:
     mo_energy: Float[Array, "nspin nmo"]
     mo_coeff: Float[Array, "nspin nao nmo"]
     P: Float[Array, "nspin nao nao"]
+    ts: float = 0.0     # Mermin entropy term sigma·S (>=0); 0 without smearing.
+    # Under smearing e_tot is the free energy A = E_ks - ts, so the KS energy
+    # is e_tot + ts and the sigma->0 estimate is e_tot + 0.5·ts.
 
 
 def canonical_orthonormalizer(
@@ -108,9 +111,13 @@ def fermi(*, sigma: float = 0.01) -> FermiSpec:
     become a smooth function of the orbital energies, which keeps the energy
     differentiable through level crossings.
 
-    The reported ``e_tot`` is the Kohn-Sham energy at the smeared density
-    (the Mermin entropy term is not added); take ``sigma`` to zero to
-    recover the integer-occupation ground state.
+    The reported ``e_tot`` is the Mermin free energy ``A = E - sigma·S`` (the
+    Kohn-Sham energy at the smeared density minus the electronic-entropy term),
+    which is the quantity the finite-temperature SCF makes stationary and whose
+    gradient is the force. The entropy term is returned as ``KSResult.ts`` so
+    the KS energy (``e_tot + ts``) and the ``sigma -> 0`` estimate
+    (``e_tot + 0.5·ts``) are recoverable; taking ``sigma`` to zero sends the
+    free energy to the integer-occupation ground-state energy.
 
     Args:
         sigma: smearing width in Hartree (0.01 Ha ~ 3160 K electronic
@@ -145,6 +152,24 @@ def _fermi_occupations(eps, nocc, w, sigma, bisect_iters=64):
         return w * jax.nn.sigmoid(-(eps_s - mu) / sigma)
 
     return jnp.stack([channel(eps[s], n) for s, n in enumerate(nocc)])
+
+
+def _fermi_entropy(eps, nocc, w, sigma):
+    """Mermin entropy term ``sigma·S >= 0`` from the smeared occupations.
+
+    ``S = -Σ_i w[p ln p + (1-p) ln(1-p)]`` with ``p = f/w`` the per-state
+    Fermi-Dirac occupation probability. Subtracting ``sigma·S`` from the KS
+    energy at the smeared density gives the Mermin free energy, the quantity
+    the finite-temperature SCF makes stationary (and whose gradient is the
+    force); ``sigma -> 0`` sends it to the ordinary aufbau energy.
+    """
+    fs = _fermi_occupations(eps, nocc, w, sigma)          # (nspin, nmo)
+    p = jnp.clip(fs / w, 1e-300, 1.0)
+    q = jnp.clip(1.0 - fs / w, 1e-300, 1.0)
+    # x ln x -> 0 as x -> 0, so the clipped logs on the empty/full tails
+    # contribute nothing; kept finite for the autodiff transpose.
+    s = -(p * jnp.log(p) + q * jnp.log(q))                # per state, >= 0
+    return sigma * w * jnp.sum(s)
 
 
 @dataclass(frozen=True)
@@ -355,7 +380,15 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
 
     final = lax.while_loop(cond, body, state0)
     it, P, C, eps, e_prev, _, converged = final[:7]
-    return e_prev, P, C, eps, converged, it
+    # Mermin free energy under smearing: subtract the electronic entropy term
+    # from the converged KS energy so the reported energy is the variational
+    # (force-consistent) quantity. ts = 0 without smearing.
+    if smear_sigma is not None:
+        ts = _fermi_entropy(eps, ks.nocc, 2.0 if nspin == 1 else 1.0,
+                            smear_sigma)
+    else:
+        ts = jnp.asarray(0.0, dtype=e_prev.dtype)
+    return e_prev - ts, P, C, eps, converged, it, ts
 
 
 def scf(
@@ -413,7 +446,7 @@ def scf(
     # verbose (Python branch) must stay static.
     if accel is not None:
         diis_space = accel.space
-    e_tot, P, C, eps, converged, n_iter = _scf_solve(
+    e_tot, P, C, eps, converged, n_iter, ts = _scf_solve(
         ks, X, P0, jnp.asarray(max_iter), jnp.asarray(e_tol), jnp.asarray(d_tol),
         diis_space, verbose, jnp.asarray(level_shift),
         accel.switch if accel is not None else None,
@@ -428,6 +461,7 @@ def scf(
         mo_energy=eps,
         mo_coeff=C,
         P=P,
+        ts=float(ts),
     )
     if not result.converged:
         warnings.warn(

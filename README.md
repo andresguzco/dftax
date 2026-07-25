@@ -50,18 +50,21 @@ import jax
 jax.config.update("jax_enable_x64", True)   # DFT energies want float64
 
 from dftax import KS, Molecule, scf
-from dftax.energy.xc import PBE              # also: LDA, PBE0, B3LYP
+from dftax.energy.xc import PBE   # also LDA, PBE0, B3LYP, CAM-B3LYP, wB97X(-V), r2SCAN
 
 mol = Molecule.from_xyz("O 0 0 0; H 0.757 0.587 0; H -0.757 0.587 0", "sto-3g")
 res = scf(KS(mol, PBE()))            # DIIS SCF -> KSResult
 print(res.e_tot, res.converged)     # total energy (Ha), convergence flag
 ```
 
-`KS(system, xc, *, grid=, coulomb=, spin=, mesh=)` assembles the energy
-functional; the verbs `scf` and `minimize` solve it, and `forces`, `dipole`,
-`polarizability`, and the rest read properties from it. Every choice is a value
-passed to the builder, not a global flag. A nonzero `spin` (given as 2S) runs
-the spin-polarized α/β path through the same call.
+`KS(system, xc, *, grid=, coulomb=, spin=, mesh=, dispersion=)` assembles the
+energy functional; the verbs `scf`, `newton`, `roks`, and `minimize` solve it,
+and `forces`, `dipole`, `polarizability`, and the rest read properties from it.
+Every choice is a value passed to the builder, not a global flag: a nonzero
+`spin` (given as 2S) runs the spin-polarized α/β path, `dispersion=d3bj()` or
+`d4()` adds a dispersion correction, `scf(ks, accel=adiis())` accelerates hard
+SCF cases, and `scf(ks, smearing=fermi())` gives fractional occupations and
+the Mermin free energy for metallic or degenerate systems.
 
 ## Scaling up
 
@@ -93,17 +96,24 @@ Against PySCF on water / sto-3g (see
 
 LDA and B3LYP reproduce libxc to machine precision. PBE and PBE0 sit near
 1e-5 Ha, a gap in the hand-rolled GGA enhancement factors rather than in the SCF
-or the integrals, and well within chemical accuracy. Analytic forces match
-finite differences to about 4e-8 Ha/Bohr, the CPHF polarizability matches
-finite-field to about 1e-4, and vibrational frequencies match PySCF to a few
-cm⁻¹.
+or the integrals, and well within chemical accuracy. The later rungs were
+ported against their references directly: r2SCAN matches libxc to ~1e-9,
+ωB97X-V (including its VV10 term) matches a full PySCF solve to ~2e-13 on
+matched grids, and the D3(BJ)/D4 dispersion models match tad-dftd3/tad-dftd4
+to machine precision. Analytic forces match finite differences to about
+4e-8 Ha/Bohr, the CPHF polarizability matches finite-field to about 1e-4, and
+vibrational frequencies match PySCF to a few cm⁻¹.
 
 ## Limitations
 
-- One-electron integrals run up to g (l=4), i.e. cc-pVTZ/QZ.
+- Orbital bases run up to i shells (l=6), i.e. through cc-pV5Z/6Z; use the
+  density-fitting backend at those sizes (the exact 4-center path is correct
+  but impractically slow there, as in conventional codes).
 - The materialized exact-ERI path hits a GPU memory ceiling near nao ≈ 70; use
-  density fitting, streaming, and screening at scale (exact-exchange compute
-  stays O(N⁴) regardless).
+  density fitting (the default, with a device-aware memory policy), streaming,
+  and screening at scale (exact-exchange compute stays O(N⁴) regardless).
+- VV10 (ωB97X-V) needs the materialized XC grid: the pair quadrature does not
+  stream or shard yet.
 - GPU correctness is validated interactively on an A100 rather than in CPU CI,
   and large-N GPU throughput is not yet benchmarked.
 
@@ -132,7 +142,7 @@ a good neighbor to it, not a replacement.
   author  = {Guzm{\'a}n-Cordero, Andr{\'e}s},
   title   = {dftax: a differentiable Kohn-Sham DFT engine in JAX},
   url     = {https://github.com/andresguzco/dftax},
-  version = {0.2.0},
+  version = {0.4.0},
   year    = {2026},
 }
 ```

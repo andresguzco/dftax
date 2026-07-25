@@ -224,3 +224,4 @@ third_party/
 !dftax/basis/data/cart2sph.npz
 !dftax/energy/data/
 !dftax/energy/data/d3bj.npz
+!dftax/energy/data/d4.npz

@@ -49,6 +49,10 @@ class XCFunctional(DensityFunctional):
     # hybrids and pure functionals.
     hf_coeff_lr: ClassVar[float] = 0.0
     omega: ClassVar[float] = 0.0
+    # Nonlocal (VV10) correlation parameters; 0 means none. A functional
+    # declaring nlc_b adds the VV10 double-grid term (see energy/vv10.py).
+    nlc_b: ClassVar[float] = 0.0
+    nlc_c: ClassVar[float] = 0.0
 
     def __call__(self, *args: ScalarFeature | VectorFeature) -> Scalar:
         return self.exchange(*args) + self.correlation(*args)
@@ -836,6 +840,29 @@ class WB97X(XCFunctional):
         )
         return e_dens / jnp.clip(density, 1e-20
         )
+
+
+class WB97XV(WB97X):
+    """ωB97X-V (Mardirossian-Head-Gordon 2014): 10-parameter RSH GGA + VV10.
+
+    The B97 series is deliberately short (3 exchange, 2 + 2 correlation
+    terms); nonlocal correlation is VV10 with ``b = 6.0``, ``C = 0.01``
+    (declared via ``nlc_b``/``nlc_c``; the KS builder adds the double-grid
+    term). Exact exchange ``0.167·K + 0.833·K_lr(ω = 0.3)``. Series
+    coefficients verified pointwise against libxc ``HYB_GGA_XC_WB97X_V``.
+    """
+
+    name: ClassVar[str] = "wB97X-V"
+    xc_type: ClassVar[str] = "GGA"
+    hf_coeff: ClassVar[float] = 0.167
+    hf_coeff_lr: ClassVar[float] = 0.833
+    omega: ClassVar[float] = 0.3
+    nlc_b: ClassVar[float] = 6.0
+    nlc_c: ClassVar[float] = 0.01
+
+    CX: ClassVar[tuple] = (0.833, 0.603, 1.194, 0.0, 0.0)
+    CSS: ClassVar[tuple] = (0.556, -0.257, 0.0, 0.0, 0.0)
+    CAB: ClassVar[tuple] = (1.219, -1.850, 0.0, 0.0, 0.0)
 
 
 # ---------------------------------------------------------------------------

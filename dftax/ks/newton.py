@@ -35,6 +35,64 @@ from dftax.ks.guess import GuessSpec, density_from_guess
 from dftax.ks.scf import KSResult, _fock_stacked, canonical_orthonormalizer
 
 
+def _tdot(a, b):
+    """Inner product of two matching pytrees (sum over leaves)."""
+    return sum(jnp.sum(x * y)
+               for x, y in zip(jax.tree.leaves(a), jax.tree.leaves(b)))
+
+
+def _steihaug_cg(hvp, g, radius, maxiter):
+    """Steihaug-Toint truncated CG for the trust-region Newton subproblem.
+
+    Approximately minimizes ``m(p) = <g,p> + 1/2 <p, H p>`` over ``||p|| <=
+    radius``. Plain CG assumes a positive-definite Hessian; at a saddle (or an
+    ill-conditioned point) ``H`` is indefinite and plain CG produces a poor or
+    uphill direction, which the decrease-only trust region then stalls on.
+    Truncated CG instead follows the first direction of negative curvature
+    (``<d, H d> <= 0``) to the trust boundary, and stops at the boundary when a
+    CG step would cross it -- so the step is always a genuine model decrease,
+    indefinite Hessian or not. Fixed ``maxiter`` inner iterations (jit-friendly:
+    the loop always runs to length, freezing once the boundary is reached).
+
+    ``hvp`` is the Hessian-vector product, ``g`` the gradient (a pytree). All
+    vectors are pytrees matching ``g``; returns the step ``p``.
+    """
+    def to_boundary(z, d):
+        # largest tau >= 0 with ||z + tau d|| = radius (positive quadratic root)
+        dd = _tdot(d, d)
+        zd = _tdot(z, d)
+        zz = _tdot(z, z)
+        disc = jnp.sqrt(jnp.maximum(zd * zd + dd * (radius * radius - zz), 0.0))
+        tau = (-zd + disc) / jnp.maximum(dd, 1e-30)
+        return jax.tree.map(lambda z_, d_: z_ + tau * d_, z, d)
+
+    def sel(cond, a, b):
+        return jax.tree.map(lambda x, y: jnp.where(cond, x, y), a, b)
+
+    z0 = jax.tree.map(jnp.zeros_like, g)
+    d0 = jax.tree.map(jnp.negative, g)                 # r0 = g (at z=0), d0 = -r0
+    rr0 = _tdot(g, g)
+    state = (z0, g, d0, rr0, jnp.array(False), z0)     # (z, r, d, rr, done, p)
+
+    def step(_, st):
+        z, r, d, rr, done, p = st
+        Hd = hvp(d)
+        dHd = _tdot(d, Hd)
+        alpha = rr / jnp.where(dHd == 0.0, 1.0, dHd)
+        z_next = jax.tree.map(lambda a, b: a + alpha * b, z, d)
+        hit = (dHd <= 0.0) | (_tdot(z_next, z_next) >= radius * radius)
+        p_step = sel(hit, to_boundary(z, d), z_next)   # boundary if truncating
+        r_next = jax.tree.map(lambda r_, h_: r_ + alpha * h_, r, Hd)
+        rr_next = _tdot(r_next, r_next)
+        beta = rr_next / jnp.where(rr == 0.0, 1.0, rr)
+        d_next = jax.tree.map(lambda rn_, d_: -rn_ + beta * d_, r_next, d)
+        advanced = (z_next, r_next, d_next, rr_next, done | hit, p_step)
+        return sel(done, st, advanced)                 # freeze once done
+
+    z, r, d, rr, done, p = lax.fori_loop(0, maxiter, step, state)
+    return p
+
+
 def _rotate(C, kappa, nocc):
     """Apply ``C exp(K)`` per channel; K holds the occ-virt block of kappa."""
     out = []
@@ -77,11 +135,9 @@ def _newton_solve(ks: KS, C0, max_iter, g_tol, e_tol, cg_iters, trust0,
             return jax.jvp(jax.grad(lambda k: energy_at(C, k)),
                            (kappa0,), (v,))[1]
 
-        delta, _ = jax.scipy.sparse.linalg.cg(hvp, jax.tree.map(jnp.negative, g),
-                                              maxiter=cg_iters)
-        dnorm = jnp.sqrt(sum(jnp.sum(x * x) for x in delta))
-        scale = jnp.minimum(1.0, radius / jnp.maximum(dnorm, 1e-30))
-        delta = jax.tree.map(lambda x: scale * x, delta)
+        # Steihaug-Toint truncated CG: trust-region-bounded and robust to the
+        # indefinite Hessian at a saddle (no separate radius scaling needed).
+        delta = _steihaug_cg(hvp, g, radius, cg_iters)
         C_new = _rotate(C, delta, nocc)
         e_new = energy_at(C_new, kappa0)
         return e0, gnorm, C_new, e_new
@@ -146,11 +202,10 @@ def _newton_solve_shared(ks: KS, C0, mask, max_iter, g_tol, e_tol, cg_iters,
             return jax.jvp(jax.grad(lambda k: energy_at(C, k)),
                            (kappa0,), (v * mask,))[1] * mask
 
-        delta, _ = jax.scipy.sparse.linalg.cg(hvp, -g, maxiter=cg_iters)
-        delta = delta * mask
-        dnorm = jnp.linalg.norm(delta)
-        scale = jnp.minimum(1.0, radius / jnp.maximum(dnorm, 1e-30))
-        C_new = rotate(C, scale * delta)
+        # Steihaug-Toint truncated CG (see _newton_solve): trust-bounded and
+        # saddle-robust; mask keeps the step in the density-changing subspace.
+        delta = _steihaug_cg(hvp, g, radius, cg_iters) * mask
+        C_new = rotate(C, delta)
         e_new = energy_at(C_new, kappa0)
         accept = e_new < e0
         C = jnp.where(accept, C_new, C)

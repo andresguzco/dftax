@@ -17,6 +17,7 @@ from dftax.integrals import eri2c_matrix
 from dftax.integrals.eri4c import eri4c_matrix
 
 WATER = "O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043"
+AUX = "def2-universal-jkfit"
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +153,29 @@ def test_rsh_df_matches_exact_within_ri_error():
     assert abs(e_df - e_ex) < 2e-3
 
 
-def test_rsh_rejects_streamed_backends():
+def test_rsh_rejects_streamed_exact():
+    # exact(stream=True) has no attenuated variant (a materialized alternative
+    # always exists at exact()-viable sizes); the streamed DF backend now
+    # supports RSH (see test_rsh_streamed_df_matches_materialized).
     mol = Molecule.from_xyz(WATER, "sto-3g")
     with pytest.raises(NotImplementedError, match="materialized"):
         KS(mol, CAMB3LYP(), coulomb=exact(stream=True))
-    with pytest.raises(NotImplementedError, match="materialized"):
-        KS(mol, CAMB3LYP(), coulomb=df(chunk=32))
+
+
+@pytest.mark.float64
+def test_rsh_streamed_df_matches_materialized():
+    """Streamed long-range RI-K (attenuated 3-center recomputed on the fly
+    against the attenuated metric) matches the materialized attenuated
+    tensors: fixed-density two-electron energy to 1e-8, full CAM-B3LYP SCF to
+    the stopping tolerance. Both sides share the cartesian fit space."""
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    ks_mat = KS(mol, CAMB3LYP(), coulomb=df(AUX, spherical=False))
+    res = scf(ks_mat)
+    assert res.converged
+    ks_str = KS(mol, CAMB3LYP(), coulomb=df(AUX, chunk=50))
+    e_mat = float(ks_mat.coulomb.energy(res.P, ks_mat.S, ks_mat.nocc))
+    e_str = float(ks_str.coulomb.energy(res.P, ks_str.S, ks_str.nocc))
+    assert abs(e_mat - e_str) < 1e-8, f"fixed-P {e_str} vs {e_mat}"
+    r_str = scf(ks_str)
+    assert r_str.converged
+    assert abs(float(r_str.e_tot) - float(res.e_tot)) < 1e-8

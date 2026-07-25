@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from dftax import KS, Molecule, core, minao, sad, sap, scf, scf_batched
+from dftax import KS, Molecule, core, exact, minao, sad, sap, scf, scf_batched
 from dftax.basis.loader import build_basis_data
 from dftax.energy.xc import PBE
 from dftax.integrals import cross_overlap_matrix, overlap_matrix
@@ -193,7 +193,9 @@ def test_scf_open_shell_guesses_same_fixed_point():
 
 
 def test_scf_warm_restart():
-    ks = _water_ks()
+    # exact(): the restart bound compares two converged runs at 1e-9, below
+    # the DF stopping-tolerance flap through the RI metric.
+    ks = KS(Molecule.from_xyz(WATER, "sto-3g"), PBE(), coulomb=exact())
     ref = scf(ks)
     res = scf(ks, guess=ref.P)
     assert res.converged and res.n_iter <= 2

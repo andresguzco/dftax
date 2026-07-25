@@ -19,8 +19,17 @@ scf(KS(water, PBE(), coulomb=df()))            # def2-universal-jkfit, chunk="au
 Resolution-of-identity reduces the 4-center integral to 2- and 3-center pieces against an
 auxiliary basis (functions up to i, so transition metals work): O(N³) compute,
 O(N²·N_aux) memory for the materialized 3-center tensor, and the `chunk="auto"` policy
-switches to the streamed contraction when that tensor would exceed the memory budget.
+switches to the streamed contraction when that tensor would exceed a device-aware
+memory budget (a fraction of the GPU pool; a fixed fallback on CPU).
 The RI error against the exact path is sub-mHa with the JK-fitting set.
+
+On the materialized path the auxiliary basis is built in spherical harmonics
+(fewer functions, a tighter fit, and better cross-backend force
+reproducibility); the streamed and mesh-sharded backends keep the cartesian
+span. `df(spherical=False)` pins a common fit space when comparing across
+backends, and `df(screen=...)` without a `chunk` runs a shell-pair Schwarz
+compact gather on the materialized build (screened pairs stay exactly zero),
+so extended systems build O(N) rather than O(N²) shell pairs.
 
 ## Exact 4-center ERIs
 
@@ -67,6 +76,15 @@ many points, O(chunk·nao) memory. Hybrids stream RI-K the same way.
 on the fly (`exchange_k_4c`); under density fitting it uses streamed RI-K. The L ≥ 2 exact
 path is compile- and memory-bounded by scanning the bra primitive pair in the ERI kernel
 (so cc-pVDZ compiles in seconds rather than OOMing).
+
+Range-separated hybrids (`CAMB3LYP`, `WB97X`, `WB97XV`) split the exchange into
+short- and long-range parts via `erf(ω·r₁₂)/r₁₂` integrals and run on every DF
+backend: the materialized path holds the attenuated tensors, the streamed path
+recomputes attenuated 3-center elements on the fly (only the small attenuated
+metric is stored), and the mesh-sharded path runs the long-range exchange as
+slab-wise all-to-all rounds. `exact(stream=True)` is the one backend without an
+attenuated variant. `WB97XV` additionally carries VV10 nonlocal correlation,
+which needs the materialized XC grid (no `becke(chunk=...)` or `mesh=`).
 
 ## Choosing a backend
 

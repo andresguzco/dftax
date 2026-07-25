@@ -7,7 +7,10 @@ with the nuclei. The density is held at the converged solution via a Löwdin
 parametrization, so at the SCF stationary point the gradient reduces to the explicit
 geometry derivative, capturing both the Hellmann-Feynman and the Pulay terms with no
 hand-coded integral derivatives. (This is the envelope theorem; differentiating through
-the SCF loop is unnecessary for forces.)
+the SCF loop is unnecessary for forces.) A result converged under `fermi()` smearing
+is handled automatically: the full fractional-occupation density is frozen instead of
+an integer projector, and the reported force is the gradient of the Mermin free
+energy. Any `dispersion=d3bj()` / `d4()` term differentiates along with the rest.
 
 ```python
 import jax; jax.config.update("jax_enable_x64", True)

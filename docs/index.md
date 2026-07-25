@@ -19,14 +19,25 @@ or Maple. PySCF appears only as a test-time reference oracle.
 ## Highlights
 
 - Closed- and open-shell (spin-polarized) DFT through one spin-stacked `KS`
-  functional; LDA, PBE, PBE0, B3LYP.
-- Two solvers: on-device DIIS SCF (optional level shifting) and differentiable
-  direct minimization with any [optax](https://optax.readthedocs.io/) optimizer.
-- Coulomb/exchange backends: exact 4-center ERIs, RI density fitting
-  (RI-J / RI-K), and streamed, Schwarz-screened paths for larger systems.
-- Analytic forces (Pulay terms included), implicit-diff SCF response (CPHF),
-  dipole, polarizability, Hessian, frequencies, IR/Raman, and alchemical
-  derivatives.
+  functional; LDA, PBE, PBE0, B3LYP, CAM-B3LYP, ωB97X, ωB97X-V (with VV10
+  nonlocal correlation), and r2SCAN, with orbital bases up to 5Z/6Z
+  (h and i shells).
+- Solvers for every regime: on-device DIIS SCF (optional level shifting and
+  ADIIS acceleration), trust-region Newton (`newton`, saddle-robust
+  Steihaug-Toint steps) and restricted open-shell `roks`, Fermi smearing
+  with the Mermin free energy for metallic and degenerate systems, and
+  differentiable direct minimization with any
+  [optax](https://optax.readthedocs.io/) optimizer.
+- Coulomb/exchange backends: RI density fitting by default (spherical
+  auxiliary basis, device-aware memory policy), exact 4-center ERIs, and
+  streamed, Schwarz-screened paths for larger systems; range-separated
+  exchange runs on all DF backends.
+- Dispersion as a value: `d3bj()` (with an optional ATM three-body term)
+  and the charge-dependent `d4()` (differentiable EEQ charges), matched to
+  their reference implementations at machine precision.
+- Analytic forces (Pulay terms included, and Mermin forces under smearing),
+  implicit-diff SCF response (CPHF), dipole, polarizability, Hessian,
+  frequencies, IR/Raman, and alchemical derivatives.
 - Batched energies and forces over many geometries via `vmap`.
 - Multi-GPU: one `mesh()` value shards the quadrature and the DF tensors
   across a device mesh, still fully differentiable.
@@ -49,8 +60,8 @@ from dftax import KS, Molecule, scf
 from dftax.energy.xc import PBE
 
 water = Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043", "sto-3g")
-ks  = KS(water, PBE())                      # exact ERI + default becke() grid (75, 302)
-print(scf(ks).e_tot)                        # -75.146751...
+ks  = KS(water, PBE())                      # density fitting + default becke() grid (75, 302)
+print(scf(ks).e_tot)                        # -75.146...
 ```
 
 `KS(system, xc, *, grid=None, coulomb=None, spin=None)` assembles the energy

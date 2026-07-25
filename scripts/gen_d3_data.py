@@ -54,13 +54,21 @@ def main() -> int:
 
     rcov = COV_D3(dtype=torch.float64).numpy()
 
+    # Pairwise van-der-Waals radii: the ATM three-body damping radii
+    # (srvdw = rs9 * vdw in tad-dftd3's dispersion_atm; the driver gathers
+    # radii.VDW_PAIRWISE[zi, zj]).
+    from tad_mctc.data.radii import VDW_PAIRWISE
+
+    vdw = VDW_PAIRWISE(dtype=torch.float64).numpy()
+
     tables = {
-        "c6": c6, "cn_ref": cn, "r4r2": r4r2, "rcov": rcov,
+        "c6": c6, "cn_ref": cn, "r4r2": r4r2, "rcov": rcov, "vdw": vdw,
         "methods": np.array(sorted(DAMPING)),
         "params": np.array([DAMPING[m] for m in sorted(DAMPING)]),
     }
     np.savez_compressed(OUT, **tables)
-    print(f"wrote {OUT}: c6{c6.shape} cn{cn.shape} r4r2{r4r2.shape} rcov{rcov.shape}")
+    print(f"wrote {OUT}: c6{c6.shape} cn{cn.shape} r4r2{r4r2.shape} "
+          f"rcov{rcov.shape} vdw{vdw.shape}")
 
     # Reference energies for tests (two-body D3(BJ), no ATM: s9=0).
     systems = {

@@ -51,6 +51,51 @@ exact path's GPU memory/compile ceiling at L≥2 (cc-pVDZ) and large N is
 characterized in `scripts/gpu/GPU_VALIDATION.md`. It motivates the streamed/DF
 paths.
 
+## Against GPU4PySCF (PBE/def2-svp, density fitting, one A100 each)
+
+Same geometry, basis, auxiliary basis, functional, quadrature and initial
+guess; density fitting on both sides; each engine in its own process, with
+device memory sampled externally (`nvidia-smi`) so the two memory pools are
+measured the same way. GPU4PySCF 1.8.0, dftax at `13fc995`, 2026-07-25.
+
+```bash
+G4P_PYTHON=<gpu4pyscf-env>/bin/python DFTAX_GEOM_DIR=<geometric>/data \
+    python scripts/bench/gpu4pyscf_bench.py --drive --mols cubane coronene \
+    --basis def2-svp --xc PBE --repeat 2 --ndev 1
+```
+
+| molecule | atoms | E_dftax (Ha) | E_g4p (Ha) | \|ΔE\| | iters | cold | warm | g4p cold | g4p warm | peak | g4p peak |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| cubane   | 16 | −308.81601840 | −308.81602647 | 8.1e-06 | 30 / 7  | 168 s | 3.9 s | 1.7 s | 0.7 s | 17.2 GiB | 1.5 GiB |
+| coronene | 36 | −920.09629884 | −920.09628274 | 1.6e-05 | 83 / 10 | 382 s | 47 s  | 2.8 s | 1.8 s | 38.0 GiB | 1.7 GiB |
+
+**The energies agree**; everything else is a gap, and this is the honest
+picture at this size. Three separate causes, worth separating because they
+have different fixes:
+
+- **Iterations.** From the same minao guess dftax needs 30 where GPU4PySCF
+  needs 7, and 83 where it needs 10. That is the largest single factor in the
+  warm column and it is a solver problem, not a throughput one (`adiis()` and
+  `newton()` exist and are not used here; the harness also asks for a tighter
+  density tolerance, `d_tol=1e-7`, than PySCF's default gradient criterion).
+- **Memory.** dftax materializes the AO values and their gradients on the whole
+  grid and holds the 3-center tensor, where GPU4PySCF blocks the grid; hence
+  17-38 GiB against a flat ~1.6 GiB. The streaming knobs (`becke(chunk=...)`,
+  `df(chunk=...)`) exist precisely for this and are not exercised in this run.
+- **Compilation.** The cold column is XLA compiling the whole build, which is a
+  one-off per shape: irrelevant when the shape is reused (geometry
+  optimization, conformer batches, anything differentiated), and the entire
+  cost when it is not.
+
+**What is matched.** PySCF prunes the angular grid per shell by default; the
+harness turns that off (`grids.prune = None`, `atom_grid = (75, 302)`) so both
+codes integrate the same points. Both start from minao: dftax's own default is
+the core Hamiltonian, which costs it 75 iterations on cubane instead of 30, so
+leaving it would have measured the guess. GPU4PySCF 1.8 spreads over every
+visible GPU on its own, so the harness pins `CUDA_VISIBLE_DEVICES` for both
+engines and JAX preallocation is switched off in the dftax process, or the
+sampler would just report the pool.
+
 ## Analytic nuclear forces (water, PBE, sto-3g)
 
 - **Translational invariance**: net-force residual `|Σ_a F_a|max = 4.3e-15` Ha/Bohr (≈0).

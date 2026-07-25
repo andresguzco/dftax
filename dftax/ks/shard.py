@@ -11,7 +11,8 @@ so everything above the terms (``KS.electronic``, the SCF loop, the
 minimizer, autodiff Fock matrices and geometry forces) is unchanged and
 differentiates through the collective natively. The dense nao² matrices
 (S, hcore, P, Fock) stay replicated; what shards is what actually scales:
-the quadrature grid (this module) and, next, the DF 3-center tensor.
+the quadrature grid and the DF 3-center tensor, whose per-device slabs are
+built here directly (never materialized whole on any one device).
 """
 
 from __future__ import annotations

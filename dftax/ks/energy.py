@@ -283,13 +283,13 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
                  sharded: bool) -> DFSpec:
     """Pick the auxiliary span, build the basis once, resolve the policy.
 
-    The materialized unsharded path uses spherical harmonics: the redundant
-    cartesian contaminants drop out of the fit space (~15% fewer auxiliary
-    functions), tightening the RI fit and improving the metric conditioning
-    (the near-null directions that map density error into density-fitted
-    derivatives shrink to the set intrinsic to the JK-fitting basis). The
-    streamed and mesh-sharded backends contract cartesian auxiliary
-    elements on the fly and need the cartesian span. The ``"auto"`` memory
+    The materialized paths (single-device and mesh-sharded) use spherical
+    harmonics: the redundant cartesian contaminants drop out of the fit space
+    (~15% fewer auxiliary functions), tightening the RI fit and improving the
+    metric conditioning (the near-null directions that map density error into
+    density-fitted derivatives shrink to the set intrinsic to the JK-fitting
+    basis). Only the streamed backend contracts cartesian auxiliary elements
+    on the fly and needs the cartesian span. The ``"auto"`` memory
     policy prices the intended span; only when it falls back to streaming is
     the basis rebuilt (and the chunk re-priced) cartesian.
     """

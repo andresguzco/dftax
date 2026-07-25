@@ -123,10 +123,11 @@ def df(
             RI-J bra sum to the significant AO pairs. ``None`` (default)
             keeps every pair, a bit-identical build.
         spherical: auxiliary basis span. ``None`` (default) uses spherical
-            harmonics on the materialized path (non-redundant fit, positive
-            definite metric) and cartesian components on the streamed and
-            mesh-sharded paths (which contract cartesian auxiliary elements
-            on the fly). ``False`` forces cartesian everywhere, e.g. to
+            harmonics on the materialized paths, single-device and
+            mesh-sharded alike (non-redundant fit, positive definite metric),
+            and cartesian components on the streamed path (which contracts
+            cartesian auxiliary elements on the fly). ``False`` forces
+            cartesian everywhere, e.g. to
             compare a materialized result against a streamed one in the same
             fit space; ``True`` asserts the spherical span and raises where
             it is unsupported.

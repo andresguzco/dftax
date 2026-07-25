@@ -23,11 +23,12 @@ switches to the streamed contraction when that tensor would exceed a device-awar
 memory budget (a fraction of the GPU pool; a fixed fallback on CPU).
 The RI error against the exact path is sub-mHa with the JK-fitting set.
 
-On the materialized path the auxiliary basis is built in spherical harmonics
-(fewer functions, a tighter fit, and better cross-backend force
-reproducibility); the streamed and mesh-sharded backends keep the cartesian
-span. `df(spherical=False)` pins a common fit space when comparing across
-backends, and `df(screen=...)` without a `chunk` runs a shell-pair Schwarz
+On the materialized paths (single-device and mesh-sharded alike) the auxiliary
+basis is built in spherical harmonics (fewer functions, a tighter fit, and
+better cross-backend force reproducibility); only the streamed backend keeps
+the cartesian span, since it contracts cartesian auxiliary elements on the
+fly. `df(spherical=False)` pins a common fit space when comparing against the
+streamed backend, and `df(screen=...)` without a `chunk` runs a shell-pair Schwarz
 compact gather on the materialized build (screened pairs stay exactly zero),
 so extended systems build O(N) rather than O(N²) shell pairs.
 

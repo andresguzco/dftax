@@ -41,7 +41,7 @@ def test_sharded_xc_matches_unsharded():
     """Sharded e_xc == single-device e_xc at a fixed density, for both the
     materialized and the streamed inner term, closed and open shell."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
-    ks0 = KS(mol, PBE(), grid=GRID)          # both sides spherical aux now
+    ks0 = KS(mol, PBE(), grid=GRID)
     P = scf(ks0).P
     ks_m = KS(mol, PBE(), grid=GRID, mesh=mesh())
     assert isinstance(ks_m.xc_term, ShardedGridXC)
@@ -50,9 +50,9 @@ def test_sharded_xc_matches_unsharded():
     # sharded and unsharded partial sums round differently (was 1e-12 when the
     # summation orders coincided); still fixed-density, no SCF amplification.
     assert float(ks_m.e_xc(P)) == pytest.approx(float(ks0.e_xc(P)), abs=1e-10)
-    # 1e-9 for the total: the unsharded build uses the shell-class-bucketed
-    # int3c while the aux-sharded slabs keep the flat engine (slab boundaries
-    # cut shells), and their epsilon-level summation differences amplify
+    # 1e-9 for the total: both sides run the shell-class-bucketed int3c on the
+    # same spherical aux span, but the sharded build batches each shell class
+    # per slab and pads, so its epsilon-level summation differences amplify
     # through the RI metric inverse to a few 1e-10 at a fixed density.
     assert float(ks_m.total(P)) == pytest.approx(float(ks0.total(P)), abs=1e-9)
 
@@ -137,7 +137,6 @@ def test_sharded_rsh_matches_unsharded():
     match the single-device materialized DF."""
     AUX = "def2-universal-jkfit"
     mol = Molecule.from_xyz(WATER, "sto-3g")
-    # spherical=False: sharded slabs are cartesian; same fit space both sides.
     ks0 = KS(mol, CAMB3LYP(), grid=GRID, coulomb=df(AUX))
     P = scf(ks0).P
     ksm = KS(mol, CAMB3LYP(), grid=GRID, coulomb=df(AUX), mesh=mesh())
@@ -162,10 +161,10 @@ def test_sharded_scf_and_minimize_match():
     r0 = scf(KS(mol, PBE(), grid=GRID), e_tol=1e-10, d_tol=1e-8)
     r1 = scf(KS(mol, PBE(), grid=GRID, mesh=mesh()), e_tol=1e-10, d_tol=1e-8)
     assert r0.converged and r1.converged
-    # 5e-9 (SCF-level bound, same as the batch-axis test): the unsharded
-    # build is bucketed while the sharded DF slabs keep the flat engine, and
-    # the epsilon-level tensor differences amplify through the RI metric and
-    # the solve; measured flapping at ~1.1e-10 around the old 1e-10.
+    # 5e-9 (SCF-level bound, same as the batch-axis test): the sharded XC
+    # quadrature and the per-slab DF contraction re-associate their sums
+    # relative to the single-device build, and those epsilon-level differences
+    # amplify through the solve; measured flapping at ~1.1e-10 around 1e-10.
     assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)
 
     m0 = minimize(KS(mol, LDA(), grid=GRID), max_steps=1500)

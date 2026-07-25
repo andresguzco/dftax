@@ -4,6 +4,21 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed (performance)
+- **The mesh-sharded DF backend builds shell-aligned auxiliary slabs.** Slab
+  boundaries now fall on shell boundaries (a greedy partition balanced on
+  per-device function counts), which unlocks the two things arbitrary
+  function-index slabs forbade: each slab builds on the shell-class-bucketed
+  engine (class kernels are shared across slabs) instead of the flat
+  reference engine, and the sharded path uses the spherical auxiliary basis
+  like the materialized default (same fit space, so the cross-backend pins
+  in the parity tests are gone and `df(spherical=True)` is legal with
+  `mesh=`). Shell alignment makes slabs unequal; each pads to the largest
+  and the metric inverse is embedded at the padded positions, preserving
+  the exact-zero padding invariants the sharded Coulomb term relies on.
+
 ## [0.5.0] - 2026-07-25
 
 ### Changed

@@ -94,11 +94,17 @@ a system whose tensors do not fit on one device.
 picture at this size. Three separate causes, worth separating because they
 have different fixes:
 
-- **Iterations.** From the same minao guess dftax needs 30 where GPU4PySCF
-  needs 7, and 83 where it needs 10. That is the largest single factor in the
-  warm column and it is a solver problem, not a throughput one (`adiis()` and
-  `newton()` exist and are not used here; the harness also asks for a tighter
-  density tolerance, `d_tol=1e-7`, than PySCF's default gradient criterion).
+- **Iterations, and this is nearly the whole gap.** From the same minao guess
+  dftax needs 30 where GPU4PySCF needs 7, and 83 where it needs 10. Per
+  iteration the two codes are close: solving coronene three ways in one
+  process (one build, so the walls are comparable) gives plain DIIS 128
+  iterations in 28.5 s warm without converging, and `adiis()` 97 iterations in
+  25.6 s converged, i.e. 0.22-0.26 s per iteration against GPU4PySCF's
+  1.81 s / 10 = 0.18 s. dftax is within ~1.2-1.4x per step and 10x off on
+  step count, so the 26x wall ratio is a convergence problem, not a
+  throughput one. `adiis()` helps (it converges where plain DIIS stalls at the
+  128 cap) without closing it; the harness also asks for a tighter density
+  tolerance, `d_tol=1e-7`, than PySCF's default gradient criterion.
 - **Memory.** dftax materializes the AO values and their gradients on the whole
   grid and holds the 3-center tensor, where GPU4PySCF blocks the grid; hence
   17-38 GiB against a flat ~1.6 GiB. The streaming knobs (`becke(chunk=...)`,

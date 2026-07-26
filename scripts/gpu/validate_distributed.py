@@ -8,9 +8,11 @@ the distributed answer must reproduce the local one.
 
 Two ways to run it.
 
-    # one process per GPU on a single node (exercises every multi-process
-    # code path: global arrays, non-addressable devices, real collectives)
+    # processes on a single node (exercises every multi-process code path:
+    # global arrays, non-addressable devices, real collectives). The second
+    # form mirrors the usual multi-node layout, one task owning several GPUs.
     python scripts/gpu/validate_distributed.py --local-world 4
+    python scripts/gpu/validate_distributed.py --local-world 2 --gpus-per-proc 2
 
     # one task per node under SLURM (the multi-node case; see distributed.sbatch)
     srun -N2 --ntasks-per-node=1 --gpus-per-task=4 \
@@ -38,17 +40,21 @@ ETHANOL = (
 MOLS = {"water": WATER, "ethanol": ETHANOL}
 
 
-def spawn_local_world(n: int, argv: list[str]) -> int:
-    """Launch ``n`` single-GPU processes of this script on this node.
+def spawn_local_world(n: int, per_proc: int, argv: list[str]) -> int:
+    """Launch ``n`` processes of this script on this node, ``per_proc`` GPUs each.
 
-    Each child gets one GPU through ``CUDA_VISIBLE_DEVICES`` and its rank
-    through the environment, which is exactly the shape SLURM hands us for
-    the multi-node case, so the code path under test is the same one.
+    Each child gets its slice of the node's GPUs through
+    ``CUDA_VISIBLE_DEVICES`` and its rank through the environment, which is
+    the shape SLURM hands us on a multi-node job, so the code path under test
+    is the same one. ``--gpus-per-proc`` matters because one task per node
+    owning several GPUs (the usual multi-node layout) exercises a process
+    building more than one auxiliary slab, which one GPU per process does not.
     """
     procs = []
     for rank in range(n):
         env = dict(os.environ)
-        env["CUDA_VISIBLE_DEVICES"] = str(rank)
+        env["CUDA_VISIBLE_DEVICES"] = ",".join(
+            str(rank * per_proc + i) for i in range(per_proc))
         env["DFTAX_RANK"] = str(rank)
         env["DFTAX_WORLD"] = str(n)
         env.setdefault("DFTAX_COORD", "localhost:12355")
@@ -60,7 +66,9 @@ def spawn_local_world(n: int, argv: list[str]) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--local-world", type=int, default=0,
-                    help="spawn N single-GPU processes on this node and exit")
+                    help="spawn N processes on this node and exit")
+    ap.add_argument("--gpus-per-proc", type=int, default=1,
+                    help="GPUs each spawned process owns (default 1)")
     ap.add_argument("--mol", default="water", choices=sorted(MOLS))
     ap.add_argument("--basis", default="sto-3g")
     ap.add_argument("--aux", default="def2-universal-jkfit")
@@ -68,7 +76,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.local_world:
-        return spawn_local_world(args.local_world, [
+        return spawn_local_world(args.local_world, args.gpus_per_proc, [
             "--mol", args.mol, "--basis", args.basis, "--aux", args.aux,
             "--xc", args.xc,
         ])

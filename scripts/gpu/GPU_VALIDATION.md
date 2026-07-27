@@ -67,13 +67,21 @@ reassociation (see the tolerance note in `tests/unit/test_sharded.py`).
 The interconnect leg, on the Alliance cluster Tamia (H100), job 385450 across
 nodes `tg10605` and `tg11304`, one process per node:
 
-| case | local (1 GPU) | sharded (2 GPUs, 2 nodes) | difference | build / solve |
-|---|---:|---:|---:|---:|
-| water / sto-3g | -75.245969939587 | -75.245969939686 | 9.9e-11 Ha | 56.5 s / 5.0 s |
-| ethanol / def2-svp | -154.744957354 | -154.744957354419 | 4.2e-10 Ha | 181.2 s / 6.6 s |
+Two nodes, one process each, four GPUs per process (job 385468, `tg10607` and
+`tg11301`): `processes: 2  local devices: 4  global devices: 8`.
 
-Both PBE0, both PASS, submitted with `scripts/gpu/alliance_setup.sh`. Two
-things this run established that the single-node rehearsal could not:
+| case | local (1 GPU) | sharded (8 GPUs, 2 nodes) | difference | build / solve |
+|---|---:|---:|---:|---:|
+| water / sto-3g | -75.245969939640 | -75.245969939572 | 6.8e-11 Ha | 94.1 s / 21.4 s |
+| ethanol / def2-svp | -154.744957355090 | -154.744957354010 | 1.1e-09 Ha | 477.2 s / 35.0 s |
+
+All PBE0, all PASS, submitted with `scripts/gpu/alliance_setup.sh`. An earlier
+pair of runs (385450) got one GPU per node and passed the same way at 9.9e-11
+and 4.2e-10; see the note below on why they were one-GPU. The eight-slab
+ethanol build costs 477 s against 181 s for two slabs, which is the per-slab
+compilation this record already flags, now measured out to eight.
+
+Three things these runs established that the single-node rehearsal could not:
 
 - **The process group forms across nodes and the collectives carry.** The
   sharded solve reproduces the single-device answer to 1e-10 over the real
@@ -86,9 +94,13 @@ things this run established that the single-node rehearsal could not:
   no code change. dftax declares `jax>=0.10.0`, so this is in-range and is a
   real incompatibility, not a cluster artifact.
 
-Caveat on this run: SLURM handed each task one GPU rather than the node's
-four (`local devices: 1`), so it is 2 nodes x 1 GPU. That exercises the
-cross-node path, which is the point, but not several slabs per process.
+- **A task that owns several GPUs has to ask for them.** The first two runs
+  came back with `local devices: 1` although SLURM had granted four per node,
+  and the launcher was not at fault: an `--overlap` probe inside the same job
+  saw all four. JAX's SLURM detection assumes one process per GPU, so it takes
+  the local process id as the local device id and a one-task-per-node job
+  claims a single device. `distributed()` now fills in `local_device_ids` for
+  that layout, which is what turned 2x1 into 2x4.
 
 Slab-build characterization on ethanol/def2-svp, four slabs of a 335-function
 auxiliary basis (84/85/81/85):

@@ -6,6 +6,14 @@ Mirrors ShardedDFCoulomb.exchange: a shard_map over an "aux" axis where the
 dot_general takes as its operand. Each formulation below is a candidate fix.
 
     XLA_FLAGS=--xla_force_host_platform_device_count=2 python repro_shardmap.py
+
+Status: this reduction does NOT reproduce the failure. All four formulations
+pass on 0.10.2 and on 0.11.0 on CPU with two forced devices, while the real
+two-node run fails on 0.11.0 on GPU. So the trigger is not the contraction
+shape alone: it needs the GPU backend, the production shapes, or the
+surrounding graph (the metric quadratic form, the all_gather, the Cholesky).
+Keep this as the cheap first check when trying a jax release, but reproduce
+against tests/unit/test_sharded.py on real devices before concluding anything.
 """
 
 import sys

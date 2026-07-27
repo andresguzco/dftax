@@ -24,6 +24,9 @@
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 
+echo "job $SLURM_JOB_ID on $SLURM_JOB_NUM_NODES node(s): $SLURM_JOB_NODELIST"
+echo "gpus-per-node=${SLURM_GPUS_PER_NODE:-unset} gpus-per-task=${SLURM_GPUS_PER_TASK:-unset}"
+
 # Fraction of each GPU JAX may pool. Leave headroom for NCCL buffers.
 export XLA_PYTHON_CLIENT_MEM_FRACTION=${XLA_PYTHON_CLIENT_MEM_FRACTION:-.85}
 # Uncomment when debugging the interconnect:
@@ -32,10 +35,10 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=${XLA_PYTHON_CLIENT_MEM_FRACTION:-.85}
 # Smoke first: water/sto-3g builds in seconds, so a broken interconnect or a
 # process group that never forms shows up immediately rather than after the
 # ethanol build. Then the real case.
-srun --kill-on-bad-exit=1 \
+srun --kill-on-bad-exit=1 --gpus-per-node="${SLURM_GPUS_PER_NODE:-4}" \
     "${PYTHON:-.venv/bin/python}" scripts/gpu/validate_distributed.py \
     --mol water --basis sto-3g --xc PBE0
 
-srun --kill-on-bad-exit=1 \
+srun --kill-on-bad-exit=1 --gpus-per-node="${SLURM_GPUS_PER_NODE:-4}" \
     "${PYTHON:-.venv/bin/python}" scripts/gpu/validate_distributed.py \
     --mol ethanol --basis def2-svp --xc PBE0

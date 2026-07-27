@@ -9,13 +9,13 @@
 # distributed()) reads the SLURM environment to find the coordinator and the
 # process ids, and the mesh then spans every GPU of every node.
 #
-# On a Digital Research Alliance cluster, --account is mandatory and the
-# environment comes from their module stack: scripts/gpu/alliance_setup.sh
-# builds it and submits this file for you.
+# On a Digital Research Alliance cluster, --account and the partition (which
+# is the walltime tier there) are mandatory and GPUs are requested by type;
+# scripts/gpu/alliance_setup.sh fills those in and submits this file.
 #SBATCH --job-name=dftax-dist
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-task=4
+#SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=00:30:00

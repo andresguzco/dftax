@@ -1,67 +1,63 @@
 #!/bin/bash
-# Set up dftax on a Digital Research Alliance cluster (Tamia, Narval, Fir, ...)
-# and submit the two-node distributed validation.
+# Set up dftax on a Digital Research Alliance cluster and submit the two-node
+# distributed validation.
 #
-#   git clone https://github.com/andresguzco/dftax.git && cd dftax
-#   git checkout perf/sharded-scale
+#   git clone https://github.com/andresguzco/dftax.git ~/dftax-engine
+#   cd ~/dftax-engine && git checkout perf/sharded-scale
 #   bash scripts/gpu/alliance_setup.sh              # build env, then submit
 #   bash scripts/gpu/alliance_setup.sh --env-only   # build env, do not submit
 #
-# Alliance specifics this handles: their module stack rather than a system
-# python, their local wheelhouse first (compute nodes have no internet, and
-# --no-index is the supported path), and the mandatory --account, taken from
-# SLURM_ACCOUNT or the first allocation `sacctmgr` reports for you.
+# What is cluster-specific here, and why it is not guessed:
+#   * --account is mandatory on DRAC (no default). Tamia's is aip-necludov;
+#     aip-aspuru is the old group and must not be used.
+#   * A DRAC partition IS the walltime tier, not a queue: gpubase_bynode_b1
+#     <=3h, _b2 <=12h, _b3 <=24h. Picked from --time below.
+#   * Allocations are by whole node, so --mem=0 takes the node's memory, and
+#     GPUs are requested by type (h100:4 on Tamia's 53 four-GPU nodes; the
+#     twelve h200:8 nodes need GPUS=h200:8).
+#
+# Overrides: ACCOUNT, PARTITION, NODES, GPUS, CPUS, TIME, VENV.
 set -euo pipefail
-
 cd "$(dirname "$0")/../.."
-VENV=${VENV:-$PWD/.venv-alliance}
 
-module --force purge 2>/dev/null || true
-module load StdEnv/2023 2>/dev/null || module load StdEnv 2>/dev/null || true
-module load python/3.12 2>/dev/null || module load python 2>/dev/null || true
-module load cuda/12.2 2>/dev/null || module load cuda 2>/dev/null || true
-echo "python: $(command -v python) ($(python --version 2>&1))"
+ACCOUNT=${ACCOUNT:-aip-necludov}
+NODES=${NODES:-2}
+GPUS=${GPUS:-h100:4}
+CPUS=${CPUS:-16}
+TIME=${TIME:-00:30:00}
+VENV=${VENV:-$PWD/.venv}
 
-if [ ! -d "$VENV" ]; then
-    python -m venv "$VENV"
+# Walltime tier -> partition, unless one was passed explicitly.
+if [ -z "${PARTITION:-}" ]; then
+    hours=${TIME%%:*}
+    if   [ "$((10#$hours))" -lt 3 ];  then PARTITION=gpubase_bynode_b1
+    elif [ "$((10#$hours))" -lt 12 ]; then PARTITION=gpubase_bynode_b2
+    else                                   PARTITION=gpubase_bynode_b3
+    fi
 fi
-# shellcheck disable=SC1091
-source "$VENV/bin/activate"
-python -m pip install --upgrade pip
 
-# The wheelhouse carries jax/jaxlib built for this cluster's CUDA; prefer it,
-# and only reach for PyPI for what it does not have (basis-set-exchange,
-# equinox, jaxtyping tend to need it, and login nodes can reach PyPI).
-python -m pip install --no-index --upgrade "jax[cuda12]" numpy optax 2>/dev/null \
-    || python -m pip install --upgrade "jax[cuda12]" numpy optax
-python -m pip install --upgrade basis-set-exchange equinox jaxtyping periodictable
-python -m pip install --no-deps -e .
-
-python - <<'PY'
-import jax
-print("jax", jax.__version__, "| local devices:", jax.local_devices())
-PY
+UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
+[ -x "$UV" ] || { echo "no uv on PATH nor at $HOME/.local/bin/uv" >&2; exit 127; }
+# Login nodes have outbound network, compute nodes do not, so the environment
+# is resolved here and only used there.
+"$UV" sync --extra cuda12
+"$VENV/bin/python" -c "import jax, dftax; print('jax', jax.__version__, '| dftax ok')"
 
 if [ "${1:-}" = "--env-only" ]; then
-    echo "environment ready at $VENV; submit with:"
-    echo "  PYTHON=$VENV/bin/python sbatch scripts/gpu/distributed.sbatch"
+    echo "environment ready; submit with:"
+    echo "  PYTHON=$VENV/bin/python sbatch --account=$ACCOUNT" \
+         "--partition=$PARTITION --nodes=$NODES --gpus-per-node=$GPUS" \
+         "scripts/gpu/distributed.sbatch"
     exit 0
 fi
 
-ACCOUNT=${SLURM_ACCOUNT:-$(sacctmgr -nP show assoc user="$USER" format=account \
-    2>/dev/null | grep -E '^(def|rrg|ctb)-' | head -1)}
-if [ -z "${ACCOUNT:-}" ]; then
-    echo "could not determine an allocation account; rerun with" >&2
-    echo "  SLURM_ACCOUNT=<your-account> bash $0" >&2
-    exit 1
-fi
-# Overridable on the command line, because GPU counts and memory flags differ
-# per cluster and these take precedence over the #SBATCH lines in the file:
-#   GPUS_PER_NODE=2 NODES=2 TIME=00:20:00 bash scripts/gpu/alliance_setup.sh
-echo "submitting ${NODES:-2} nodes x ${GPUS_PER_NODE:-4} GPUs under $ACCOUNT"
-PYTHON=$VENV/bin/python sbatch \
+echo "submitting $NODES nodes x $GPUS, $TIME on $PARTITION ($ACCOUNT)"
+PYTHON="$VENV/bin/python" sbatch \
     --account="$ACCOUNT" \
-    --nodes="${NODES:-2}" \
-    --gpus-per-task="${GPUS_PER_NODE:-4}" \
-    --time="${TIME:-00:30:00}" \
+    --partition="$PARTITION" \
+    --nodes="$NODES" \
+    --gpus-per-node="$GPUS" \
+    --cpus-per-task="$CPUS" \
+    --mem=0 \
+    --time="$TIME" \
     scripts/gpu/distributed.sbatch

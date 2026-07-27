@@ -44,6 +44,8 @@ def distributed(**kwargs: object) -> tuple[int, int]:
             (``coordinator_address``, ``num_processes``, ``process_id``,
             ``local_device_ids``); passing any of them forces initialization,
             which is how a single node can host several processes for testing.
+            ``local_device_ids`` is filled in for the one-task-per-node
+            layout, where JAX would otherwise give the task a single GPU.
 
     Note:
         Call this before touching any JAX API that commits the backend
@@ -59,6 +61,16 @@ def distributed(**kwargs: object) -> tuple[int, int]:
     ntasks = int(os.environ.get("SLURM_NTASKS", "1"))
     if not kwargs and ntasks <= 1:
         return 0, 1
+    # JAX's SLURM detection assumes one process per GPU: it takes the local
+    # process id as the local device id, so a task that owns several GPUs
+    # claims exactly one of them and the rest of the node sits idle. When the
+    # job puts one task on a node, hand it every visible device instead.
+    if "local_device_ids" not in kwargs:
+        per_node = int(os.environ.get("SLURM_NTASKS_PER_NODE", "1"))
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        n_visible = len([d for d in visible.split(",") if d != ""])
+        if per_node == 1 and n_visible > 1:
+            kwargs["local_device_ids"] = list(range(n_visible))
     jax.distributed.initialize(**kwargs)
     _INITIALIZED = True
     return jax.process_index(), jax.process_count()

@@ -39,7 +39,9 @@ from dftax.basis.loader import build_basis_data
 from dftax.grid import Becke, becke, becke_grid, becke_grid_size, points
 from dftax.integrals import nuclear_repulsion
 from dftax.ks.energy import KS, System, _resolve_chunk, _resolve_df_chunk, _spin_counts
-from dftax.ks.guess import _SPECS, CoreSpec, _initial_density, _resolve_guess
+from dftax.ks.guess import (
+    _SPECS, _initial_density, resolve_guess_or_default,
+)
 from dftax.ks.shard import MeshSpec, _resolve_mesh
 from dftax.ks.scf import _scf_solve
 from dftax.ks.terms import DFSpec, ExactSpec, df
@@ -131,9 +133,8 @@ def scf_batched(
         )
     # Resolved once, eagerly: SAD/MinAO blocks are geometry-independent, and
     # the SAP tables are applied traced per geometry inside `single`.
-    resolved_guess = _resolve_guess(
-        guess if guess is not None else CoreSpec(),
-        symbols, template, jnp.asarray(mol.atom_coords()),
+    resolved_guess = resolve_guess_or_default(
+        guess, symbols, template, jnp.asarray(mol.atom_coords()),
     )
 
     # Coulomb backend: DF default (matching KS); the aux basis is a template

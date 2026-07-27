@@ -122,12 +122,14 @@ the noise, but treat the seconds as indicative rather than exact.
 
 **What is matched.** PySCF prunes the angular grid per shell by default; the
 harness turns that off (`grids.prune = None`, `atom_grid = (75, 302)`) so both
-codes integrate the same points. Both start from minao: dftax's own default is
-the core Hamiltonian, which costs it 75 iterations on cubane instead of 30, so
-leaving it would have measured the guess. GPU4PySCF 1.8 spreads over every
-visible GPU on its own, so the harness pins `CUDA_VISIBLE_DEVICES` for both
-engines and JAX preallocation is switched off in the dftax process, or the
-sampler would just report the pool.
+codes integrate the same points. Both start from minao, which the harness
+passes explicitly on the dftax side even though it is now also dftax's default
+(it was the core Hamiltonian when these numbers were taken, and that cost 75
+iterations on cubane instead of 30, so this run would otherwise have measured
+the guess; the measurement is what moved the default). GPU4PySCF 1.8 spreads
+over every visible GPU on its own, so the harness pins `CUDA_VISIBLE_DEVICES`
+for both engines, and JAX preallocation is switched off in the dftax process,
+or the sampler would just report the pool.
 
 ## Analytic nuclear forces (water, PBE, sto-3g)
 

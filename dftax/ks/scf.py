@@ -418,8 +418,9 @@ def scf(
         guess: initial density, a spec from :func:`~dftax.ks.guess.core` /
             :func:`~dftax.ks.guess.sad` / :func:`~dftax.ks.guess.minao` /
             :func:`~dftax.ks.guess.sap`, or an explicit ``(nspin, nao, nao)``
-            density array (warm restart). ``None`` is the core-Hamiltonian
-            guess.
+            density array (warm restart). ``None`` is
+            :func:`~dftax.ks.guess.minao`, falling back to the core
+            Hamiltonian where the atomic densities cannot be built.
         accel: an :func:`adiis` spec runs the far-from-convergence
             iterations with ADIIS (energy-model extrapolation, no
             oscillation), blending into Pulay DIIS near the fixed point;

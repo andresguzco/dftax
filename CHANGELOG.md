@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed (behavior)
+- **The default initial guess is `minao()`, not the core Hamiltonian.** The
+  core guess ignores electron repulsion entirely and is the weakest standard
+  starting point; the projected minimal-basis superposition costs one
+  cross-overlap solve per element and lands much closer, which is where the
+  benchmark against GPU4PySCF (whose default is also minao) found dftax
+  spending most of its extra iterations: 75 against 30 on cubane/def2-svp, 10
+  against 7 on water/sto-3g. `scf`, `newton`, `minimize` and `scf_batched`
+  share the policy. The converged answer is unchanged, since the guess only
+  sets where the iteration starts. Two cases keep the core Hamiltonian: a
+  calculation built from a raw `System`, which has no element identities to
+  project atomic densities from, and any element the minimal basis or the
+  ground-state configuration table does not reach, which warns and falls back.
+  Both apply only to the default; an explicit `guess=minao()` still raises.
+
 ### Added
 - **Multi-node execution.** `distributed()` joins the processes of a
   multi-task job into one JAX process group (the coordinator, the process

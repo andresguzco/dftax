@@ -120,6 +120,64 @@ def test_guess_array_shape_validated():
         density_from_guess(ks, jnp.zeros((3, 3)), X)
 
 
+def test_default_guess_is_minao():
+    """``guess=None`` resolves to minao, not the core Hamiltonian: same
+    density, and fewer iterations than core (the reason for the default)."""
+    ks = _water_ks()
+    X = canonical_orthonormalizer(ks.S)
+    P_default = density_from_guess(ks, None, X)
+    P_minao = density_from_guess(ks, minao(), X)
+    assert float(jnp.abs(P_default - P_minao).max()) == 0.0
+
+    r_default, r_core = scf(ks), scf(ks, guess=core())
+    assert r_default.converged and r_core.converged
+    assert abs(r_default.e_tot - r_core.e_tot) < 2e-8      # same fixed point
+    assert r_default.n_iter < r_core.n_iter
+
+
+def test_default_guess_falls_back_to_core_off_the_minimal_basis():
+    """Elements the minimal basis does not reach fall back to the core
+    Hamiltonian with a warning, but only when the guess was defaulted: an
+    explicit minao() still surfaces the failure."""
+    import basis_set_exchange as bse
+
+    from dftax.ks.guess import CoreGuess, resolve_guess_or_default
+
+    sto = set(int(z) for z in bse.get_basis("sto-3g", header=False)["elements"])
+    svp = set(int(z) for z in bse.get_basis("def2-svp", header=False)["elements"])
+    beyond = sorted(svp - sto)
+    assert beyond, "def2-svp should reach past sto-3g"
+    sym = [bse.lut.element_sym_from_Z(beyond[0]).capitalize()]
+    coords = np.zeros((1, 3))
+    basis = build_basis_data(sym, coords, "def2-svp")
+
+    with pytest.warns(UserWarning, match="default minao guess could not"):
+        resolved = resolve_guess_or_default(None, sym, basis, coords)
+    assert isinstance(resolved, CoreGuess)
+    with pytest.raises(Exception):                     # noqa: B017, PT011
+        resolve_guess_or_default(minao(), sym, basis, coords)
+
+
+def test_raw_system_defaults_to_core():
+    """A raw System has no element identities, so the default is the core
+    Hamiltonian rather than an error."""
+    from dftax.grid import becke_grid
+
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    basis = build_basis_data(mol.symbols, mol.atom_coords(), "sto-3g")
+    sys = System(
+        basis=basis, coords=jnp.asarray(mol.atom_coords()),
+        charges=jnp.asarray(mol.atom_charges()), nelec=10,
+    )
+    ks = KS(sys, PBE(),
+            grid=becke_grid(mol.symbols, mol.atom_coords(), 20, 50))
+    assert ks.symbols is None
+    X = canonical_orthonormalizer(ks.S)
+    P_default = density_from_guess(ks, None, X)
+    P_core = density_from_guess(ks, core(), X)
+    assert float(jnp.abs(P_default - P_core).max()) == 0.0
+
+
 def test_raw_system_rejects_element_guesses():
     from dftax.grid import becke_grid
 
@@ -173,8 +231,12 @@ def test_sap_fit_total_charge(sym):
 # ---------------------------------------------------------------------------
 
 def test_scf_all_guesses_same_fixed_point():
+    # Reference is the core guess, explicitly: it is the weakest of the four,
+    # so "no element-aware guess is worse" is a claim about all of them. The
+    # default (minao) is not a valid reference for that comparison, since sad
+    # and sap need not beat it (measured on water/sto-3g: minao 7, sad 10).
     ks = _water_ks()
-    ref = scf(ks)
+    ref = scf(ks, guess=core())
     assert ref.converged
     for spec in [minao(), sad(), sap()]:
         res = scf(ks, guess=spec)

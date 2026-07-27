@@ -2,13 +2,14 @@
 
 The solvers start the self-consistency iteration from an initial density
 ``P0``. The guess only affects how many iterations the solve takes (and which
-stationary point a difficult case lands on), never the converged fixed point,
-but the default core-Hamiltonian guess ignores electron repulsion entirely and
-is the weakest standard choice. This module provides the classic better
-guesses as choices-as-values (Optax-style factories, like
+stationary point a difficult case lands on), never the converged fixed point.
+:func:`minao` is the default, matching PySCF; the core-Hamiltonian guess
+ignores electron repulsion entirely and is the weakest standard choice, and it
+remains the fallback where element identities or a minimal basis are missing.
+The classic guesses are choices-as-values (Optax-style factories, like
 :func:`~dftax.ks.terms.exact` / :func:`~dftax.ks.terms.df`):
 
-- :func:`core`: occupied eigenvectors of the core Hamiltonian (the default).
+- :func:`core`: occupied eigenvectors of the core Hamiltonian.
 - :func:`minao`: superposition of atomic densities *projected* from a minimal
   basis; per element, the tabulated ground-state occupations are placed on the
   minimal-basis AOs and projected onto the computational basis through the
@@ -43,7 +44,7 @@ depends on the geometry only through traced quadrature and distances.
 
 Guesses need element identities: a :class:`~dftax.ks.energy.KS` built from a
 raw :class:`~dftax.ks.energy.System` (``ks.symbols is None``) supports only
-``core()`` and explicit density arrays.
+``core()`` and explicit density arrays, and defaults to ``core()``.
 """
 
 from __future__ import annotations
@@ -624,18 +625,53 @@ def _initial_density(resolved, ks, X):
     raise TypeError(f"unknown resolved guess: {resolved!r}")
 
 
+def resolve_guess_or_default(guess, symbols, basis, atom_coords):
+    """Resolve a guess spec, applying the default-guess policy for ``None``.
+
+    The default is :func:`minao`, and the core Hamiltonian is its fallback:
+    a raw :class:`~dftax.ks.energy.System` has no element identities to
+    project atomic densities from, and the minimal basis (or the ground-state
+    configuration table) does not reach every element. The fallback is
+    announced, and it applies only when the caller passed no guess at all; an
+    explicit ``guess=minao()`` raises whatever went wrong.
+    """
+    if guess is not None:
+        return _resolve_guess(guess, symbols, basis, atom_coords)
+    if symbols is None:
+        return _resolve_guess(CoreSpec(), symbols, basis, atom_coords)
+    try:
+        return _resolve_guess(MinAOSpec(), symbols, basis, atom_coords)
+    except Exception as exc:                                    # noqa: BLE001
+        warnings.warn(
+            f"the default minao guess could not be built ({type(exc).__name__}"
+            f": {exc}); falling back to the core Hamiltonian, which converges "
+            f"more slowly. Pass guess= to choose another one.",
+            UserWarning,
+            stacklevel=3,
+        )
+        return _resolve_guess(CoreSpec(), symbols, basis, atom_coords)
+
+
 def density_from_guess(ks, guess, X):
     """Initial spin-stacked density for a solver.
 
-    ``guess`` is ``None`` (core Hamiltonian), a spec from :func:`core` /
-    :func:`sad` / :func:`minao` / :func:`sap`, or an explicit density array of
-    shape ``(nspin, nao, nao)`` (e.g. a previous :class:`KSResult`'s ``P``,
-    for warm restarts).
+    ``guess`` is ``None`` (:func:`minao`, falling back to :func:`core`), a spec
+    from :func:`core` / :func:`sad` / :func:`minao` / :func:`sap`, or an
+    explicit density array of shape ``(nspin, nao, nao)`` (e.g. a previous
+    :class:`KSResult`'s ``P``, for warm restarts).
+
+    The default is the projected minimal-basis superposition, which costs one
+    cross-overlap solve per element and starts the SCF much closer than the
+    core Hamiltonian (measured on cubane/def2-svp: 30 iterations against 75).
+    Two things it needs and the core guess does not are element identities and
+    a minimal basis covering them, so a raw :class:`~dftax.ks.energy.System`
+    falls back to the core Hamiltonian, as does any element the minimal basis
+    or the configuration table does not reach. That fallback applies only to
+    the default; an explicit ``guess=minao()`` raises instead.
     """
-    if guess is None:
-        guess = CoreSpec()
-    if isinstance(guess, _SPECS):
-        resolved = _resolve_guess(guess, ks.symbols, ks.basis, ks.atom_coords)
+    if guess is None or isinstance(guess, _SPECS):
+        resolved = resolve_guess_or_default(
+            guess, ks.symbols, ks.basis, ks.atom_coords)
         return _initial_density(resolved, ks, X)
     P0 = jnp.asarray(guess)
     expect = (len(ks.nocc), ks.S.shape[0], ks.S.shape[0])

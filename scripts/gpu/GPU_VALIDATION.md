@@ -60,9 +60,35 @@ python scripts/gpu/validate_distributed.py --local-world 4 --mol water \
 | build / solve wall (distributed) | 36.1 s / 3.8 s |
 
 Both solves converge; the difference is the usual RI-metric-amplified
-reassociation (see the tolerance note in `tests/unit/test_sharded.py`). Still
-unvalidated: a genuine two-node run, which only adds the interconnect to the
-picture (`scripts/gpu/distributed.sbatch` is the template).
+reassociation (see the tolerance note in `tests/unit/test_sharded.py`).
+
+## Update 2026-07-27 (two nodes, Tamia)
+
+The interconnect leg, on the Alliance cluster Tamia (H100), job 385450 across
+nodes `tg10605` and `tg11304`, one process per node:
+
+| case | local (1 GPU) | sharded (2 GPUs, 2 nodes) | difference | build / solve |
+|---|---:|---:|---:|---:|
+| water / sto-3g | -75.245969939587 | -75.245969939686 | 9.9e-11 Ha | 56.5 s / 5.0 s |
+| ethanol / def2-svp | -154.744957354 | -154.744957354419 | 4.2e-10 Ha | 181.2 s / 6.6 s |
+
+Both PBE0, both PASS, submitted with `scripts/gpu/alliance_setup.sh`. Two
+things this run established that the single-node rehearsal could not:
+
+- **The process group forms across nodes and the collectives carry.** The
+  sharded solve reproduces the single-device answer to 1e-10 over the real
+  fabric, so nothing in the aux-slab path depends on the devices being local.
+- **jax 0.11.0 breaks the sharded exchange.** The same job on the same nodes
+  failed first (job 385432) with `INVALID_ARGUMENT: Invalid sharding for
+  instruction ... sharding={devices=[1,1,2]}, input_shape=f64[49,59]` inside
+  `shard_map/mnP,PX->mnX`, the RI-K contraction: a 3-D sharding applied to a
+  2-D operand. Pinning jax 0.10.2 and resubmitting gave the PASS above, with
+  no code change. dftax declares `jax>=0.10.0`, so this is in-range and is a
+  real incompatibility, not a cluster artifact.
+
+Caveat on this run: SLURM handed each task one GPU rather than the node's
+four (`local devices: 1`), so it is 2 nodes x 1 GPU. That exercises the
+cross-node path, which is the point, but not several slabs per process.
 
 Slab-build characterization on ethanol/def2-svp, four slabs of a 335-function
 auxiliary basis (84/85/81/85):

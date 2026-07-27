@@ -31,7 +31,12 @@ classifiers = [
 dependencies = [
     "basis-set-exchange>=0.12",
     "equinox>=0.13.2",
-    "jax>=0.10.0",
+    # <0.11: jax 0.11 rejects the sharded RI-K contraction with
+    # "Invalid sharding for instruction ... devices=[1,1,2],
+    # input_shape=f64[49,59]" inside shard_map (a 3-D sharding on a 2-D
+    # operand). Caught on a two-node Tamia run; see
+    # scripts/gpu/GPU_VALIDATION.md. Lift once that path is ported.
+    "jax>=0.10.0,<0.11",
     "jaxtyping>=0.2.0",
     "numpy>=1.26",
     "optax>=0.2.6",
@@ -40,7 +45,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # GPU build: `pip install dftax[cuda12]` pulls the CUDA 12 jaxlib (Linux).
-cuda12 = ["jax[cuda12]>=0.10.0"]
+cuda12 = ["jax[cuda12]>=0.10.0,<0.11"]
 # PySCF is NOT a runtime dependency: it is used only as a reference oracle in the
 # test suite (and as an optional convenience path for building a system from a
 # PySCF Mole). The compute path is pure JAX.

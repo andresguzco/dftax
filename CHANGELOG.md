@@ -36,7 +36,10 @@ to [Semantic Versioning](https://semver.org/).
   `scripts/gpu/validate_distributed.py` runs the parity check in-run, either
   as one process per GPU on a node or one task per node
   (`scripts/gpu/distributed.sbatch`): PBE0/water on 4 processes reproduces
-  the single-device solve to 2.1e-10 Ha. Batch-axis sharding
+  the single-device solve to 2.1e-10 Ha, and on two nodes of the Alliance
+  cluster Tamia to 9.9e-11 Ha (water/sto-3g) and 4.2e-10 Ha
+  (ethanol/def2-svp), so the collectives carry over a real interconnect and
+  not just NVLink. Batch-axis sharding
   (`scf_batched(mesh=...)`) stays single-process and now says so at build
   time; across nodes, shard a single calculation instead.
 
@@ -59,6 +62,14 @@ to [Semantic Versioning](https://semver.org/).
   metric's pseudo-inverse turns into 5e-10 in the total energy.
 
 ### Fixed
+- **jax is pinned below 0.11 until the sharded exchange is ported.** A
+  two-node run on Tamia (H100) failed under jax 0.11.0 with `INVALID_ARGUMENT:
+  Invalid sharding for instruction ... sharding={devices=[1,1,2]},
+  input_shape=f64[49,59]` inside `shard_map/mnP,PX->mnX`, the RI-K
+  contraction: a 3-D sharding applied to a 2-D operand. The same job on the
+  same nodes passes on 0.10.2 with no code change, so this is a real
+  incompatibility in a version the old `jax>=0.10.0` bound allowed, not a
+  cluster artifact.
 - **`import dftax` no longer starts an XLA backend.** Importing the package
   used to build three JAX arrays at module scope (the Boys interpolation
   table, the PW92/PBE constants, the 3-center sign array), which brought up

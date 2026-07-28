@@ -64,10 +64,8 @@ reassociation (see the tolerance note in `tests/unit/test_sharded.py`).
 
 ## Update 2026-07-27 (two nodes, Tamia)
 
-The interconnect leg, on the Alliance cluster Tamia (H100), job 385450 across
-nodes `tg10605` and `tg11304`, one process per node:
-
-Two nodes, one process each, four GPUs per process (job 385468, `tg10607` and
+The interconnect leg, on the Alliance cluster Tamia (H100): two nodes, one
+process each, four GPUs per process (job 385468, `tg10607` and
 `tg11301`): `processes: 2  local devices: 4  global devices: 8`.
 
 | case | local (1 GPU) | sharded (8 GPUs, 2 nodes) | difference | build / solve |
@@ -86,13 +84,20 @@ Three things these runs established that the single-node rehearsal could not:
 - **The process group forms across nodes and the collectives carry.** The
   sharded solve reproduces the single-device answer to 1e-10 over the real
   fabric, so nothing in the aux-slab path depends on the devices being local.
-- **jax 0.11.0 breaks the sharded exchange.** The same job on the same nodes
-  failed first (job 385432) with `INVALID_ARGUMENT: Invalid sharding for
-  instruction ... sharding={devices=[1,1,2]}, input_shape=f64[49,59]` inside
-  `shard_map/mnP,PX->mnX`, the RI-K contraction: a 3-D sharding applied to a
-  2-D operand. Pinning jax 0.10.2 and resubmitting gave the PASS above, with
-  no code change. dftax declares `jax>=0.10.0`, so this is in-range and is a
-  real incompatibility, not a cluster artifact.
+- **jax 0.11.0 broke the sharded exchange, and the fix was the operand's
+  rank.** The same job on the same nodes failed first (job 385432) with
+  `INVALID_ARGUMENT: Invalid sharding for instruction ...
+  sharding={devices=[1,1,2]}, input_shape=f64[49,59]` inside
+  `shard_map/mnP,PX->mnX`. Reproduced on a local A100 and reduced with
+  `scripts/perf/shardmap_jax_compat.py`: under 0.11 on GPU, every formulation
+  of the contraction fails when the shard_map parameter is 3-D (einsum,
+  tensordot, dot_general, explicit reshape alike) and the one taking an
+  already-2-D parameter passes, because a 3-D sharded operand has its 3-D
+  sharding attached to the 2-D bitcast the dot_general takes. On CPU all of
+  them pass, so the check must run on a GPU. `ShardedDFCoulomb` now stores
+  the slab tensor as `(nao², nauxp)` and the pin is gone; verified on 0.11
+  locally, single-process across 2 GPUs (2.9e-10 Ha) and 2 processes
+  (9.7e-10 Ha).
 
 - **A task that owns several GPUs has to ask for them.** The first two runs
   came back with `local devices: 1` although SLURM had granted four per node,

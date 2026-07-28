@@ -62,14 +62,21 @@ to [Semantic Versioning](https://semver.org/).
   metric's pseudo-inverse turns into 5e-10 in the total energy.
 
 ### Fixed
-- **jax is pinned below 0.11 until the sharded exchange is ported.** A
-  two-node run on Tamia (H100) failed under jax 0.11.0 with `INVALID_ARGUMENT:
-  Invalid sharding for instruction ... sharding={devices=[1,1,2]},
-  input_shape=f64[49,59]` inside `shard_map/mnP,PX->mnX`, the RI-K
-  contraction: a 3-D sharding applied to a 2-D operand. The same job on the
-  same nodes passes on 0.10.2 with no code change, so this is a real
-  incompatibility in a version the old `jax>=0.10.0` bound allowed, not a
-  cluster artifact.
+- **The sharded 3-center tensor is stored flat, which is what jax 0.11
+  accepts.** A two-node run on Tamia (H100) failed under jax 0.11.0 with
+  `INVALID_ARGUMENT: Invalid sharding for instruction ...
+  sharding={devices=[1,1,2]}, input_shape=f64[49,59]` inside
+  `shard_map/mnP,PX->mnX`, the RI-K contraction. The cause is not how the
+  contraction is written but the operand's rank: a 3-D sharded parameter has
+  its 3-D sharding attached to the 2-D bitcast that every `dot_general` on it
+  takes, and XLA rejects the mismatch. `ShardedDFCoulomb` now holds its slab
+  tensor as `(nao², nauxp)`, built that way rather than reshaped (a reshape
+  carries the original sharding), so the operand entering `shard_map` is
+  already 2-D. Same bytes, same contraction, and the `jax<0.11` pin this
+  needed is gone. `scripts/perf/shardmap_jax_compat.py` records the
+  experiment: on GPU under 0.11 every 3-D formulation fails and only the flat
+  one passes, while on CPU all of them pass, so that check has to run on a
+  GPU to mean anything.
 - **`import dftax` no longer starts an XLA backend.** Importing the package
   used to build three JAX arrays at module scope (the Boys interpolation
   table, the PW92/PBE constants, the 3-center sign array), which brought up

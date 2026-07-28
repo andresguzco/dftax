@@ -616,7 +616,7 @@ class DFCoulomb(CoulombTerm):
 class ShardedDFCoulomb(CoulombTerm):
     """Materialized RI-J with the 3-center tensor sharded over the aux axis.
 
-    Each device holds a ``(nao, nao, naux/ndev)`` slab of ``int3c`` (built
+    Each device holds a ``(nao², naux/ndev)`` slab of ``int3c`` (built
     directly in shards; see :func:`dftax.ks.shard._build_int3c_sharded`) and
     contracts its own slice of ``γ_P = Σ_μν (μν|P) P_μν``; the slices are
     ``all_gather``-ed (γ is a tiny naux-vector) and the metric quadratic form
@@ -634,13 +634,19 @@ class ShardedDFCoulomb(CoulombTerm):
     contribute exactly nothing to J or K.
     """
 
-    int3c: Float[Array, "nao nao nauxp"]
+    # Flat (nao², nauxp), not (nao, nao, nauxp): the contraction is a matmul
+    # over the auxiliary axis either way, and a 2-D sharded operand is what
+    # jax 0.11 on GPU accepts (a 3-D one has its 3-D sharding attached to the
+    # 2-D bitcast the dot_general takes, which XLA rejects on rank). nao is
+    # kept alongside because the exchange needs the (m, n) structure back.
+    int3c: Float[Array, "nao2 nauxp"]
     int2c_inv: Float[Array, "nauxp nauxp"]
     devices: tuple = eqx.field(static=True)
+    nao: int = eqx.field(static=True, default=0)
     hf_coeff: float = eqx.field(static=True, default=0.0)
     # Range-separated hybrids: the attenuated slab tensor, the (padded)
     # attenuated metric inverse, and the long-range exchange fraction.
-    int3c_lr: Float[Array, "nao nao nauxp"] | None = None
+    int3c_lr: Float[Array, "nao2 nauxp"] | None = None
     int2c_inv_lr: Float[Array, "nauxp nauxp"] | None = None
     hf_coeff_lr: float = eqx.field(static=True, default=0.0)
 
@@ -651,7 +657,8 @@ class ShardedDFCoulomb(CoulombTerm):
         jmesh = jax.sharding.Mesh(np.asarray(self.devices), ("aux",))
         spec = jax.sharding.PartitionSpec
         ndev = len(self.devices)
-        slab = self.int3c.shape[2] // ndev
+        nao = self.nao
+        slab = self.int3c.shape[1] // ndev
         ax = self.hf_coeff
         ax_lr = self.hf_coeff_lr
         nspin = P.shape[0]
@@ -659,16 +666,16 @@ class ShardedDFCoulomb(CoulombTerm):
         Lf_lr = (_rik_cholesky(self.int2c_inv_lr)
                  if ax_lr != 0.0 else self.int2c_inv)
 
-        def exchange(t3x, Lfull, Pst):
-            """Σ_σ tr(P_σ K P_σ) partials for one operator's slab tensor."""
+        def exchange(flat, Lfull, Pst):
+            """Σ_σ tr(P_σ K P_σ) partials for one operator's slab tensor,
+            taken flattened as ``(nao², slab)``."""
             my = jax.lax.axis_index("aux")
             rows = jax.lax.dynamic_slice_in_dim(Lfull, my * slab, slab, axis=0)
-            W = jnp.zeros_like(t3x)                              # (nao, nao, slab)
+            W = jnp.zeros_like(flat)                             # (nao², slab)
             for d in range(ndev):                                # all-to-all rounds
-                part_d = jnp.einsum(
-                    "mnP,PX->mnX", t3x, rows[:, d * slab:(d + 1) * slab]
-                )
+                part_d = flat @ rows[:, d * slab:(d + 1) * slab]
                 W = jnp.where(my == d, jax.lax.psum(part_d, "aux"), W)
+            W = W.reshape(nao, nao, slab)
 
             def tr_pkp(Q):                                       # local X-slab partial
                 QW = jnp.einsum("ls,mlX->msX", Q, W)
@@ -682,7 +689,7 @@ class ShardedDFCoulomb(CoulombTerm):
 
         def part(t3, vinv, Lfull, t3lr, Llr, Pst):
             Ptot = jnp.sum(Pst, axis=0)
-            g_local = jnp.einsum("mnP,mn->P", t3, Ptot)         # local aux slice
+            g_local = t3.T @ Ptot.reshape(-1)                    # local aux slice
             g = jax.lax.all_gather(g_local, "aux", tiled=True)   # (nauxp,) replicated
             e = 0.5 * jnp.dot(g, vinv @ g)
             if ax != 0.0:
@@ -700,8 +707,8 @@ class ShardedDFCoulomb(CoulombTerm):
         # the identical quadratic form after the gather).
         return shard_map(
             part, mesh=jmesh,
-            in_specs=(spec(None, None, "aux"), spec(), spec(),
-                      spec(None, None, "aux"), spec(), spec()),
+            in_specs=(spec(None, "aux"), spec(), spec(),
+                      spec(None, "aux"), spec(), spec()),
             out_specs=spec(), check_vma=False,
         )(self.int3c, self.int2c_inv, Lf, t3lr, Lf_lr, P)
 

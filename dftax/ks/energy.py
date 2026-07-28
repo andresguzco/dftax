@@ -643,7 +643,7 @@ class KS(eqx.Module):
                 )
             self.coulomb = ShardedDFCoulomb(
                 int3c=int3c_s, int2c_inv=vinv, devices=devices,
-                hf_coeff=float(xc.hf_coeff),
+                nao=nao_final, hf_coeff=float(xc.hf_coeff),
                 int3c_lr=int3c_lr_s, int2c_inv_lr=vinv_lr,
                 hf_coeff_lr=hf_lr,
             )

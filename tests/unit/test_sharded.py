@@ -81,10 +81,13 @@ def test_sharded_df_matches_unsharded():
     ksm = KS(mol, PBE(), grid=GRID, coulomb=df(AUX), mesh=mesh())
     assert isinstance(ksm.coulomb, ShardedDFCoulomb)
 
-    nauxp = ksm.coulomb.int3c.shape[2]
+    # The slab tensor is flat (nao², nauxp): a 2-D sharded operand is what
+    # jax 0.11 accepts for the exchange matmul (see ShardedDFCoulomb).
+    nauxp = ksm.coulomb.int3c.shape[1]
     ndev = len(jax.devices())
+    assert ksm.coulomb.int3c.shape[0] == ksm.coulomb.nao ** 2
     assert all(
-        s.data.shape[2] == nauxp // ndev
+        s.data.shape[1] == nauxp // ndev
         for s in ksm.coulomb.int3c.addressable_shards
     )
     e0 = float(ks0.coulomb.energy(P, ks0.S, ks0.nocc))

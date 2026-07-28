@@ -241,6 +241,13 @@ def _build_int3c_sharded(basis, aux_basis, devices, omega=None):
             if fn_hi - fn_lo < slab_max:
                 blk = jnp.pad(
                     blk, ((0, 0), (0, 0), (0, slab_max - (fn_hi - fn_lo))))
+            # Flattened to (nao², slab) at construction, not later: a 3-D
+            # sharded array keeps its 3-D sharding through a reshape, and
+            # jax 0.11 on GPU then attaches that to the 2-D bitcast every
+            # dot_general takes, which XLA rejects on rank. The auxiliary
+            # axis is the sharded one either way, so the layout is the same
+            # bytes; only the annotation differs.
+            blk = blk.reshape(blk.shape[0] * blk.shape[1], blk.shape[2])
             blk.block_until_ready()
         shards.append(jax.device_put(blk, dev))
 
@@ -248,9 +255,9 @@ def _build_int3c_sharded(basis, aux_basis, devices, omega=None):
            else basis.centers.shape[0])
     jmesh = jax.sharding.Mesh(np.asarray(devices), ("aux",))
     sh = jax.sharding.NamedSharding(
-        jmesh, jax.sharding.PartitionSpec(None, None, "aux")
+        jmesh, jax.sharding.PartitionSpec(None, "aux")
     )
     int3c = jax.make_array_from_single_device_arrays(
-        (nao, nao, ndev * slab_max), sh, shards
+        (nao * nao, ndev * slab_max), sh, shards
     )
     return int3c, ndev * slab_max, jnp.asarray(pos)

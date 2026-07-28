@@ -7,13 +7,14 @@ dot_general takes as its operand. Each formulation below is a candidate fix.
 
     XLA_FLAGS=--xla_force_host_platform_device_count=2 python repro_shardmap.py
 
-Status: this reduction does NOT reproduce the failure. All four formulations
-pass on 0.10.2 and on 0.11.0 on CPU with two forced devices, while the real
-two-node run fails on 0.11.0 on GPU. So the trigger is not the contraction
-shape alone: it needs the GPU backend, the production shapes, or the
-surrounding graph (the metric quadratic form, the all_gather, the Cholesky).
-Keep this as the cheap first check when trying a jax release, but reproduce
-against tests/unit/test_sharded.py on real devices before concluding anything.
+What it showed, and what fixed the engine: on CPU every formulation passes on
+both 0.10.2 and 0.11.0, so the CPU run proves nothing. On GPU under 0.11 all
+four 3-D-parameter formulations fail identically and only ``flat_param``, which
+hands shard_map an operand that is already 2-D, survives. The rank mismatch is
+not in how the contraction is spelled but in the parameter: a 3-D sharded
+operand has its 3-D sharding attached to the 2-D bitcast the dot_general takes.
+ShardedDFCoulomb now stores its slab tensor flat for that reason. Run this on
+GPU (not CPU) when checking a new jax release.
 """
 
 import sys
@@ -64,7 +65,31 @@ def make(kind):
     )
 
 
-print(f"jax {jax.__version__}, {ndev} devices")
+def make_flat():
+    """The candidate fix: hand shard_map a 2-D operand, so the dot_general's
+    bitcast has nothing 3-D to inherit a sharding from."""
+    def exchange(flat, Lfull):                     # flat: (nao*nao, slab)
+        my = jax.lax.axis_index("aux")
+        rows = jax.lax.dynamic_slice_in_dim(Lfull, my * slab, slab, axis=0)
+        W = jnp.zeros_like(flat)
+        for d in range(ndev):
+            part = flat @ rows[:, d * slab:(d + 1) * slab]
+            W = jnp.where(my == d, jax.lax.psum(part, "aux"), W)
+        return jax.lax.psum(jnp.sum(W * W), "aux")
+
+    return shard_map(
+        exchange, mesh=mesh,
+        in_specs=(spec(None, "aux"), spec()),
+        out_specs=spec(), check_vma=False,
+    )
+
+
+print(f"jax {jax.__version__}, {ndev} devices, backend {jax.default_backend()}")
+try:
+    v = float(jax.jit(make_flat())(t3.reshape(nao * nao, nauxp), L))
+    print(f"  {'flat_param':16s} OK    {v:.8f}")
+except Exception as exc:                                       # noqa: BLE001
+    print(f"  {'flat_param':16s} FAIL  {str(exc).strip().splitlines()[0][:130]}")
 for kind in ("einsum", "reshape_matmul", "tensordot", "dot_general"):
     try:
         val = float(jax.jit(make(kind))(t3, L))

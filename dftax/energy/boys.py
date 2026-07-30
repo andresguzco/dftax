@@ -81,29 +81,45 @@ def _boys_ref(n: int, t: jax.Array) -> jax.Array:
 def _build_table() -> np.ndarray:
     """F_n(t_grid) for n = 0.._TBL_NMAX on the t-grid, exact at the nodes.
 
-    Computed in float64 via ``jax.scipy.special`` (no scipy runtime dependency). x64
-    is forced for the build so the table keeps full precision regardless of whether
-    the importing process has enabled x64 yet, then restored. Returns a numpy float64
-    array of shape (ng, _TBL_NMAX + 1).
+    Pure numpy float64, by the standard stable scheme: the ascending series
+
+        F_N(t) = e^{-t} Σ_k (2t)^k / [(2N+1)(2N+3)···(2N+2k+1)]
+
+    at a top order chosen so that ``2N+1 > 2·_TMAX`` (every term then decays
+    from the first, so the sum converges geometrically), followed by the
+    downward recursion ``F_{n-1} = (2t·F_n + e^{-t}) / (2n-1)``, which damps
+    rounding error instead of amplifying it the way the upward one does.
+
+    Building it without JAX is deliberate: nothing at import time may start an
+    XLA backend, or a multi-node run can no longer join its process group
+    (``jax.distributed.initialize`` must come first). It also removes the old
+    x64 flip-and-restore, since numpy is float64 whatever the importing
+    process has configured.
+
+    Returns:
+        float64 array of shape (ng, _TBL_NMAX + 1).
     """
     ng = int(round(_TMAX / _DT)) + 1
-    tg = np.arange(ng, dtype=np.float64) * _DT
+    t = np.arange(ng, dtype=np.float64) * _DT
+    two_t = 2.0 * t
+    exp_mt = np.exp(-t)
+    n_top = max(_TBL_NMAX, int(_TMAX)) + 20
 
-    was_enabled = jax.config.read("jax_enable_x64")
-    jax.config.update("jax_enable_x64", True)
-    try:
-        tg_j = jnp.asarray(tg, dtype=jnp.float64)
-        tg_safe = jnp.where(tg_j > 0.0, tg_j, 1.0)   # avoid 0/0 at the t=0 node (overwritten below)
-        cols = []
-        for n in range(_TBL_NMAX + 1):
-            a = n + 0.5
-            # F_n(t) = Gamma(a) * P(a, t) / (2 t^a); the t=0 node is the 1/(2n+1) limit.
-            f = jnp.exp(gammaln(a)) * gammainc(a, tg_safe) / (2.0 * tg_safe ** a)
-            f = f.at[0].set(1.0 / (2 * n + 1))
-            cols.append(np.asarray(f, dtype=np.float64))
-    finally:
-        jax.config.update("jax_enable_x64", was_enabled)
+    term = np.full(ng, 1.0 / (2 * n_top + 1))
+    total = term.copy()
+    for k in range(1, 500):
+        term = term * two_t / (2 * n_top + 2 * k + 1)
+        total += term
+        if np.max(term) <= 1e-18 * np.min(total):
+            break
+    f = exp_mt * total                                   # F_{n_top}
 
+    cols = [None] * (_TBL_NMAX + 1)
+    for n in range(n_top, 0, -1):
+        if n <= _TBL_NMAX:
+            cols[n] = f
+        f = (two_t * f + exp_mt) / (2 * n - 1)           # F_{n-1}
+    cols[0] = f
     return np.stack(cols, axis=1)
 
 

@@ -149,7 +149,8 @@ gradients of anything.
 Three independent levers, all values on the builder: density fitting
 (`coulomb=df(...)`, O(N³) memory), streaming (`chunk=` on the grid or DF spec,
 removes the materialized tensors), and multi-GPU (`mesh=mesh()`, shards the grid
-and the DF tensor across devices). The
+and the DF tensor across devices, over the GPUs of one node or, after
+`distributed()`, of a whole multi-node allocation). The
 [Coulomb backends](tutorials/coulomb-backends.md) page has the full ladder and a
 backend-choice table.
 

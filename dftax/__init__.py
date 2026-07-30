@@ -42,7 +42,7 @@ from dftax.integrals import (
     eri3c_matrix,
 )
 from dftax.ks import (
-    KS, System, exact, df, mesh,
+    KS, System, exact, df, mesh, distributed, is_coordinator, barrier,
     core, sad, minao, sap,
     scf, adiis, fermi, newton, roks, minimize, forces, scf_batched,
     KSResult,
@@ -64,6 +64,7 @@ __all__ = [
     "__version__",
     # build: system + choices-as-values
     "KS", "System", "Molecule", "exact", "df", "becke", "points", "mesh",
+    "distributed", "is_coordinator", "barrier",
     # initial guesses (the guess= argument of the solvers)
     "core", "sad", "minao", "sap",
     # dispersion (the dispersion= argument of KS)

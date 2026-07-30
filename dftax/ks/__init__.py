@@ -14,6 +14,7 @@ through the same spin-stacked code path.
 
 from dftax.ks.energy import KS, System
 from dftax.ks.guess import core, sad, minao, sap
+from dftax.ks.distributed import barrier, distributed, is_coordinator
 from dftax.ks.shard import mesh, MeshSpec
 from dftax.ks.terms import (
     exact, df,
@@ -33,6 +34,7 @@ from dftax.ks.implicit import implicit_density
 
 __all__ = [
     "KS", "System", "exact", "df", "mesh",
+    "distributed", "is_coordinator", "barrier",
     "core", "sad", "minao", "sap",
     "scf", "minimize", "forces", "scf_batched", "KSResult", "BatchedResult",
     "CoulombTerm", "ExactCoulomb", "StreamedExactCoulomb", "DFCoulomb",

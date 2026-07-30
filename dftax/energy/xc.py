@@ -1,9 +1,12 @@
 """Exchange-correlation functionals for KS-DFT."""
 
 import abc
+import math
+
 import equinox as eqx
 import jax
 
+import numpy as np
 from jax import numpy as jnp
 from jax import Array
 from jax.scipy.special import erf as _jerf
@@ -141,14 +144,16 @@ class PBECorrelation(DensityFunctional):
     name: ClassVar[str] = "PBE"
     xc_type: ClassVar[str] = "GGA"
 
-    gamma: ClassVar[float] = (1.0 - jnp.log(2.0)) / (jnp.pi**2)
+    gamma: ClassVar[float] = (1.0 - math.log(2.0)) / (math.pi**2)
     beta: ClassVar[float] = 0.06672455060314922
     fz20: ClassVar[float] = 1.709920934161365617563962776245
 
     # --- Constants ---
     # PW92 Modified Parameters
     # Rows: [Para, Ferro, Alpha] | Cols: [A, alpha1, beta1, beta2, beta3, beta4]
-    pw_params: ClassVar[Float[Array, "3 6"]] = jnp.array(
+    # numpy, not jnp: an import-time jnp.array would start an XLA backend
+    # (and freeze the dtype at whatever x64 setting the importer had).
+    pw_params: ClassVar[Float[Array, "3 6"]] = np.array(
         [
             [0.0310907, 0.21370, 7.5957, 3.5876, 1.6382, 0.49294],  # Paramagnetic
             [0.01554535, 0.20548, 14.1189, 6.1977, 3.3662, 0.62517],  # Ferromagnetic
@@ -332,7 +337,7 @@ class VWN5Correlation(DensityFunctional):
     c_f: ClassVar[float] = 18.0578
     x0_f: ClassVar[float] = -0.32500
     # Spin stiffness (alpha_c)
-    A_a: ClassVar[float] = -1.0 / (6.0 * jnp.pi ** 2)  # = -0.01688685
+    A_a: ClassVar[float] = -1.0 / (6.0 * math.pi ** 2)  # = -0.01688685
     b_a: ClassVar[float] = 1.13107
     c_a: ClassVar[float] = 13.0045
     x0_a: ClassVar[float] = -0.0047584
@@ -442,7 +447,7 @@ class LYPCorrelation(DensityFunctional):
     c: ClassVar[float] = 0.2533
     d: ClassVar[float] = 0.349
     # Thomas-Fermi kinetic coefficient: C_F = (3/10)(3π²)^(2/3)
-    C_F: ClassVar[float] = 0.3 * (3.0 * jnp.pi ** 2) ** (2 / 3)
+    C_F: ClassVar[float] = 0.3 * (3.0 * math.pi ** 2) ** (2 / 3)
 
     @staticmethod
     def _closed_shell(rho: ScalarFeature, gamma: ScalarFeature) -> Scalar:

@@ -16,6 +16,8 @@ Formula:
              × (-1)^{τ+υ+φ} · R_{t+τ,u+υ,v+φ}(ρ, P_ab-C)
 """
 
+import numpy as np
+
 import jax
 import jax.numpy as jnp
 from jax import lax
@@ -203,7 +205,9 @@ def _hermite_coulomb(rho, RPC, max_t=_MAX_T, max_m=_MAX_M, omega=None):
 # ---------------------------------------------------------------------------
 
 # Precomputed sign array for (-1)^τ
-_SIGN = jnp.array([(-1.0) ** i for i in range(_MAX_T)])
+# numpy: nothing at import time may start an XLA backend (multi-node needs
+# jax.distributed.initialize to run first); jnp ops accept it unchanged.
+_SIGN = np.array([(-1.0) ** i for i in range(_MAX_T)])
 
 
 def _eri3c_sizes(basis, aux_basis):

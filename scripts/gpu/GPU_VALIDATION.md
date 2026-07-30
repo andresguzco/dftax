@@ -41,6 +41,86 @@ anchor correctness):
   4-GPU `test_sharded`). DF force comparisons across independently converged
   solves need matched densities or tight `d_tol` (see `_metric_pinv`).
 
+## Update 2026-07-25 (multi-process: the mesh across processes)
+
+Same node, four processes of one GPU each, which is the multi-node code path
+(global arrays, non-addressable devices, real collectives) with the
+interconnect replaced by NVLink. Reproduce with:
+
+```bash
+python scripts/gpu/validate_distributed.py --local-world 4 --mol water \
+    --basis sto-3g --xc PBE0
+```
+
+| quantity | value |
+|---|---|
+| local solve (1 GPU, no collectives) | -75.245969939768 Ha |
+| sharded solve (4 GPUs, 4 processes) | -75.245969939557 Ha |
+| difference | 2.1e-10 Ha |
+| build / solve wall (distributed) | 36.1 s / 3.8 s |
+
+Both solves converge; the difference is the usual RI-metric-amplified
+reassociation (see the tolerance note in `tests/unit/test_sharded.py`).
+
+## Update 2026-07-27 (two nodes, Tamia)
+
+The interconnect leg, on the Alliance cluster Tamia (H100): two nodes, one
+process each, four GPUs per process (job 385468, `tg10607` and
+`tg11301`): `processes: 2  local devices: 4  global devices: 8`.
+
+| case | local (1 GPU) | sharded (8 GPUs, 2 nodes) | difference | build / solve |
+|---|---:|---:|---:|---:|
+| water / sto-3g | -75.245969939640 | -75.245969939572 | 6.8e-11 Ha | 94.1 s / 21.4 s |
+| ethanol / def2-svp | -154.744957355090 | -154.744957354010 | 1.1e-09 Ha | 477.2 s / 35.0 s |
+
+All PBE0, all PASS, submitted with `scripts/gpu/alliance_setup.sh`. An earlier
+pair of runs (385450) got one GPU per node and passed the same way at 9.9e-11
+and 4.2e-10; see the note below on why they were one-GPU. The eight-slab
+ethanol build costs 477 s against 181 s for two slabs, which is the per-slab
+compilation this record already flags, now measured out to eight.
+
+Three things these runs established that the single-node rehearsal could not:
+
+- **The process group forms across nodes and the collectives carry.** The
+  sharded solve reproduces the single-device answer to 1e-10 over the real
+  fabric, so nothing in the aux-slab path depends on the devices being local.
+- **jax 0.11.0 broke the sharded exchange, and the fix was the operand's
+  rank.** The same job on the same nodes failed first (job 385432) with
+  `INVALID_ARGUMENT: Invalid sharding for instruction ...
+  sharding={devices=[1,1,2]}, input_shape=f64[49,59]` inside
+  `shard_map/mnP,PX->mnX`. Reproduced on a local A100 and reduced with
+  `scripts/perf/shardmap_jax_compat.py`: under 0.11 on GPU, every formulation
+  of the contraction fails when the shard_map parameter is 3-D (einsum,
+  tensordot, dot_general, explicit reshape alike) and the one taking an
+  already-2-D parameter passes, because a 3-D sharded operand has its 3-D
+  sharding attached to the 2-D bitcast the dot_general takes. On CPU all of
+  them pass, so the check must run on a GPU. `ShardedDFCoulomb` now stores
+  the slab tensor as `(nao², nauxp)` and the pin is gone; verified on 0.11
+  locally, single-process across 2 GPUs (2.9e-10 Ha) and 2 processes
+  (9.7e-10 Ha).
+
+- **A task that owns several GPUs has to ask for them.** The first two runs
+  came back with `local devices: 1` although SLURM had granted four per node,
+  and the launcher was not at fault: an `--overlap` probe inside the same job
+  saw all four. JAX's SLURM detection assumes one process per GPU, so it takes
+  the local process id as the local device id and a one-task-per-node job
+  claims a single device. `distributed()` now fills in `local_device_ids` for
+  that layout, which is what turned 2x1 into 2x4.
+
+Slab-build characterization on ethanol/def2-svp, four slabs of a 335-function
+auxiliary basis (84/85/81/85):
+
+| build | wall (cold) | peak device memory |
+|---|---|---|
+| single device, whole tensor | 115 s | 0.88 GiB |
+| four shell-aligned slabs | 392 s | 0.23 GiB (largest slab) |
+
+The memory is the point of the sharded path and it behaves; the cold wall does
+not, and the cause is compilation, not arithmetic: the slab loop builds one
+device at a time, and each slab recompiles its shell-class kernels because the
+per-class triple counts (and so the chunk sizes and shapes) differ from slab to
+slab. Sharing those compilations across slabs is the open follow-up.
+
 ## Environment
 
 | | |

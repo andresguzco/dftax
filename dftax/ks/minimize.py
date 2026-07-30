@@ -57,14 +57,6 @@ def _density_stack(Zs, S, w: float) -> Float[Array, "nspin nao nao"]:
     )
 
 
-def _core_guess(ks: KS) -> tuple[Float[Array, "nao nocc"], ...]:
-    """Per-channel occupied core-Hamiltonian eigenvectors (S-orthonormal)."""
-    X = canonical_orthonormalizer(ks.S)
-    _, Cp = jnp.linalg.eigh(X.T @ ks.hcore @ X)
-    C = X @ Cp
-    return tuple(C[:, :n] for n in ks.nocc)
-
-
 def _guess_orbitals(ks: KS, guess) -> tuple[Float[Array, "nao nocc"], ...]:
     """Occupied orbitals from a guess density: one Fock build at ``P0``,
     then the per-channel aufbau eigenvectors (the standard way to turn a
@@ -110,8 +102,8 @@ def minimize(
             overshoot the true crossing by up to ``check_every - 1`` steps.
             ``verbose`` checks every step.
         Z0: optional initial coefficient guess, one ``(nao, nocc_σ)`` array
-            per channel (a bare array is accepted for a closed shell); default
-            is the core-Hamiltonian guess.
+            per channel (a bare array is accepted for a closed shell); the
+            default follows ``guess`` below.
         guess: alternative to ``Z0``: a spec from
             :func:`~dftax.ks.guess.core` / :func:`~dftax.ks.guess.sad` /
             :func:`~dftax.ks.guess.minao` / :func:`~dftax.ks.guess.sap` or an
@@ -129,7 +121,10 @@ def minimize(
     if Z0 is not None and guess is not None:
         raise ValueError("pass either Z0 (explicit orbitals) or guess, not both.")
     if Z0 is None:
-        Zs = _core_guess(ks) if guess is None else _guess_orbitals(ks, guess)
+        # Same default as the SCF solvers (minao, with core where it cannot
+        # be built): one Fock build at the guess density, then its aufbau
+        # eigenvectors.
+        Zs = _guess_orbitals(ks, guess)
     elif isinstance(Z0, (tuple, list)):
         Zs = tuple(jnp.asarray(Z) for Z in Z0)
     else:

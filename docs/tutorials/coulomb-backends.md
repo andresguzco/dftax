@@ -23,11 +23,12 @@ switches to the streamed contraction when that tensor would exceed a device-awar
 memory budget (a fraction of the GPU pool; a fixed fallback on CPU).
 The RI error against the exact path is sub-mHa with the JK-fitting set.
 
-On the materialized path the auxiliary basis is built in spherical harmonics
-(fewer functions, a tighter fit, and better cross-backend force
-reproducibility); the streamed and mesh-sharded backends keep the cartesian
-span. `df(spherical=False)` pins a common fit space when comparing across
-backends, and `df(screen=...)` without a `chunk` runs a shell-pair Schwarz
+On the materialized paths (single-device and mesh-sharded alike) the auxiliary
+basis is built in spherical harmonics (fewer functions, a tighter fit, and
+better cross-backend force reproducibility); only the streamed backend keeps
+the cartesian span, since it contracts cartesian auxiliary elements on the
+fly. `df(spherical=False)` pins a common fit space when comparing against the
+streamed backend, and `df(screen=...)` without a `chunk` runs a shell-pair Schwarz
 compact gather on the materialized build (screened pairs stay exactly zero),
 so extended systems build O(N) rather than O(N²) shell pairs.
 
@@ -107,3 +108,27 @@ every collective differentiates, so `scf`, `minimize`, and property workflows
 run unchanged. Not supported with `mesh=`: the streamed `df(chunk=...)` backend
 (the aux-sharded materialized backend covers that memory regime); it raises at
 build time. A one-device mesh is a no-op.
+
+### Across nodes
+
+The same mesh spans several nodes once the processes have joined a group.
+JAX is multi-controller, so the launcher starts the same program once per node
+and `distributed()` does the rest:
+
+```python
+from dftax import KS, df, distributed, mesh, scf
+
+distributed()                    # reads the SLURM environment; no-op on one node
+ks = KS(mol, PBE0(), coulomb=df("def2-universal-jkfit"), mesh=mesh())
+res = scf(ks)                    # every process runs this and gets the same answer
+```
+
+Call it before any other JAX work (importing dftax starts no backend, so import
+order does not matter). Each process builds only the auxiliary slabs its own
+GPUs hold, which is what makes the capacity scale with the whole allocation
+rather than with one node. Every process must run the same sequence of
+collectives, so use `is_coordinator()` to guard printing and file writes, never
+to skip a build; `barrier()` synchronizes the group where they stop being
+symmetric. `scripts/gpu/distributed.sbatch` is a working two-node template, and
+`scripts/gpu/validate_distributed.py` checks a distributed solve against the
+single-device one in the same run.

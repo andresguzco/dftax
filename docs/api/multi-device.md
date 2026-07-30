@@ -9,3 +9,14 @@ hand.
 ::: dftax.ks.shard.MeshSpec
 ::: dftax.ks.terms.ShardedGridXC
 ::: dftax.ks.terms.ShardedDFCoulomb
+
+## Across nodes
+
+One process per node runs the same program; `distributed()` joins them into a
+process group, after which the mesh spans every GPU of every node and nothing
+else about the calculation changes. Call it before any other JAX work (dftax
+itself starts no backend at import, so importing it first is fine).
+
+::: dftax.ks.distributed.distributed
+::: dftax.ks.distributed.is_coordinator
+::: dftax.ks.distributed.barrier

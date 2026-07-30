@@ -4,6 +4,133 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed (behavior)
+- **The default initial guess is `minao()`, not the core Hamiltonian.** The
+  core guess ignores electron repulsion entirely and is the weakest standard
+  starting point; the projected minimal-basis superposition costs one
+  cross-overlap solve per element and lands much closer, which is where the
+  benchmark against GPU4PySCF (whose default is also minao) found dftax
+  spending most of its extra iterations: 75 against 30 on cubane/def2-svp, 10
+  against 7 on water/sto-3g. `scf`, `newton`, `minimize` and `scf_batched`
+  share the policy. The converged answer is unchanged, since the guess only
+  sets where the iteration starts. Two cases keep the core Hamiltonian: a
+  calculation built from a raw `System`, which has no element identities to
+  project atomic densities from, and any element the minimal basis or the
+  ground-state configuration table does not reach, which warns and falls back.
+  Both apply only to the default; an explicit `guess=minao()` still raises.
+
+### Added
+- **Multi-node execution.** `distributed()` joins the processes of a
+  multi-task job into one JAX process group (the coordinator, the process
+  count and the ids come from the SLURM environment), after which `mesh()`
+  spans every GPU of every node and nothing else about the calculation
+  changes: the auxiliary slabs and the quadrature shard across the union of
+  the devices while the dense matrices stay replicated. Each process builds
+  only the slabs it can address and the pieces are assembled into global
+  arrays; the replicated build outputs are promoted to global replicas so
+  they can feed a computation over the whole mesh. `barrier()` and
+  `is_coordinator()` cover the points where the processes stop being
+  symmetric (printing, file I/O, teardown), and
+  `scripts/gpu/validate_distributed.py` runs the parity check in-run, either
+  as one process per GPU on a node or one task per node
+  (`scripts/gpu/distributed.sbatch`): PBE0/water on 4 processes reproduces
+  the single-device solve to 2.1e-10 Ha, and on two nodes of the Alliance
+  cluster Tamia to 9.9e-11 Ha (water/sto-3g) and 4.2e-10 Ha
+  (ethanol/def2-svp), so the collectives carry over a real interconnect and
+  not just NVLink. Batch-axis sharding
+  (`scf_batched(mesh=...)`) stays single-process and now says so at build
+  time; across nodes, shard a single calculation instead.
+
+### Changed (performance)
+- **The 3-center build transforms each shell class to spherical harmonics on
+  its own block, instead of contracting the assembled cartesian tensor.**
+  `cart2sph` is block diagonal over shells with one block per angular
+  momentum, so the three whole-tensor contractions that used to end the build
+  never mixed shells; doing them per class costs O(block) and lets the build
+  scatter straight into the spherical tensor, so the cartesian one is never
+  materialized. That chain was the KS build's memory peak: on
+  coronene/def2-svp it held a 3.12 GiB cartesian tensor plus a ~3 GiB
+  intermediate per contraction. Peak device memory for the whole build falls
+  from 11.59 GiB to 7.17 GiB (the 3-center build alone, 14.31 to 7.05 GiB);
+  the converged energy moves by 4e-8 Ha, floating-point re-association of the
+  same sums. The structural assumption is now checked once per plan, so a
+  basis whose transform is not shell-block-diagonal fails loudly instead of
+  building wrong integrals.
+- **The bucketed integral builders index by block, not by element.** Every
+  shell class gathered its basis rows and scattered its results through index
+  arrays it had materialized to the full `(ntrip, nca, ncb, ncc)` shape, which
+  reached the compiler as literals: 12.7 GB of captured constants on
+  coronene/def2-svp, one 14.2M x 3 index array (~171 MB) for the largest class
+  alone. One index per block instead, in int32, cuts the 3-center build's MLIR
+  from 2.46 GiB to 1.09 GiB and lets XLA emit block copies rather than
+  millions of scalar writes. Same integrals, bit for bit.
+- **The mesh-sharded DF backend builds shell-aligned auxiliary slabs.** Slab
+  boundaries now fall on shell boundaries (a greedy partition balanced on
+  per-device function counts), which unlocks the two things arbitrary
+  function-index slabs forbade: each slab builds on the shell-class-bucketed
+  engine instead of the flat reference engine, and the sharded path uses the
+  spherical auxiliary basis like the materialized default (same fit space, so
+  the cross-backend pins in the parity tests are gone and
+  `df(spherical=True)` is legal with `mesh=`). Shell alignment makes slabs
+  unequal; each pads to the largest and the metric inverse is embedded at the
+  padded positions, preserving the exact-zero padding invariants the sharded
+  Coulomb term relies on. Measured against the single-device build: on
+  ethanol/def2-svp the slabbed tensor reproduces it to the last bit of every
+  reduction checked (sum, sum of squares, max), and peak device memory falls
+  from 0.88 GiB to 0.23 GiB, the largest of the four slabs; on water/sto-3g
+  the largest element-wise difference is 9e-16, about one ulp, which the RI
+  metric's pseudo-inverse turns into 5e-10 in the total energy.
+
+### Fixed
+- **The GPU4PySCF benchmark was not comparing like with like, and the "dftax
+  needs 10x the SCF iterations" conclusion it produced was an artifact of its
+  own stopping test.** `scripts/bench/gpu4pyscf_bench.py` set PySCF's
+  `conv_tol = 1e-9`, from which PySCF derives an orbital-gradient threshold of
+  `sqrt(conv_tol) = 3.16e-5`, while asking dftax for `d_tol = 1e-7` on the same
+  quantity: 316x tighter. Both engines now take the same `conv_tol` and the
+  same `sqrt` rule, and the iteration counts go from 53/7 and 128/10 to **7/7
+  and 18/9**. The tolerance is 1e-8, not 1e-9, because dftax's RI Coulomb
+  energy has a ~3e-8 Ha evaluation noise floor at coronene size, below which an
+  energy criterion is a lottery rather than a test; the 102 iterations that
+  `1e-9`/`1e-7` cost buy 8.4e-9 Ha of energy.
+
+  Three further problems in the same harness: it switched PySCF's angular
+  pruning off to match "dftax, which has no pruning", but `becke()` has pruned
+  by the same NWChem rule since before that harness was written, so PySCF was
+  integrating 1.7x more points (both sides are unpruned now, which is where the
+  two point counts come closest, dftax emitting 93.3% of PySCF's with the rest
+  being `becke()`'s `r_max` tail truncation); it rebuilt `KS` for the repeat run
+  while the previous one was still alive, roughly doubling the sampled peak;
+  and it reported only the externally sampled figure, which is a high-water
+  mark of each engine's memory *pool*, ~2.4x dftax's real peak-in-use. It now
+  drops the old build first and reports pool and in-use side by side.
+- **The sharded 3-center tensor is stored flat, which is what jax 0.11
+  accepts.** A two-node run on Tamia (H100) failed under jax 0.11.0 with
+  `INVALID_ARGUMENT: Invalid sharding for instruction ...
+  sharding={devices=[1,1,2]}, input_shape=f64[49,59]` inside
+  `shard_map/mnP,PX->mnX`, the RI-K contraction. The cause is not how the
+  contraction is written but the operand's rank: a 3-D sharded parameter has
+  its 3-D sharding attached to the 2-D bitcast that every `dot_general` on it
+  takes, and XLA rejects the mismatch. `ShardedDFCoulomb` now holds its slab
+  tensor as `(nao², nauxp)`, built that way rather than reshaped (a reshape
+  carries the original sharding), so the operand entering `shard_map` is
+  already 2-D. Same bytes, same contraction, and the `jax<0.11` pin this
+  needed is gone. `scripts/perf/shardmap_jax_compat.py` records the
+  experiment: on GPU under 0.11 every 3-D formulation fails and only the flat
+  one passes, while on CPU all of them pass, so that check has to run on a
+  GPU to mean anything.
+- **`import dftax` no longer starts an XLA backend.** Importing the package
+  used to build three JAX arrays at module scope (the Boys interpolation
+  table, the PW92/PBE constants, the 3-center sign array), which brought up
+  the backend and made `jax.distributed.initialize` impossible afterwards,
+  the one thing a multi-node run must do first. All three are numpy now. The
+  Boys table is rebuilt by the standard stable scheme (ascending series at a
+  top order past `2·t_max`, then the damping downward recursion) instead of
+  an incomplete gamma with a temporary x64 flip, and agrees with the exact
+  reference to 3e-14 relative across the whole table.
+
 ## [0.5.0] - 2026-07-25
 
 ### Changed

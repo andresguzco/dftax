@@ -43,6 +43,64 @@ from dftax.utils.vmap import vmap as chunked_vmap
 # basis silently balloons the recursion instead.
 _ORBITAL_L_MAX = 6
 
+# Scatter-index dtype. AO/auxiliary indices are bounded by nao/naux (~10⁴ at
+# the largest basis this engine builds), so int32 is ample and halves the
+# index bytes the class scatters hand to XLA.
+_IDX = np.int32
+
+
+def _scatter_blocks(out, starts, vals):
+    """Write one dense block per shell (triple) into ``out``.
+
+    ``starts`` is ``(nblk, out.ndim)`` block corners and ``vals`` is
+    ``(nblk, *window)``, the cartesian components a class's shells span. This
+    is the block form of the elementwise ``out.at[i_idx, j_idx, ...].set(vals)``
+    the builders used to run, and writes exactly the same entries.
+
+    The elementwise form had to name every written element: on
+    coronene/def2-svp its largest class handed XLA a 14.2M x 3 index array,
+    ~171 MB that had to be constant-folded and then scattered point by point.
+    One index per block is 54x smaller there, and XLA emits block copies.
+    Blocks within a class are disjoint (the shell triples are distinct, and
+    the plan keeps only one of each bra pair), hence ``unique_indices``.
+    """
+    ndim = out.ndim
+    dnums = lax.ScatterDimensionNumbers(
+        update_window_dims=tuple(range(1, ndim + 1)),
+        inserted_window_dims=(),
+        scatter_dims_to_operand_dims=tuple(range(ndim)),
+    )
+    return lax.scatter(
+        out, starts, vals, dnums,
+        indices_are_sorted=False, unique_indices=True,
+        mode=lax.GatherScatterMode.PROMISE_IN_BOUNDS,
+    )
+
+
+def _gather_rows(x, starts, nrows):
+    """``nrows`` consecutive rows of ``x`` from each row index in ``starts``.
+
+    Returns ``(nblk, nrows, *x.shape[1:])``: the block-gather counterpart of
+    :func:`_scatter_blocks`, used to pull a shell class's cartesian components
+    out of the (possibly traced) ``BasisData`` arrays.
+
+    The builders used to spell this ``x[starts[:, None] + np.arange(nrows)]``,
+    whose numpy index array is ``nrows`` times the size of ``starts`` and
+    reaches the compiler as a literal. On coronene/def2-svp those literals
+    were most of a 2.5 GiB MLIR module (the 3-center build alone accounted for
+    2.46 GiB and ~110 s of lowering + compilation); one start per block leaves
+    the size of the indices independent of the class's angular momentum.
+    """
+    dnums = lax.GatherDimensionNumbers(
+        offset_dims=tuple(range(1, x.ndim + 1)),
+        collapsed_slice_dims=(),
+        start_index_map=(0,),
+    )
+    return lax.gather(
+        x, starts[:, None], dnums, (nrows,) + x.shape[1:],
+        mode=lax.GatherScatterMode.PROMISE_IN_BOUNDS,
+    )
+
 
 def _check_orbital_l(basis):
     """Reject orbital bases above the engine's angular-momentum ceiling."""
@@ -111,6 +169,55 @@ def _shell_pair_keep(basis, thresh):
     return {(int(a), int(b)) for b, a in zip(hi_idx, lo_idx)}  # (ia<=ib)
 
 
+def _sph_layout(shells, cart2sph):
+    """``(starts, n)``: each shell's spherical row and the spherical dimension.
+
+    Falls back to the cartesian layout when the basis carries no transform, so
+    a cartesian basis flows through the same code path with ``2l+1`` replaced
+    by the shell's own component count.
+    """
+    starts, acc = [], 0
+    for (l, _row0, ncomp, _npr) in shells:
+        starts.append(acc)
+        acc += (2 * l + 1) if cart2sph is not None else ncomp
+    return starts, acc
+
+
+def _check_uniform_cart2sph(cart2sph, shells, sph_starts, what):
+    """Assert the per-shell structure :func:`eri3c_matrix_bucketed` relies on.
+
+    The builder transforms each shell class to spherical harmonics with a
+    single ``(ncart, 2l+1)`` block sliced out of the basis's own ``cart2sph``,
+    which is only the same matrix if that matrix is block diagonal over shells
+    and if same-l shells share a block. Both hold by construction for
+    :func:`~dftax.basis.loader.build_basis_data` (it block-diagonalizes one
+    vendored block per l) and for PySCF's ``cart2sph_coeff``, but a basis that
+    broke either would otherwise produce silently wrong integrals, so it is
+    checked once per plan (host side, on concrete metadata).
+    """
+    if cart2sph is None:
+        return
+    C = np.asarray(cart2sph)
+    seen = {}
+    for (l, row0, ncomp, _npr), s0 in zip(shells, sph_starts):
+        nsa = 2 * l + 1
+        blk = C[row0:row0 + ncomp, s0:s0 + nsa]
+        rows = C[row0:row0 + ncomp]
+        if not np.isclose(np.abs(rows).sum(), np.abs(blk).sum()):
+            raise ValueError(
+                f"{what} cart2sph is not block diagonal over shells (shell "
+                f"l={l} at row {row0} writes outside its spherical columns); "
+                f"the bucketed 3-center build cannot transform per class."
+            )
+        if l in seen and not np.array_equal(seen[l], blk):
+            raise ValueError(
+                f"{what} cart2sph blocks differ between shells of l={l}; the "
+                f"bucketed 3-center build assumes one block per angular "
+                f"momentum."
+            )
+        seen.setdefault(l, blk)
+
+
 def plan_eri3c(basis, aux_basis, keep_pairs=None):
     """Static bucket plan for :func:`eri3c_matrix_bucketed`.
 
@@ -118,6 +225,10 @@ def plan_eri3c(basis, aux_basis, keep_pairs=None):
     closure over the basis template): everything it returns is python ints
     in nested tuples, safe to pass through ``eqx.filter_jit`` as a static
     argument.
+
+    Returns ``(nao, naux, nao_sph, naux_sph, classes)``, where each class
+    carries both its cartesian shell rows (where its integrals are computed)
+    and its spherical shell rows (where they are written).
 
     ``keep_pairs`` (from :func:`_shell_pair_keep`) optionally restricts the
     build to the Schwarz-significant bra shell-pairs; screened pairs are absent
@@ -127,16 +238,23 @@ def plan_eri3c(basis, aux_basis, keep_pairs=None):
     _check_orbital_l(basis)
     bra, ang_b = _shells(basis.angular, basis.exponents)
     aux, ang_a = _shells(aux_basis.angular, aux_basis.exponents)
-    buckets = defaultdict(lambda: ([], [], []))
+    bra_sph, nao_sph = _sph_layout(bra, basis.cart2sph)
+    aux_sph, naux_sph = _sph_layout(aux, aux_basis.cart2sph)
+    _check_uniform_cart2sph(basis.cart2sph, bra, bra_sph, "orbital")
+    _check_uniform_cart2sph(aux_basis.cart2sph, aux, aux_sph, "auxiliary")
+    buckets = defaultdict(lambda: ([], [], [], [], [], []))
     nprims = {}
     for ia, (la, ra, nca, npa) in enumerate(bra):
         for jb_off, (lb, rb, ncb, npb) in enumerate(bra[ia:]):
             if keep_pairs is not None and (ia, ia + jb_off) not in keep_pairs:
                 continue
-            for lc, rc, ncc, npc in aux:
+            ib = ia + jb_off
+            for kc, (lc, rc, ncc, npc) in enumerate(aux):
                 key = (la, lb, lc)
                 b = buckets[key]
                 b[0].append(ra); b[1].append(rb); b[2].append(rc)
+                b[3].append(bra_sph[ia]); b[4].append(bra_sph[ib])
+                b[5].append(aux_sph[kc])
                 cur = nprims.get(key, (0, 0, 0))
                 nprims[key] = (max(cur[0], npa), max(cur[1], npb),
                                max(cur[2], npc))
@@ -146,7 +264,8 @@ def plan_eri3c(basis, aux_basis, keep_pairs=None):
                      for i in range(ncomp))
 
     classes = []
-    for (la, lb, lc), (rows_a, rows_b, rows_c) in sorted(buckets.items()):
+    for (la, lb, lc), rows in sorted(buckets.items()):
+        rows_a, rows_b, rows_c, sph_a, sph_b, sph_c = rows
         nca = (la + 1) * (la + 2) // 2
         ncb = (lb + 1) * (lb + 2) // 2
         ncc = (lc + 1) * (lc + 2) // 2
@@ -157,10 +276,11 @@ def plan_eri3c(basis, aux_basis, keep_pairs=None):
             ang_tup(ang_a, rows_c[0], lc, ncc),
             tuple(rows_a), tuple(rows_b), tuple(rows_c),
             nprims[(la, lb, lc)],
+            tuple(sph_a), tuple(sph_b), tuple(sph_c),
         ))
     nao = int(np.asarray(basis.angular).shape[0])
     naux = int(np.asarray(aux_basis.angular).shape[0])
-    return (nao, naux, tuple(classes))
+    return (nao, naux, nao_sph, naux_sph, tuple(classes))
 
 
 # ---------------------------------------------------------------------------
@@ -428,23 +548,22 @@ def nuclear_attraction_bucketed(basis, atom_coords, atom_charges, plan=None,
     out = jnp.zeros((nao, nao), dtype=cen.dtype)
     for (la, lb, anga, angb, ra, rb, nprims) in classes:
         npa, npb = nprims
-        ra = np.asarray(ra); rb = np.asarray(rb)
+        ra = np.asarray(ra).astype(_IDX); rb = np.asarray(rb).astype(_IDX)
         nca = (la + 1) * (la + 2) // 2
         ncb = (lb + 1) * (lb + 2) // 2
-        ca = basis.coefficients[ra[:, None] + np.arange(nca)][:, :, :npa]
-        cb = basis.coefficients[rb[:, None] + np.arange(ncb)][:, :, :npb]
+        ca = _gather_rows(basis.coefficients, ra, nca)[:, :, :npa]
+        cb = _gather_rows(basis.coefficients, rb, ncb)[:, :, :npb]
         fn = _compiled_pair_kernel(la, lb, anga, angb,
                                    min(chunk, ra.shape[0]))
         vals = fn(cen[ra], cen[rb],
                   basis.exponents[ra][:, :npa], basis.exponents[rb][:, :npb],
                   ca, cb, atom_coords, atom_charges)   # (npair, nca, ncb)
-        i_idx = ra[:, None, None] + np.arange(nca)[:, None]
-        j_idx = rb[:, None, None] + np.arange(ncb)[None, :]
-        i_idx, j_idx = (np.broadcast_to(x, vals.shape)
-                        for x in (i_idx, j_idx))
-        out = out.at[i_idx.ravel(), j_idx.ravel()].set(vals.reshape(-1))
-        # bra symmetry via index swap (same rule as the 3-center scatter)
-        out = out.at[j_idx.ravel(), i_idx.ravel()].set(vals.reshape(-1))
+        starts = np.stack((ra, rb), axis=1).astype(_IDX)
+        out = _scatter_blocks(out, starts, vals)
+        # bra symmetry: transposed block at the mirrored corner (see the
+        # 3-center scatter)
+        out = _scatter_blocks(out, np.ascontiguousarray(starts[:, ::-1]),
+                              vals.swapaxes(1, 2))
     if basis.cart2sph is not None:
         out = basis.cart2sph.T @ out @ basis.cart2sph
     return out
@@ -549,23 +668,21 @@ def overlap_kinetic_bucketed(basis, plan=None, chunk=4096):
     T = jnp.zeros((nao, nao), dtype=cen.dtype)
     for (la, lb, anga, angb, ra, rb, nprims) in classes:
         npa, npb = nprims
-        ra = np.asarray(ra); rb = np.asarray(rb)
+        ra = np.asarray(ra).astype(_IDX); rb = np.asarray(rb).astype(_IDX)
         nca = (la + 1) * (la + 2) // 2
         ncb = (lb + 1) * (lb + 2) // 2
-        ca = basis.coefficients[ra[:, None] + np.arange(nca)][:, :, :npa]
-        cb = basis.coefficients[rb[:, None] + np.arange(ncb)][:, :, :npb]
+        ca = _gather_rows(basis.coefficients, ra, nca)[:, :, :npa]
+        cb = _gather_rows(basis.coefficients, rb, ncb)[:, :, :npb]
         fn = _compiled_st_kernel(la, lb, anga, angb, min(chunk, ra.shape[0]))
         Sv, Tv = fn(cen[ra], cen[rb],
                     basis.exponents[ra][:, :npa],
                     basis.exponents[rb][:, :npb], ca, cb)
-        i_idx = ra[:, None, None] + np.arange(nca)[:, None]
-        j_idx = rb[:, None, None] + np.arange(ncb)[None, :]
-        i_idx, j_idx = (np.broadcast_to(x, Sv.shape)
-                        for x in (i_idx, j_idx))
-        for out_i, vals in ((0, Sv), (1, Tv)):
-            tgt = S if out_i == 0 else T
-            tgt = tgt.at[i_idx.ravel(), j_idx.ravel()].set(vals.reshape(-1))
-            tgt = tgt.at[j_idx.ravel(), i_idx.ravel()].set(vals.reshape(-1))
+        starts = np.stack((ra, rb), axis=1).astype(_IDX)
+        swapped = np.ascontiguousarray(starts[:, ::-1])
+        for out_i, vals in ((0, Sv), (1, Tv)):      # blocks, see the 3-center
+            tgt = S if out_i == 0 else T            # scatter
+            tgt = _scatter_blocks(tgt, starts, vals)
+            tgt = _scatter_blocks(tgt, swapped, vals.swapaxes(1, 2))
             if out_i == 0:
                 S = tgt
             else:
@@ -640,23 +757,22 @@ def eri2c_matrix_bucketed(aux_basis, omega=None, plan=None, chunk=4096):
     out = jnp.zeros((naux, naux), dtype=cen.dtype)
     for (la, lb, anga, angb, ra, rb, nprims) in classes:
         npa, npb = nprims
-        ra = np.asarray(ra); rb = np.asarray(rb)
+        ra = np.asarray(ra).astype(_IDX); rb = np.asarray(rb).astype(_IDX)
         nca = (la + 1) * (la + 2) // 2
         ncb = (lb + 1) * (lb + 2) // 2
-        ca = aux_basis.coefficients[ra[:, None] + np.arange(nca)][:, :, :npa]
-        cb = aux_basis.coefficients[rb[:, None] + np.arange(ncb)][:, :, :npb]
+        ca = _gather_rows(aux_basis.coefficients, ra, nca)[:, :, :npa]
+        cb = _gather_rows(aux_basis.coefficients, rb, ncb)[:, :, :npb]
         fn = _compiled_eri2c_kernel(la, lb, anga, angb, omega,
                                     min(chunk, ra.shape[0]))
         vals = fn(cen[ra], cen[rb],
                   aux_basis.exponents[ra][:, :npa],
                   aux_basis.exponents[rb][:, :npb], ca, cb)
-        i_idx = ra[:, None, None] + np.arange(nca)[:, None]
-        j_idx = rb[:, None, None] + np.arange(ncb)[None, :]
-        i_idx, j_idx = (np.broadcast_to(x, vals.shape)
-                        for x in (i_idx, j_idx))
-        out = out.at[i_idx.ravel(), j_idx.ravel()].set(vals.reshape(-1))
-        # symmetry via index swap (same rule as the 3-center scatter)
-        out = out.at[j_idx.ravel(), i_idx.ravel()].set(vals.reshape(-1))
+        starts = np.stack((ra, rb), axis=1).astype(_IDX)
+        out = _scatter_blocks(out, starts, vals)
+        # symmetry: transposed block at the mirrored corner (see the 3-center
+        # scatter)
+        out = _scatter_blocks(out, np.ascontiguousarray(starts[:, ::-1]),
+                              vals.swapaxes(1, 2))
     if aux_basis.cart2sph is not None:
         C = aux_basis.cart2sph
         out = C.T @ out @ C
@@ -672,25 +788,42 @@ def eri3c_matrix_bucketed(basis, aux_basis, omega=None, plan=None,
     differentiable w.r.t. both ``centers`` arrays. ``plan`` is the static
     skeleton from :func:`plan_eri3c`; when None it is derived here, which
     requires concrete (non-traced) basis metadata.
+
+    Each class is transformed to spherical harmonics on its own
+    ``(ntrip, nca, ncb, ncc)`` block and written straight into the spherical
+    tensor. Transforming the assembled cartesian tensor instead -- three
+    whole-tensor contractions -- was the KS build's memory peak: on
+    coronene/def2-svp it held a 3.12 GiB cartesian tensor plus a ~3 GiB
+    intermediate per contraction, 14.3 GiB peak against 6.3 GiB for the
+    scatter alone. Per-class blocks make the transform O(block) and drop the
+    cartesian tensor entirely. Legitimate because cart2sph is block diagonal
+    over shells with one block per angular momentum (checked in
+    :func:`plan_eri3c`), so the whole-tensor contraction never mixed shells.
     """
     if plan is None:
         plan = plan_eri3c(basis, aux_basis)
-    nao, naux, classes = plan
+    _nao_cart, _naux_cart, nao_sph, naux_sph, classes = plan
     cen, cen_aux = basis.centers, aux_basis.centers
-    out = jnp.zeros((nao, nao, naux), dtype=cen.dtype)
-    for (la, lb, lc, anga, angb, angc, ra, rb, rc, nprims) in classes:
+    c2s_bra, c2s_aux = basis.cart2sph, aux_basis.cart2sph
+    out = jnp.zeros((nao_sph, nao_sph, naux_sph), dtype=cen.dtype)
+    for (la, lb, lc, anga, angb, angc, ra, rb, rc, nprims,
+         sa, sb, sc) in classes:
         npa, npb, npc = nprims
-        ra = np.asarray(ra); rb = np.asarray(rb); rc = np.asarray(rc)
+        row_a, row_b, row_c = ra[0], rb[0], rc[0]      # class representative
+        sph_a, sph_b, sph_c = sa[0], sb[0], sc[0]
+        ra = np.asarray(ra).astype(_IDX)
+        rb = np.asarray(rb).astype(_IDX)
+        rc = np.asarray(rc).astype(_IDX)
         nca = (la + 1) * (la + 2) // 2
         ncb = (lb + 1) * (lb + 2) // 2
         ncc = (lc + 1) * (lc + 2) // 2
-        # every array is gathered from the (possibly traced) BasisData
-        # leaves with static indices; rows are zero-padded past each
+        # every array is block-gathered from the (possibly traced) BasisData
+        # leaves at the class's shell starts; rows are zero-padded past each
         # shell's true contraction length, so the class-level primitive
         # trim is a static slice
-        ca = basis.coefficients[ra[:, None] + np.arange(nca)][:, :, :npa]
-        cb = basis.coefficients[rb[:, None] + np.arange(ncb)][:, :, :npb]
-        cc = aux_basis.coefficients[rc[:, None] + np.arange(ncc)][:, :, :npc]
+        ca = _gather_rows(basis.coefficients, ra, nca)[:, :, :npa]
+        cb = _gather_rows(basis.coefficients, rb, ncb)[:, :, :npb]
+        cc = _gather_rows(aux_basis.coefficients, rc, ncc)[:, :, :npc]
         fn = _compiled_class_kernel(la, lb, lc, anga, angb, angc, omega,
                                     min(chunk, ra.shape[0]))
         vals = fn(
@@ -699,23 +832,23 @@ def eri3c_matrix_bucketed(basis, aux_basis, omega=None, plan=None,
             aux_basis.exponents[rc][:, :npc],
             ca, cb, cc,
         )   # (ntrip, nca, ncb, ncc)
-        i_idx = ra[:, None, None, None] + np.arange(nca)[:, None, None]
-        j_idx = rb[:, None, None, None] + np.arange(ncb)[None, :, None]
-        k_idx = rc[:, None, None, None] + np.arange(ncc)[None, None, :]
-        i_idx, j_idx, k_idx = (np.broadcast_to(x, vals.shape)
-                               for x in (i_idx, j_idx, k_idx))
-        out = out.at[i_idx.ravel(), j_idx.ravel(), k_idx.ravel()].set(
-            vals.reshape(-1))
-        # bra symmetry: writing vals[t,a,b,c] at (j0+b, i0+a, k0+c) IS the
-        # transpose; swap the index arrays and keep the value order (a value
-        # transpose would double-transpose against the (a, b) ravel).
-        out = out.at[j_idx.ravel(), i_idx.ravel(), k_idx.ravel()].set(
-            vals.reshape(-1))
-    if basis.cart2sph is not None:
-        Cs = basis.cart2sph
-        out = jnp.einsum("ip,pqk->iqk", Cs.T, out)
-        out = jnp.einsum("jq,iqk->ijk", Cs.T, out)
-    if aux_basis.cart2sph is not None:
-        Ca = aux_basis.cart2sph
-        out = jnp.einsum("kr,ijr->ijk", Ca.T, out)
+        # cartesian -> spherical on the block, one (ncart, 2l+1) slice per
+        # axis taken from the basis's own transform (see the docstring)
+        if c2s_bra is not None:
+            Ta = c2s_bra[row_a:row_a + nca, sph_a:sph_a + 2 * la + 1]
+            Tb = c2s_bra[row_b:row_b + ncb, sph_b:sph_b + 2 * lb + 1]
+            vals = jnp.einsum("tabc,ap->tpbc", vals, Ta)
+            vals = jnp.einsum("tpbc,bq->tpqc", vals, Tb)
+        if c2s_aux is not None:
+            Tc = c2s_aux[row_c:row_c + ncc, sph_c:sph_c + 2 * lc + 1]
+            vals = jnp.einsum("tpqc,cr->tpqr", vals, Tc)
+        starts = np.stack((np.asarray(sa), np.asarray(sb), np.asarray(sc)),
+                          axis=1).astype(_IDX)
+        out = _scatter_blocks(out, starts, vals)
+        # bra symmetry: the (ba|c) block at corner (sb, sa, sc) is the (a, b)
+        # transpose of this one. Under the elementwise scatter the swap of the
+        # index arrays did that implicitly; a block write has to transpose the
+        # block itself.
+        out = _scatter_blocks(out, np.ascontiguousarray(starts[:, (1, 0, 2)]),
+                              vals.transpose(0, 2, 1, 3))
     return out

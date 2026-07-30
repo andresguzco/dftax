@@ -411,15 +411,37 @@ def scf(
         ks: the built :class:`~dftax.ks.energy.KS` energy functional.
         max_iter: maximum SCF iterations.
         e_tol: convergence threshold on the total-energy change (Ha).
-        d_tol: convergence threshold on the DIIS commutator norm.
+
+            An energy evaluation has a floating-point floor of roughly
+            ``5e-11·|E|``, essentially all of it in the density-fitted Coulomb
+            term (the RI metric pseudo-inverse retains directions down to 1e-7
+            of the largest eigenvalue, so contracting against the explicit
+            inverse is that ill-conditioned by construction; the XC quadrature
+            and the one-electron terms are clean to 1e-14). Measured by
+            sweeping the density along a line and fitting the parabola the
+            energy is analytically supposed to be: 1.06e-8 Ha on cubane,
+            2.30e-8 on bicyclo[2.2.2]octane, 2.07e-8 on adamantane, 3.52e-8 on
+            coronene. A threshold below that is not a test but a coin flip,
+            which is worth knowing before tightening this: on coronene,
+            ``e_tol=1e-9`` costs 102 iterations against 10 for ``1e-8``, and
+            buys 8.4e-9 Ha. The floor is far below chemical accuracy and does
+            not affect any energy difference; it only limits what this
+            argument can usefully be set to, and it grows with the molecule
+            while the default does not.
+        d_tol: convergence threshold on the DIIS commutator norm. This is the
+            orbital gradient, and unlike ``e_tol`` it has no such floor, so it
+            is the criterion to tighten and the one that keeps working as the
+            system grows. PySCF's convention for the pair is
+            ``d_tol = sqrt(e_tol)``.
         diis_space: DIIS history depth (fixed buffer size).
         lindep_thresh: overlap-eigenvalue cutoff for canonical orthonormalization.
         level_shift: Saunders-Hillier virtual level shift (Ha).
         guess: initial density, a spec from :func:`~dftax.ks.guess.core` /
             :func:`~dftax.ks.guess.sad` / :func:`~dftax.ks.guess.minao` /
             :func:`~dftax.ks.guess.sap`, or an explicit ``(nspin, nao, nao)``
-            density array (warm restart). ``None`` is the core-Hamiltonian
-            guess.
+            density array (warm restart). ``None`` is
+            :func:`~dftax.ks.guess.minao`, falling back to the core
+            Hamiltonian where the atomic densities cannot be built.
         accel: an :func:`adiis` spec runs the far-from-convergence
             iterations with ADIIS (energy-model extrapolation, no
             oscillation), blending into Pulay DIIS near the fixed point;

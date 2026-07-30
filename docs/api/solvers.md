@@ -12,7 +12,9 @@ differentiable function of the functional (CPHF via `custom_vjp`).
 All solvers (and `scf_batched`) take a `guess=`: an initial-density spec
 from `core` / `sad` / `minao` / `sap`, or an explicit `(nspin, nao, nao)`
 density array for warm restarts. The guess changes the iteration count, never
-the converged fixed point.
+the converged fixed point. The default is `minao()`; the core Hamiltonian is
+the fallback for a raw `System` (no element identities) or an element the
+minimal basis does not reach.
 
 ::: dftax.ks.scf.scf
 ::: dftax.ks.scf.adiis

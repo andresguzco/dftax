@@ -1688,10 +1688,11 @@ keeps every pair, a bit-identical build.</p>
             <td>
               <div class="doc-md-description">
                 <p>auxiliary basis span. <code>None</code> (default) uses spherical
-harmonics on the materialized path (non-redundant fit, positive
-definite metric) and cartesian components on the streamed and
-mesh-sharded paths (which contract cartesian auxiliary elements
-on the fly). <code>False</code> forces cartesian everywhere, e.g. to
+harmonics on the materialized paths, single-device and
+mesh-sharded alike (non-redundant fit, positive definite metric),
+and cartesian components on the streamed path (which contracts
+cartesian auxiliary elements on the fly). <code>False</code> forces
+cartesian everywhere, e.g. to
 compare a materialized result against a streamed one in the same
 fit space; <code>True</code> asserts the spherical span and raises where
 it is unsupported.</p>

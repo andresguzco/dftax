@@ -1559,6 +1559,12 @@
 persistent compilation cache makes repeats compute-bound:</p>
 <div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">JAX_COMPILATION_CACHE_DIR</span><span class="o">=</span>~/.cache/dftax-xla-cache
 </code></pre></div>
+<p>It caches XLA's output, not the Python tracing that produces the program, so
+it removes some of the build and not all of it: coronene/def2-svp with density
+fitting builds in 286 s cold and 198 s against a warm cache (35 MB of entries)
+on an A100. Reuse needs the same shapes, so it pays off across repeated runs
+of one system (geometry optimization, conformer batches) rather than across
+different molecules.</p>
 <h2 id="pick-the-coulomb-backend-by-system-size">Pick the Coulomb backend by system size<a class="headerlink" href="#pick-the-coulomb-backend-by-system-size" title="Permanent link">¤</a></h2>
 <p>Exact ERI for small molecules and as the RI-free reference; <code>df(...)</code> from a
 few dozen atoms; add <code>chunk=</code> (and <code>screen=1e-10</code>) when the nao²×naux tensor

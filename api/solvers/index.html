@@ -1650,7 +1650,9 @@ differentiable function of the functional (CPHF via <code>custom_vjp</code>).</p
 <p>All solvers (and <code>scf_batched</code>) take a <code>guess=</code>: an initial-density spec
 from <code>core</code> / <code>sad</code> / <code>minao</code> / <code>sap</code>, or an explicit <code>(nspin, nao, nao)</code>
 density array for warm restarts. The guess changes the iteration count, never
-the converged fixed point.</p>
+the converged fixed point. The default is <code>minao()</code>; the core Hamiltonian is
+the fallback for a raw <code>System</code> (no element identities) or an element the
+minimal basis does not reach.</p>
 
 
 <div class="doc doc-object doc-function">
@@ -1720,6 +1722,22 @@ the converged fixed point.</p>
             <td>
               <div class="doc-md-description">
                 <p>convergence threshold on the total-energy change (Ha).</p>
+<p>An energy evaluation has a floating-point floor of roughly
+<code>5e-11·|E|</code>, essentially all of it in the density-fitted Coulomb
+term (the RI metric pseudo-inverse retains directions down to 1e-7
+of the largest eigenvalue, so contracting against the explicit
+inverse is that ill-conditioned by construction; the XC quadrature
+and the one-electron terms are clean to 1e-14). Measured by
+sweeping the density along a line and fitting the parabola the
+energy is analytically supposed to be: 1.06e-8 Ha on cubane,
+2.30e-8 on bicyclo[2.2.2]octane, 2.07e-8 on adamantane, 3.52e-8 on
+coronene. A threshold below that is not a test but a coin flip,
+which is worth knowing before tightening this: on coronene,
+<code>e_tol=1e-9</code> costs 102 iterations against 10 for <code>1e-8</code>, and
+buys 8.4e-9 Ha. The floor is far below chemical accuracy and does
+not affect any energy difference; it only limits what this
+argument can usefully be set to, and it grows with the molecule
+while the default does not.</p>
               </div>
             </td>
             <td>
@@ -1735,7 +1753,11 @@ the converged fixed point.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>convergence threshold on the DIIS commutator norm.</p>
+                <p>convergence threshold on the DIIS commutator norm. This is the
+orbital gradient, and unlike <code>e_tol</code> it has no such floor, so it
+is the criterion to tighten and the one that keeps working as the
+system grows. PySCF's convention for the pair is
+<code>d_tol = sqrt(e_tol)</code>.</p>
               </div>
             </td>
             <td>
@@ -1802,8 +1824,9 @@ the converged fixed point.</p>
                 <p>initial density, a spec from :func:<code>~dftax.ks.guess.core</code> /
 :func:<code>~dftax.ks.guess.sad</code> / :func:<code>~dftax.ks.guess.minao</code> /
 :func:<code>~dftax.ks.guess.sap</code>, or an explicit <code>(nspin, nao, nao)</code>
-density array (warm restart). <code>None</code> is the core-Hamiltonian
-guess.</p>
+density array (warm restart). <code>None</code> is
+:func:<code>~dftax.ks.guess.minao</code>, falling back to the core
+Hamiltonian where the atomic densities cannot be built.</p>
               </div>
             </td>
             <td>
@@ -2150,8 +2173,8 @@ overshoot the true crossing by up to <code>check_every - 1</code> steps.
             <td>
               <div class="doc-md-description">
                 <p>optional initial coefficient guess, one <code>(nao, nocc_σ)</code> array
-per channel (a bare array is accepted for a closed shell); default
-is the core-Hamiltonian guess.</p>
+per channel (a bare array is accepted for a closed shell); the
+default follows <code>guess</code> below.</p>
               </div>
             </td>
             <td>

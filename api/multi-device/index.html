@@ -1326,6 +1326,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#across-nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Across nodes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Across nodes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dftax.ks.distributed.distributed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;distributed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dftax.ks.distributed.is_coordinator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;is_coordinator
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dftax.ks.distributed.barrier" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;barrier
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2412,7 +2462,7 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 
 
         <p>Materialized RI-J with the 3-center tensor sharded over the aux axis.</p>
-<p>Each device holds a <code>(nao, nao, naux/ndev)</code> slab of <code>int3c</code> (built
+<p>Each device holds a <code>(nao², naux/ndev)</code> slab of <code>int3c</code> (built
 directly in shards; see :func:<code>dftax.ks.shard._build_int3c_sharded</code>) and
 contracts its own slice of <code>γ_P = Σ_μν (μν|P) P_μν</code>; the slices are
 <code>all_gather</code>-ed (γ is a tiny naux-vector) and the metric quadratic form
@@ -2786,6 +2836,46 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 
 </div>
 
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.ks.terms.ShardedDFCoulomb.nao" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="n">nao</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+  </span>
+
+<a href="#dftax.ks.terms.ShardedDFCoulomb.nao" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>int([x]) -&gt; integer
+int(x, base=10) -&gt; integer</p>
+<p>Convert a number or string to an integer, or return 0 if no arguments
+are given.  If x is a number, return x.<strong>int</strong>().  For floating-point
+numbers, this truncates towards zero.</p>
+<p>If x is not a number or if base is given, then x must be a string,
+bytes, or bytearray instance representing an integer literal in the
+given base.  The literal can be preceded by '+' or '-' and be surrounded
+by whitespace.  The base defaults to 10.  Valid bases are 0 and 2-36.
+Base 0 means to interpret the base from the string as an integer
+iteral.</p>
+<blockquote>
+<blockquote>
+<blockquote>
+<p>int('0b100', base=0)
+4</p>
+</blockquote>
+</blockquote>
+</blockquote>
+
+    </div>
+
+</div>
+
 
 
 
@@ -2809,7 +2899,7 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 
 
 <h5 id="dftax.ks.terms.ShardedDFCoulomb.__init__" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="fm">__init__</span><span class="p">(</span><span class="n">int3c</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao nao nauxp&#39;</span><span class="p">],</span> <span class="n">int2c_inv</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nauxp nauxp&#39;</span><span class="p">],</span> <span class="n">devices</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">,</span> <span class="n">hf_coeff</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">int3c_lr</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao nao nauxp&#39;</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">int2c_inv_lr</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nauxp nauxp&#39;</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">hf_coeff_lr</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="fm">__init__</span><span class="p">(</span><span class="n">int3c</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao2 nauxp&#39;</span><span class="p">],</span> <span class="n">int2c_inv</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nauxp nauxp&#39;</span><span class="p">],</span> <span class="n">devices</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">,</span> <span class="n">nao</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">hf_coeff</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">int3c_lr</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nao2 nauxp&#39;</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">int2c_inv_lr</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;nauxp nauxp&#39;</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">hf_coeff_lr</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span></code>
 
 <a href="#dftax.ks.terms.ShardedDFCoulomb.__init__" class="headerlink" title="Permanent link">¤</a></h5>
 
@@ -2826,6 +2916,119 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 
 
   </div>
+
+    </div>
+
+</div><h2 id="across-nodes">Across nodes<a class="headerlink" href="#across-nodes" title="Permanent link">¤</a></h2>
+<p>One process per node runs the same program; <code>distributed()</code> joins them into a
+process group, after which the mesh spans every GPU of every node and nothing
+else about the calculation changes. Call it before any other JAX work (dftax
+itself starts no backend at import, so importing it first is fine).</p>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.distributed.distributed" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">distributed</span><span class="o">.</span><span class="n">distributed</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="nb">object</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span></code>
+
+<a href="#dftax.ks.distributed.distributed" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Join the JAX process group; returns <code>(process_index, process_count)</code>.</p>
+<p>Under a multi-task SLURM step (or Open MPI), <code>jax.distributed.initialize</code>
+discovers the coordinator address, the process count and this process's id
+from the environment, and each process claims the GPUs its task was given.
+Outside a multi-task allocation this is a no-op returning <code>(0, 1)</code>, so
+scripts can call it unconditionally.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>**kwargs</code>
+            </td>
+            <td>
+                  <code><span title="object">object</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>passed straight to <code>jax.distributed.initialize</code>
+(<code>coordinator_address</code>, <code>num_processes</code>, <code>process_id</code>,
+<code>local_device_ids</code>); passing any of them forces initialization,
+which is how a single node can host several processes for testing.
+<code>local_device_ids</code> is filled in for the one-task-per-node
+layout, where JAX would otherwise give the task a single GPU.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="note" open>
+  <summary>Note</summary>
+  <p>Call this before touching any JAX API that commits the backend
+(creating an array, querying <code>jax.devices()</code>); JAX cannot join a
+process group after the local backend is up. Calling it twice is
+harmless: the second call returns the established group.</p>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.distributed.is_coordinator" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">distributed</span><span class="o">.</span><span class="n">is_coordinator</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span></code>
+
+<a href="#dftax.ks.distributed.is_coordinator" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>True in exactly one process of the group: guard printing and file
+writes with it, never the construction of a term or a solve.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.distributed.barrier" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">distributed</span><span class="o">.</span><span class="n">barrier</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;dftax&#39;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span></code>
+
+<a href="#dftax.ks.distributed.barrier" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Wait until every process in the group reaches this point.</p>
+<p>Needed where the processes stop being symmetric: before the coordinator
+reads a file the others wrote, and at the end of a run, so no process
+tears down the coordination service while its peers are still talking to
+it. A no-op in a single-process run.</p>
+
 
     </div>
 

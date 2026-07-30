@@ -979,6 +979,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Multi-GPU: mesh=">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#across-nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Across nodes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -1574,11 +1591,12 @@ O(N²·N_aux) memory for the materialized 3-center tensor, and the <code>chunk="
 switches to the streamed contraction when that tensor would exceed a device-aware
 memory budget (a fraction of the GPU pool; a fixed fallback on CPU).
 The RI error against the exact path is sub-mHa with the JK-fitting set.</p>
-<p>On the materialized path the auxiliary basis is built in spherical harmonics
-(fewer functions, a tighter fit, and better cross-backend force
-reproducibility); the streamed and mesh-sharded backends keep the cartesian
-span. <code>df(spherical=False)</code> pins a common fit space when comparing across
-backends, and <code>df(screen=...)</code> without a <code>chunk</code> runs a shell-pair Schwarz
+<p>On the materialized paths (single-device and mesh-sharded alike) the auxiliary
+basis is built in spherical harmonics (fewer functions, a tighter fit, and
+better cross-backend force reproducibility); only the streamed backend keeps
+the cartesian span, since it contracts cartesian auxiliary elements on the
+fly. <code>df(spherical=False)</code> pins a common fit space when comparing against the
+streamed backend, and <code>df(screen=...)</code> without a <code>chunk</code> runs a shell-pair Schwarz
 compact gather on the materialized build (screened pairs stay exactly zero),
 so extended systems build O(N) rather than O(N²) shell pairs.</p>
 <h2 id="exact-4-center-eris">Exact 4-center ERIs<a class="headerlink" href="#exact-4-center-eris" title="Permanent link">¤</a></h2>
@@ -1660,6 +1678,25 @@ every collective differentiates, so <code>scf</code>, <code>minimize</code>, and
 run unchanged. Not supported with <code>mesh=</code>: the streamed <code>df(chunk=...)</code> backend
 (the aux-sharded materialized backend covers that memory regime); it raises at
 build time. A one-device mesh is a no-op.</p>
+<h3 id="across-nodes">Across nodes<a class="headerlink" href="#across-nodes" title="Permanent link">¤</a></h3>
+<p>The same mesh spans several nodes once the processes have joined a group.
+JAX is multi-controller, so the launcher starts the same program once per node
+and <code>distributed()</code> does the rest:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">KS</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">distributed</span><span class="p">,</span> <span class="n">mesh</span><span class="p">,</span> <span class="n">scf</span>
+
+<span class="n">distributed</span><span class="p">()</span>                    <span class="c1"># reads the SLURM environment; no-op on one node</span>
+<span class="n">ks</span> <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE0</span><span class="p">(),</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="s2">&quot;def2-universal-jkfit&quot;</span><span class="p">),</span> <span class="n">mesh</span><span class="o">=</span><span class="n">mesh</span><span class="p">())</span>
+<span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">)</span>                    <span class="c1"># every process runs this and gets the same answer</span>
+</code></pre></div>
+<p>Call it before any other JAX work (importing dftax starts no backend, so import
+order does not matter). Each process builds only the auxiliary slabs its own
+GPUs hold, which is what makes the capacity scale with the whole allocation
+rather than with one node. Every process must run the same sequence of
+collectives, so use <code>is_coordinator()</code> to guard printing and file writes, never
+to skip a build; <code>barrier()</code> synchronizes the group where they stop being
+symmetric. <code>scripts/gpu/distributed.sbatch</code> is a working two-node template, and
+<code>scripts/gpu/validate_distributed.py</code> checks a distributed solve against the
+single-device one in the same run.</p>
 
 
 

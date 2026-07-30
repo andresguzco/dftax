@@ -67,6 +67,22 @@ def read_xyz(name: str) -> str:
     return "; ".join(atoms)
 
 
+# Energy convergence threshold given to *both* engines. The gradient threshold
+# is derived from it as sqrt(CONV_TOL), which is PySCF's own rule
+# (scf/hf.py: `conv_tol_grad = numpy.sqrt(conv_tol)` when unset), applied here
+# to dftax's `d_tol` so the two codes stop on the same test.
+#
+# 1e-8 rather than 1e-9 because dftax's RI Coulomb energy carries a ~3e-8 Ha
+# evaluation noise floor at this size (the metric pseudo-inverse retains
+# directions down to 1e-7 of the largest eigenvalue by design, and the explicit
+# inverse is contracted rather than solved), so an energy threshold below that
+# is not a convergence test, it is a lottery. Measured on coronene: asking
+# 1e-9/1e-7 costs 102 iterations, 1e-9/3.16e-5 costs 44, and 1e-8/1e-4 costs
+# 10, with the 102-iteration answer only 8.4e-9 Ha from the 10-iteration one.
+# Both engines are far inside the 9.3e-6 Ha they disagree by regardless.
+CONV_TOL = 1e-8
+
+
 def run_dftax(atom, basis, aux, xc, level, repeat, ndev):
     import jax
 
@@ -76,17 +92,31 @@ def run_dftax(atom, basis, aux, xc, level, repeat, ndev):
     from dftax.grid import becke
 
     mol = Molecule.from_xyz(atom, basis, spherical=True)
-    grid = becke(*level)
+    # prune=None on both sides (see run_gpu4pyscf), which is the closest the
+    # two grids come: unpruned, dftax emits 93.3% of PySCF's points, the
+    # difference being becke()'s r_max=45 Bohr tail truncation; pruned, it
+    # emits 85.5%, so the two prune rules do not agree as closely as
+    # test_nwchem_prune_matches_pyscf_rule suggests. Taking dftax's default
+    # (which *is* pruned) against an unpruned PySCF, as this harness did
+    # before, gave dftax a grid 1.7x smaller than the one it was measured
+    # against.
+    grid = becke(*level, prune=None)
     functional = getattr(xcmod, xc)()
     walls = []
+    ks = res = None
     for _ in range(repeat):
+        # drop the previous build before the next one: the KS object holds the
+        # 3-center tensor, and keeping it alive across a rebuild doubled the
+        # sampled peak on the repeat runs
+        ks = res = None
         t0 = time.perf_counter()
         ks = KS(mol, functional, grid=grid, coulomb=df(aux),
                 mesh=mesh() if ndev > 1 else None)
         # minao, because that is what PySCF starts from; dftax's own default
         # is the core Hamiltonian, which costs an order of magnitude more
         # iterations here and would measure the guess, not the engine.
-        res = scf(ks, guess=minao(), e_tol=1e-9, d_tol=1e-7)
+        res = scf(ks, guess=minao(), e_tol=CONV_TOL,
+                  d_tol=CONV_TOL ** 0.5)          # PySCF's rule, see CONV_TOL
         e = float(res.e_tot)
         walls.append(time.perf_counter() - t0)
     peak = max(int(d.memory_stats().get("peak_bytes_in_use", 0))
@@ -107,14 +137,20 @@ def run_gpu4pyscf(atom, basis, aux, xc, level, repeat, _ndev):
         t0 = time.perf_counter()
         mf = rks.RKS(mol, xc={"PBE": "pbe", "PBE0": "pbe0"}[xc]).density_fit(
             auxbasis=aux)
-        # Same quadrature as dftax, which has no pruning: PySCF prunes the
-        # angular grid per shell by default, so leaving it on would compare
-        # different numbers of grid points and call it a speed difference.
+        # Both codes prune by the same NWChem rule by default; both have it
+        # switched off here, which is where their point counts come closest
+        # (see run_dftax), so the comparison is not a grid-size difference
+        # wearing a speed costume.
         mf.grids.atom_grid = tuple(level)
         mf.grids.prune = None
-        mf.conv_tol = 1e-9
+        # conv_tol_grad is left unset on purpose: PySCF derives sqrt(conv_tol)
+        # from this, which is the rule the dftax side mirrors explicitly.
+        mf.conv_tol = CONV_TOL
         e = float(mf.kernel())
         walls.append(time.perf_counter() - t0)
+    # CuPy's pool exposes its size, not a peak-in-use watermark; for a code
+    # with no large build transient the two nearly coincide, which is not true
+    # on the dftax side (hence the two memory columns, see drive()).
     peak = int(cupy.get_default_memory_pool().total_bytes())
     return dict(e_tot=e, walls=walls, n_iter=int(mf.cycles),
                 converged=bool(mf.converged), peak_bytes=peak, ndev=1)
@@ -181,13 +217,20 @@ def drive(args):
                 rec[engine] = None
                 continue
             rec[engine] = json.loads(line[0][len("RESULT "):])
-            rec[engine]["peak_bytes"] = peak_mib * 2**20
+            # Two different quantities, both worth having: `pool_bytes` is what
+            # the process took from the driver (each engine's allocator grows
+            # its pool and does not hand it back, so this is a high-water mark
+            # of the pool, not of live data), `peak_bytes` is the allocator's
+            # own peak-in-use. They differ by ~3x on the dftax side, so
+            # reporting only the first reads as a memory gap that is really an
+            # allocation-policy difference.
+            rec[engine]["pool_bytes"] = peak_mib * 2**20
         rows.append(rec)
         print(json.dumps(rec), file=sys.stderr)
 
     print("\n| molecule | atoms | dftax E | GPU4PySCF E | ΔE (Ha) | "
           "iters (dftax/G4P) | dftax cold | warm | GPU4PySCF cold | warm | "
-          "dftax peak | GPU4PySCF peak |")
+          "dftax pool/in-use | GPU4PySCF pool/in-use |")
     print("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for r in rows:
         d, g = r.get("dftax"), r.get("gpu4pyscf")
@@ -202,7 +245,9 @@ def drive(args):
               f"{d['n_iter']}/{g['n_iter']} | "
               f"{d['walls'][0]:.1f} s | {warm(d['walls'])} | "
               f"{g['walls'][0]:.1f} s | {warm(g['walls'])} | "
+              f"{d['pool_bytes'] / 2**30:.2f} / "
               f"{d['peak_bytes'] / 2**30:.2f} GiB | "
+              f"{g['pool_bytes'] / 2**30:.2f} / "
               f"{g['peak_bytes'] / 2**30:.2f} GiB |")
 
 

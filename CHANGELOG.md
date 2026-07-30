@@ -44,6 +44,28 @@ to [Semantic Versioning](https://semver.org/).
   time; across nodes, shard a single calculation instead.
 
 ### Changed (performance)
+- **The 3-center build transforms each shell class to spherical harmonics on
+  its own block, instead of contracting the assembled cartesian tensor.**
+  `cart2sph` is block diagonal over shells with one block per angular
+  momentum, so the three whole-tensor contractions that used to end the build
+  never mixed shells; doing them per class costs O(block) and lets the build
+  scatter straight into the spherical tensor, so the cartesian one is never
+  materialized. That chain was the KS build's memory peak: on
+  coronene/def2-svp it held a 3.12 GiB cartesian tensor plus a ~3 GiB
+  intermediate per contraction. Peak device memory for the whole build falls
+  from 11.59 GiB to 7.17 GiB (the 3-center build alone, 14.31 to 7.05 GiB);
+  the converged energy moves by 4e-8 Ha, floating-point re-association of the
+  same sums. The structural assumption is now checked once per plan, so a
+  basis whose transform is not shell-block-diagonal fails loudly instead of
+  building wrong integrals.
+- **The bucketed integral builders index by block, not by element.** Every
+  shell class gathered its basis rows and scattered its results through index
+  arrays it had materialized to the full `(ntrip, nca, ncb, ncc)` shape, which
+  reached the compiler as literals: 12.7 GB of captured constants on
+  coronene/def2-svp, one 14.2M x 3 index array (~171 MB) for the largest class
+  alone. One index per block instead, in int32, cuts the 3-center build's MLIR
+  from 2.46 GiB to 1.09 GiB and lets XLA emit block copies rather than
+  millions of scalar writes. Same integrals, bit for bit.
 - **The mesh-sharded DF backend builds shell-aligned auxiliary slabs.** Slab
   boundaries now fall on shell boundaries (a greedy partition balanced on
   per-device function counts), which unlocks the two things arbitrary
@@ -62,6 +84,28 @@ to [Semantic Versioning](https://semver.org/).
   metric's pseudo-inverse turns into 5e-10 in the total energy.
 
 ### Fixed
+- **The GPU4PySCF benchmark was not comparing like with like, and the "dftax
+  needs 10x the SCF iterations" conclusion it produced was an artifact of its
+  own stopping test.** `scripts/bench/gpu4pyscf_bench.py` set PySCF's
+  `conv_tol = 1e-9`, from which PySCF derives an orbital-gradient threshold of
+  `sqrt(conv_tol) = 3.16e-5`, while asking dftax for `d_tol = 1e-7` on the same
+  quantity: 316x tighter. Both engines now take the same `conv_tol` and the
+  same `sqrt` rule, and the iteration counts go from 53/7 and 128/10 to **7/7
+  and 18/9**. The tolerance is 1e-8, not 1e-9, because dftax's RI Coulomb
+  energy has a ~3e-8 Ha evaluation noise floor at coronene size, below which an
+  energy criterion is a lottery rather than a test; the 102 iterations that
+  `1e-9`/`1e-7` cost buy 8.4e-9 Ha of energy.
+
+  Three further problems in the same harness: it switched PySCF's angular
+  pruning off to match "dftax, which has no pruning", but `becke()` has pruned
+  by the same NWChem rule since before that harness was written, so PySCF was
+  integrating 1.7x more points (both sides are unpruned now, which is where the
+  two point counts come closest, dftax emitting 93.3% of PySCF's with the rest
+  being `becke()`'s `r_max` tail truncation); it rebuilt `KS` for the repeat run
+  while the previous one was still alive, roughly doubling the sampled peak;
+  and it reported only the externally sampled figure, which is a high-water
+  mark of each engine's memory *pool*, ~2.4x dftax's real peak-in-use. It now
+  drops the old build first and reports pool and in-use side by side.
 - **The sharded 3-center tensor is stored flat, which is what jax 0.11
   accepts.** A two-node run on Tamia (H100) failed under jax 0.11.0 with
   `INVALID_ARGUMENT: Invalid sharding for instruction ...

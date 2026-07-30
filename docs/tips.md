@@ -9,6 +9,13 @@ persistent compilation cache makes repeats compute-bound:
 export JAX_COMPILATION_CACHE_DIR=~/.cache/dftax-xla-cache
 ```
 
+It caches XLA's output, not the Python tracing that produces the program, so
+it removes some of the build and not all of it: coronene/def2-svp with density
+fitting builds in 286 s cold and 198 s against a warm cache (35 MB of entries)
+on an A100. Reuse needs the same shapes, so it pays off across repeated runs
+of one system (geometry optimization, conformer batches) rather than across
+different molecules.
+
 ## Pick the Coulomb backend by system size
 
 Exact ERI for small molecules and as the RI-free reference; `df(...)` from a

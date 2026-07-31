@@ -57,7 +57,7 @@ Same geometry, basis, auxiliary basis, functional and initial guess, and as
 close to the same quadrature as the two codes get (see "What is matched"
 below: dftax integrates 93.3% of PySCF's points); density fitting on both
 sides; each engine in its own process. GPU4PySCF 1.8.0, dftax at `77268b7`
-plus the per-class 3-center build, 2026-07-28.
+plus the per-class 3-center build, 2026-07-30.
 
 ```bash
 G4P_PYTHON=<gpu4pyscf-env>/bin/python DFTAX_GEOM_DIR=<geometric>/data \

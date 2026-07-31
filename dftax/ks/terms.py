@@ -318,21 +318,18 @@ def _eri3c_bra_chunk(basis, aux_basis, inflight):
     return max(1, int(_DF_BRA_BUDGET // per))
 
 
-def _streamed_df_rij(basis, aux_basis, int2c_inv, P, chunk, pairs=None):
-    """RI-J Coulomb energy ``½ γᵀ V⁻¹ γ`` streamed over auxiliary chunks.
+def _streamed_gamma(basis, aux_basis, P, chunk, pairs, k_idx):
+    """``γ_P = Σ_μν (μν|P) P_μν`` for the auxiliary functions named by ``k_idx``.
 
-    ``γ_P = Σ_μν (μν|P) P_μν`` is formed without materializing the (nao²×naux)
-    3-center tensor: each auxiliary function's 3-center block is recomputed (and
-    rematerialized in the backward pass) and contracted with the density on the
-    fly, so DF memory is O(chunk·nao²) instead of O(nao²·naux).
-
-    ``pairs`` (``(pi, pj, w)`` from :func:`~dftax.integrals.eri4c.significant_pairs`)
-    restricts the bra sum to the significant Schwarz pairs ``i<=j`` (with the i<->j
-    weight ``w``), turning the per-aux contraction from O(nao²) to O(N) for extended
-    systems. When ``None`` the full nao² grid is used (dense, exact).
+    Split out of :func:`_streamed_df_rij` so the auxiliary axis can be *divided*
+    as well as chunked: the aux-sharded streamed backend
+    (:class:`ShardedStreamedDFCoulomb`) hands each device its own slice of the
+    indices and gathers the resulting γ pieces. Nothing else has to change,
+    because the 3-center element is looked up per auxiliary index
+    (``_eri3c_elem(..., k)``) rather than sliced out of a stored tensor, so a
+    device needs the whole (small) auxiliary basis and only a different range.
     """
     Ptil = basis.cart2sph @ P @ basis.cart2sph.T if basis.cart2sph is not None else P
-    naux = aux_basis.centers.shape[0]
     # Chunk the bra pairs so the mt³ Hermite tensor is materialized a slab at a time
     # (× the `chunk` aux vmapped concurrently) instead of across the whole nao² batch,
     # which OOMs for f/g. bra_chunk is large for small bases, so no slowdown there.
@@ -358,7 +355,24 @@ def _streamed_df_rij(basis, aux_basis, int2c_inv, P, chunk, pairs=None):
                 return _eri3c_elem(basis, aux_basis, pi[p], pj[p], k) * Pw[p]
             return jnp.sum(_chunked_vmap(pair, chunk_size=bra_chunk)(pidx))
 
-    gamma = _chunked_vmap(gamma_k, chunk_size=chunk, checkpoint=True)(jnp.arange(naux))
+    return _chunked_vmap(gamma_k, chunk_size=chunk, checkpoint=True)(k_idx)
+
+
+def _streamed_df_rij(basis, aux_basis, int2c_inv, P, chunk, pairs=None):
+    """RI-J Coulomb energy ``½ γᵀ V⁻¹ γ`` streamed over auxiliary chunks.
+
+    ``γ_P = Σ_μν (μν|P) P_μν`` is formed without materializing the (nao²×naux)
+    3-center tensor: each auxiliary function's 3-center block is recomputed (and
+    rematerialized in the backward pass) and contracted with the density on the
+    fly, so DF memory is O(chunk·nao²) instead of O(nao²·naux).
+
+    ``pairs`` (``(pi, pj, w)`` from :func:`~dftax.integrals.eri4c.significant_pairs`)
+    restricts the bra sum to the significant Schwarz pairs ``i<=j`` (with the i<->j
+    weight ``w``), turning the per-aux contraction from O(nao²) to O(N) for extended
+    systems. When ``None`` the full nao² grid is used (dense, exact).
+    """
+    naux = aux_basis.centers.shape[0]
+    gamma = _streamed_gamma(basis, aux_basis, P, chunk, pairs, jnp.arange(naux))
     return 0.5 * jnp.dot(gamma, int2c_inv @ gamma)
 
 
@@ -761,6 +775,81 @@ class StreamedDFCoulomb(CoulombTerm):
         return e
 
 
+class ShardedStreamedDFCoulomb(CoulombTerm):
+    """Streamed RI-J with the auxiliary axis divided across a device mesh.
+
+    The streamed backend never builds the ``(nao², naux)`` tensor, which is the
+    only thing that fits at protein scale; this divides its auxiliary axis over
+    the mesh as well, so the per-device work is ``naux/ndev`` auxiliary
+    functions streamed ``chunk`` at a time. Combining the two is the point: the
+    materialized aux-sharded backend still holds ``nao²·naux/ndev`` per device,
+    which for insulin at triple zeta is 15 TiB.
+
+    Each device streams its own contiguous slice of the auxiliary index range
+    into its piece of ``γ``, the pieces are ``all_gather``-ed (γ is a
+    ``naux``-vector, so this is negligible traffic), and the metric quadratic
+    form ``½ γᵀ V⁻¹ γ`` is evaluated replicated -- the same decomposition
+    :class:`ShardedDFCoulomb` uses, and for the same reason: γ is the only
+    quantity that has to cross devices.
+
+    The auxiliary basis is *replicated*, not sliced. The streamed kernel looks
+    an auxiliary function up by index (``_eri3c_elem(..., k)``) instead of
+    slicing a stored slab, so a device needs the whole (small) auxiliary basis
+    and only its own range of ``k``. Indices are assigned contiguously and the
+    range is padded to a multiple of the device count, with the padding masked
+    to zero, so the gathered γ is already in auxiliary order and truncating it
+    to ``naux`` is exact rather than needing a position map.
+
+    Hybrids are not covered: streamed RI-K is a ``custom_vjp`` over orbital
+    chunks (:func:`_streamed_df_rik`) whose sharding is a separate problem.
+    """
+
+    basis: BasisData
+    aux_basis: BasisData
+    int2c_inv: Float[Array, "naux naux"]
+    # Significant Schwarz bra pairs (pi, pj, w) for screened RI-J (None = dense):
+    pairs: tuple[Array, Array, Float[Array, "npair"]] | None
+    devices: tuple = eqx.field(static=True)
+    chunk: int = eqx.field(static=True)
+    hf_coeff: float = eqx.field(static=True, default=0.0)
+
+    def energy(self, P, S, nocc):
+        import numpy as np
+        from jax import shard_map
+
+        jmesh = jax.sharding.Mesh(np.asarray(self.devices), ("aux",))
+        spec = jax.sharding.PartitionSpec
+        rep, sh = spec(), spec("aux")
+        ndev = len(self.devices)
+        naux = self.aux_basis.centers.shape[0]
+        slab = -(-naux // ndev)                       # ceil, so ndev·slab >= naux
+
+        # Padded index range. Out-of-range entries are clamped to a valid index
+        # (so the gather they drive is in bounds) and their γ contribution is
+        # masked out, which is cheaper than a ragged shard and keeps every
+        # device's graph identical.
+        k_all = jnp.arange(ndev * slab)
+        k_safe = jnp.minimum(k_all, naux - 1)
+        keep = (k_all < naux).astype(self.int2c_inv.dtype)
+        chunk, pairs = self.chunk, self.pairs
+
+        def part(basis, aux, vinv, kk, mask, Pf):
+            g_local = mask * _streamed_gamma(basis, aux, Pf, chunk, pairs, kk)
+            g = jax.lax.all_gather(g_local, "aux", tiled=True)[:naux]
+            return 0.5 * jnp.dot(g, vinv @ g)
+
+        tree_rep = jax.tree.map(lambda _: rep, self.basis)
+        aux_rep = jax.tree.map(lambda _: rep, self.aux_basis)
+        # check_vma=False for the same reason as ShardedDFCoulomb: the checker
+        # cannot prove the post-all_gather value is replicated, though it is.
+        return shard_map(
+            part, mesh=jmesh,
+            in_specs=(tree_rep, aux_rep, rep, sh, sh, rep),
+            out_specs=rep, check_vma=False,
+        )(self.basis, self.aux_basis, self.int2c_inv, k_safe, keep,
+          jnp.sum(P, axis=0))
+
+
 # ---------------------------------------------------------------------------
 # Exchange-correlation terms
 # ---------------------------------------------------------------------------
@@ -950,7 +1039,7 @@ class ShardedGridXC(XCTerm):
 
 def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                   eri_lr=None, int3c_lr=None, int2c_inv_lr=None,
-                  hf_coeff_lr=0.0, omega=0.0):
+                  hf_coeff_lr=0.0, omega=0.0, devices=None):
     """Wrap the integral arrays built for ``spec`` into the matching Coulomb term.
 
     ``hf_coeff_lr`` (with the ``*_lr`` attenuated tensors and ``omega``) is the
@@ -965,6 +1054,13 @@ def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                 "the public constructors resolve basis-set names."
             )
         if spec.chunk is not None:
+            if devices is not None:
+                return ShardedStreamedDFCoulomb(
+                    basis=basis, aux_basis=spec.auxbasis,
+                    int2c_inv=int2c_inv, pairs=pairs,
+                    devices=tuple(devices), chunk=spec.chunk,
+                    hf_coeff=hf_coeff,
+                )
             return StreamedDFCoulomb(
                 basis=basis, aux_basis=spec.auxbasis, int2c_inv=int2c_inv,
                 pairs=pairs, chunk=spec.chunk, hf_coeff=hf_coeff,

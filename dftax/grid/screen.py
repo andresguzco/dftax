@@ -9,8 +9,16 @@ turns that into ``ng·nsub²``.
 
 The saving grows with the molecule, which is the whole point: measured on an
 alanine ladder at def2-svp, the significant fraction falls 80.7% (23 atoms) ->
-53.9% (53) -> 31.6% (153) -> 17.6% (253) -> 14.2% (453). Small molecules gain
-almost nothing; at 453 atoms the padded cost ratio is 0.045.
+53.9% (53) -> 31.6% (153) -> 17.6% (253) -> 14.2% (453), and the padded cost
+ratio with it, 0.743 -> 0.446 -> 0.199 -> 0.063 -> 0.045.
+
+End to end on a ``grad`` of the XC energy, against the streamed dense path,
+the delivered speedups are 0.89x / 1.53x / 3.11x at 23 / 53 / 153 atoms: about
+65% of what the cost ratio predicts, consistently, so the gather overhead
+scales with the win rather than swamping it. Below ~50 atoms it is a small
+loss. That consistency is not free -- see :func:`~dftax.ks.terms._screened_e_xc`
+on rematerialization, without which the backward pass keeps every block's AO
+values and the whole thing OOMs at 153 atoms.
 
 Two-phase like the rest of the engine (see :mod:`dftax.integrals.eri3c_bucketed`):
 this module reads concrete geometry and returns a static skeleton, and the

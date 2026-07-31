@@ -91,9 +91,14 @@ def becke(
             :mod:`dftax.grid.screen`). The grid is reordered into compact
             blocks and each block keeps only the shells that reach it, so the
             XC term costs ``ng·nsub²`` instead of ``ng·nao²``. ``None``
-            (default) evaluates the whole basis everywhere. Worth little below
-            ~100 atoms and a great deal above: the padded cost ratio on an
-            alanine ladder at def2-svp is 0.74 at 23 atoms and 0.045 at 453.
+            (default) evaluates the whole basis everywhere.
+
+            **Only worth turning on above ~50 atoms.** Measured end to end on
+            a ``grad`` of the XC energy (what an SCF iteration pays),
+            def2-svp, against the streamed dense path: 0.89x at 23 atoms
+            (i.e. a loss), 1.53x at 53, 3.11x at 153, with peak memory equal
+            or lower. The saving keeps growing with the molecule, so it is
+            the large-system knob and costs a little on small ones.
             Closed-shell only for now.
         screen_block: grid points per screening block. Larger blocks amortize
             the gather but reach more shells.

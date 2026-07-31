@@ -1055,8 +1055,13 @@ def _screened_e_xc(xc, basis, coords, weights, P, buckets, block, n_block):
                 eps = jax.vmap(xc)(safe)
             return jnp.sum(jnp.where(mask, w * eps * rho, 0.0))
 
+        # Rematerialize per block in the backward pass, as the streamed path
+        # does. Without it lax.map keeps every block's AO values (and their
+        # gradients) as scan residuals, which is O(ng·nsub) for the whole grid
+        # rather than O(block·nsub): ~45 GiB on a 153-atom peptide, where the
+        # dense path stays flat.
         total = total + jnp.sum(jax.lax.map(
-            body,
+            jax.checkpoint(body),
             (bucket.cart, bucket.sph, bucket.cart_mask, bucket.sph_mask, ids),
         ))
     return total

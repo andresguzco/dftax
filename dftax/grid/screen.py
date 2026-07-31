@@ -21,11 +21,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import equinox as eqx
+import jax.numpy as jnp
 import numpy as np
+from jaxtyping import Array
 
 
-@dataclass(frozen=True)
-class ScreenBucket:
+class ScreenBucket(eqx.Module):
     """Blocks that share one padded sub-basis shape.
 
     A jitted kernel needs one shape, so blocks are grouped by how many
@@ -33,18 +35,27 @@ class ScreenBucket:
     matters more than it sounds: padding every block to a single global maximum
     recovers nothing at all (measured, coronene, no speedup over dense),
     because one dense block sets the shape for all of them.
+
+    The index arrays are pytree leaves rather than static metadata: they are
+    large, and jit compares static arguments by equality, which arrays do not
+    support. Only their *shapes* need to be static, and those are static by
+    construction.
     """
 
-    block_ids: np.ndarray      # (nb,)            which grid blocks
-    cart: np.ndarray           # (nb, ncart_pad)  cartesian rows of the sub-basis
-    sph: np.ndarray            # (nb, nsph_pad)   spherical columns
-    cart_mask: np.ndarray      # (nb, ncart_pad)  1 on real rows, 0 on padding
-    sph_mask: np.ndarray       # (nb, nsph_pad)   1 on real columns, 0 on padding
+    block_ids: Array           # (nb,)            which grid blocks
+    cart: Array                # (nb, ncart_pad)  cartesian rows of the sub-basis
+    sph: Array                 # (nb, nsph_pad)   spherical columns
+    cart_mask: Array           # (nb, ncart_pad)  1 on real rows, 0 on padding
+    sph_mask: Array            # (nb, nsph_pad)   1 on real columns, 0 on padding
 
 
 @dataclass(frozen=True)
 class ScreenPlan:
-    """Spatial ordering of the grid plus the per-bucket sub-bases."""
+    """Spatial ordering of the grid plus the per-bucket sub-bases.
+
+    ``order`` and ``n_pad`` are consumed by the caller when it lays the grid
+    out; only ``buckets`` (and the two shape scalars) reach the traced term.
+    """
 
     order: np.ndarray                  # (ng_padded,) permutation into sorted order
     block: int                         # points per block
@@ -180,7 +191,9 @@ def plan_grid_screen(basis, coords, atom_coords, block=2048, cutoff=1e-10,
             S[r, :s.size] = s
             CM[r, :c.size] = 1.0
             SM[r, :s.size] = 1.0
-        buckets.append(ScreenBucket(block_ids=ids.astype(np.int32), cart=C,
-                                    sph=S, cart_mask=CM, sph_mask=SM))
+        buckets.append(ScreenBucket(
+            block_ids=jnp.asarray(ids, dtype=jnp.int32), cart=jnp.asarray(C),
+            sph=jnp.asarray(S), cart_mask=jnp.asarray(CM),
+            sph_mask=jnp.asarray(SM)))
     return ScreenPlan(order=order, block=block, n_block=n_block,
                       buckets=tuple(buckets), n_pad=n_pad)

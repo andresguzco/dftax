@@ -38,6 +38,9 @@ class Becke:
     prune: str | None = "nwchem"
     r_max: float | None = 45.0
     cutoff: float | None = 1e-15
+    screen: float | None = None
+    screen_block: int = 2048
+    screen_buckets: int = 4
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,9 @@ def becke(
     prune: str | None = "nwchem",
     r_max: float | None = 45.0,
     cutoff: float | None = 1e-15,
+    screen: float | None = None,
+    screen_block: int = 2048,
+    screen_buckets: int = 4,
 ) -> Becke:
     """Atom-centered Becke grid: ``n_radial`` radial shells per atom, Lebedev
     angular grids pruned per radial region (the dftax default quadrature).
@@ -81,9 +87,23 @@ def becke(
         cutoff: drop grid points whose Becke weight is below this (applied
             only on the eager build path, i.e. the KS constructor; traced
             rebuilds keep static shapes). ``None`` keeps all points.
+        screen: amplitude threshold for per-block basis screening (see
+            :mod:`dftax.grid.screen`). The grid is reordered into compact
+            blocks and each block keeps only the shells that reach it, so the
+            XC term costs ``ng·nsub²`` instead of ``ng·nao²``. ``None``
+            (default) evaluates the whole basis everywhere. Worth little below
+            ~100 atoms and a great deal above: the padded cost ratio on an
+            alanine ladder at def2-svp is 0.74 at 23 atoms and 0.045 at 453.
+            Closed-shell only for now.
+        screen_block: grid points per screening block. Larger blocks amortize
+            the gather but reach more shells.
+        screen_buckets: how many distinct padded shapes to compile. More
+            buckets waste less padding and cost more compilations; padding
+            everything to a single shape recovers nothing.
     """
     return Becke(n_radial=n_radial, lebedev=lebedev, chunk=chunk,
-                 prune=prune, r_max=r_max, cutoff=cutoff)
+                 prune=prune, r_max=r_max, cutoff=cutoff, screen=screen,
+                 screen_block=screen_block, screen_buckets=screen_buckets)
 
 
 def points(coords, weights, *, chunk: int | str | None = "auto") -> Points:

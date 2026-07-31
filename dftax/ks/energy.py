@@ -79,6 +79,7 @@ from dftax.ks.terms import (
     GridXC,
     ShardedDFCoulomb,
     ShardedGridXC,
+    ScreenedGridXC,
     StreamedGridXC,
     XCTerm,
     _make_coulomb,
@@ -673,6 +674,26 @@ class KS(eqx.Module):
                     chunk=grid_chunk, xc=xc,
                 )
             self.xc_term = ShardedGridXC(inner=inner, devices=devices)
+        elif getattr(grid, "screen", None) is not None:
+            # Per-block basis screening: reorder the grid into compact blocks
+            # and give each only the shells that reach it. The plan is built
+            # eagerly (it reads concrete geometry), like the Schwarz screen.
+            from dftax.grid.screen import plan_grid_screen
+
+            plan = plan_grid_screen(
+                basis, grid_coords, coords, block=grid.screen_block,
+                cutoff=float(grid.screen), n_bucket=grid.screen_buckets,
+            )
+            gc_o = jnp.asarray(np.asarray(grid_coords)[plan.order])
+            gw_o = np.asarray(weights)[plan.order]
+            if plan.n_pad:                     # filler points carry no weight
+                gw_o = gw_o.copy()
+                gw_o[-plan.n_pad:] = 0.0
+            self.xc_term = ScreenedGridXC(
+                basis=basis, grid_coords=gc_o, weights=jnp.asarray(gw_o),
+                buckets=plan.buckets, block=plan.block,
+                n_block=plan.n_block, xc=xc,
+            )
         elif grid_chunk is None:
             self.xc_term = GridXC(ao=ao, dao=dao, weights=weights, xc=xc,
                                   coords=grid_coords)

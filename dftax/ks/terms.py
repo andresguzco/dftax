@@ -1019,7 +1019,7 @@ def _screened_rho_block(basis, P, cart, sph, cmask, smask, pts, need_grad):
     return jax.vmap(one)(pts)
 
 
-def _screened_e_xc(xc, basis, coords, weights, P, plan):
+def _screened_e_xc(xc, basis, coords, weights, P, buckets, block, n_block):
     """XC energy with the basis screened per grid block (see
     :mod:`dftax.grid.screen`).
 
@@ -1030,13 +1030,12 @@ def _screened_e_xc(xc, basis, coords, weights, P, plan):
     gga = xc.xc_type == "GGA"
     mgga = xc.xc_type == "MGGA"
     need = gga or mgga
-    blk = plan.block
-    cg = coords.reshape(plan.n_block, blk, 3)
-    wg = weights.reshape(plan.n_block, blk)
+    cg = coords.reshape(n_block, block, 3)
+    wg = weights.reshape(n_block, block)
     total = jnp.zeros(())
 
-    for bucket in plan.buckets:
-        ids = jnp.asarray(bucket.block_ids)
+    for bucket in buckets:
+        ids = bucket.block_ids
 
         def body(args, _ids=ids):
             cart, sph, cm, sm, i = args
@@ -1058,8 +1057,7 @@ def _screened_e_xc(xc, basis, coords, weights, P, plan):
 
         total = total + jnp.sum(jax.lax.map(
             body,
-            (jnp.asarray(bucket.cart), jnp.asarray(bucket.sph),
-             jnp.asarray(bucket.cart_mask), jnp.asarray(bucket.sph_mask), ids),
+            (bucket.cart, bucket.sph, bucket.cart_mask, bucket.sph_mask, ids),
         ))
     return total
 
@@ -1078,7 +1076,12 @@ class ScreenedGridXC(XCTerm):
     basis: BasisData
     grid_coords: Float[Array, "ng 3"]
     weights: Float[Array, "ng"]
-    plan: object = eqx.field(static=True)
+    # Pytree leaves, not static: the index arrays are large, and jit compares
+    # static arguments by equality, which arrays do not support. Only the
+    # block geometry below has to be static.
+    buckets: tuple
+    block: int = eqx.field(static=True)
+    n_block: int = eqx.field(static=True)
     xc: XCFunctional = eqx.field(static=True)
 
     def energy(self, P):
@@ -1092,7 +1095,8 @@ class ScreenedGridXC(XCTerm):
                 "screened block kernel does not carry them yet."
             )
         return _screened_e_xc(self.xc, self.basis, self.grid_coords,
-                              self.weights, P[0], self.plan)
+                              self.weights, P[0], self.buckets, self.block,
+                              self.n_block)
 
 
 class ShardedGridXC(XCTerm):

@@ -79,6 +79,7 @@ from dftax.ks.terms import (
     GridXC,
     ShardedDFCoulomb,
     ShardedGridXC,
+    ScreenedGridXC,
     StreamedGridXC,
     XCTerm,
     _make_coulomb,
@@ -552,12 +553,16 @@ class KS(eqx.Module):
             spec = _resolve_aux(spec, symbols, coords, nao_final, shard_df)
         quartets, qof, pairs = _resolve_screening(spec, basis)
         aux_basis = spec.auxbasis if is_df else None
-        if shard_df:
-            if spec.chunk is not None:
+        if shard_df and spec.chunk is not None:
+            # The streamed backend shards its auxiliary axis too (see
+            # ShardedStreamedDFCoulomb); only its exchange does not, because
+            # streamed RI-K is a custom_vjp over orbital chunks.
+            if (float(getattr(xc, "hf_coeff", 0.0)) != 0.0
+                    or float(getattr(xc, "hf_coeff_lr", 0.0)) != 0.0):
                 raise NotImplementedError(
-                    "mesh= with a streamed df(chunk=...) backend is not "
-                    "supported; the aux-sharded materialized backend covers "
-                    "that memory regime; use df(auxbasis) with mesh=."
+                    "mesh= with a streamed df(chunk=...) backend covers RI-J "
+                    "only; a hybrid needs the materialized aux-sharded "
+                    "backend, df(auxbasis) with mesh=."
                 )
         # Range-separated hybrids: build the erf(ω·r₁₂)/r₁₂ tensors alongside
         # the Coulomb ones (memory doubles on the materialized backends; the
@@ -616,7 +621,9 @@ class KS(eqx.Module):
         self.hcore = hcore
         self.e_nn = e_nn
         self.basis = basis
-        if shard_df:
+        # A streamed spec shards inside its own term (it has no tensor to slab),
+        # so only the materialized sharded backend builds slabs here.
+        if shard_df and spec.chunk is None:
             # Built directly in per-device slabs: the capacity path; no
             # device ever holds more than its naux/ndev slice of the
             # O(nao²·naux) tensor. The metric inverse is zero-padded to the
@@ -651,6 +658,7 @@ class KS(eqx.Module):
             self.coulomb = _make_coulomb(
                 spec, basis, eri, int3c, int2c_inv, pairs, float(xc.hf_coeff),
                 eri_lr, int3c_lr, int2c_inv_lr, hf_lr, omega,
+                devices=devices if shard_df else None,
             )
         if devices is not None:
             # Pad the quadrature to the mesh and lay it out sharded; the AO
@@ -666,6 +674,26 @@ class KS(eqx.Module):
                     chunk=grid_chunk, xc=xc,
                 )
             self.xc_term = ShardedGridXC(inner=inner, devices=devices)
+        elif getattr(grid, "screen", None) is not None:
+            # Per-block basis screening: reorder the grid into compact blocks
+            # and give each only the shells that reach it. The plan is built
+            # eagerly (it reads concrete geometry), like the Schwarz screen.
+            from dftax.grid.screen import plan_grid_screen
+
+            plan = plan_grid_screen(
+                basis, grid_coords, coords, block=grid.screen_block,
+                cutoff=float(grid.screen), n_bucket=grid.screen_buckets,
+            )
+            gc_o = jnp.asarray(np.asarray(grid_coords)[plan.order])
+            gw_o = np.asarray(weights)[plan.order]
+            if plan.n_pad:                     # filler points carry no weight
+                gw_o = gw_o.copy()
+                gw_o[-plan.n_pad:] = 0.0
+            self.xc_term = ScreenedGridXC(
+                basis=basis, grid_coords=gc_o, weights=jnp.asarray(gw_o),
+                buckets=plan.buckets, block=plan.block,
+                n_block=plan.n_block, xc=xc,
+            )
         elif grid_chunk is None:
             self.xc_term = GridXC(ao=ao, dao=dao, weights=weights, xc=xc,
                                   coords=grid_coords)

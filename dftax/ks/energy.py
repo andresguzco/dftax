@@ -553,17 +553,6 @@ class KS(eqx.Module):
             spec = _resolve_aux(spec, symbols, coords, nao_final, shard_df)
         quartets, qof, pairs = _resolve_screening(spec, basis)
         aux_basis = spec.auxbasis if is_df else None
-        if shard_df and spec.chunk is not None:
-            # The streamed backend shards its auxiliary axis too (see
-            # ShardedStreamedDFCoulomb); only its exchange does not, because
-            # streamed RI-K is a custom_vjp over orbital chunks.
-            if (float(getattr(xc, "hf_coeff", 0.0)) != 0.0
-                    or float(getattr(xc, "hf_coeff_lr", 0.0)) != 0.0):
-                raise NotImplementedError(
-                    "mesh= with a streamed df(chunk=...) backend covers RI-J "
-                    "only; a hybrid needs the materialized aux-sharded "
-                    "backend, df(auxbasis) with mesh=."
-                )
         # Range-separated hybrids: build the erf(ω·r₁₂)/r₁₂ tensors alongside
         # the Coulomb ones (memory doubles on the materialized backends; the
         # streamed DF backend stores only the attenuated metric and recomputes

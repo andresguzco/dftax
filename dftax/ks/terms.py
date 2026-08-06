@@ -463,8 +463,94 @@ def _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc, omega=None):
     return c2s.T @ Kc @ c2s if c2s is not None else Kc
 
 
+def _rik_shard_mesh(devices):
+    """1-D mesh over the occupied-orbital axis (named ``aux`` for consistency
+    with the RI-J sharding, which shares the term's mesh)."""
+    import numpy as np
+
+    return jax.sharding.Mesh(np.asarray(devices), ("aux",))
+
+
+def _rik_pad_occ(Cc, ndev):
+    """Pad the occupied axis to a multiple of the device count.
+
+    A zero orbital column produces ``B = 0`` and so contributes nothing to
+    either the energy sum or the exchange kernel, which is what makes the
+    padding free rather than something to mask.
+    """
+    nocc = Cc.shape[1]
+    slab = -(-nocc // ndev)
+    pad = ndev * slab - nocc
+    return (jnp.pad(Cc, ((0, 0), (0, pad))) if pad else Cc), slab
+
+
+def _rik_energy_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
+                        omega=None):
+    """:func:`_rik_energy` with the occupied orbitals split across devices.
+
+    ``Σ_ijx B_ijx²`` is a sum over occupied ``j``, so each device scans its own
+    orbitals and the partial sums are ``psum``-reduced. The full ``Cc`` is still
+    needed inside the body (``B_ij = Ccᵀ B_j`` contracts over *all* orbitals
+    ``i``), so it rides in replicated while only the scanned axis is sharded.
+    """
+    from jax import shard_map
+
+    Lf = _rik_cholesky(int2c_inv)
+    c2s = basis.cart2sph
+    Cc = c2s @ Cocc if c2s is not None else Cocc
+    n, naux = Cc.shape[0], Lf.shape[0]
+    Ccp, _slab = _rik_pad_occ(Cc, len(devices))
+    spec = jax.sharding.PartitionSpec
+
+    def part(Cfull, Lfull, cols):
+        def body(acc, cj):
+            Bij = Cfull.T @ _rik_bmj(basis, aux_basis, Lfull, cj, n, naux,
+                                     omega)
+            return acc + jnp.sum(Bij * Bij), None
+        ek, _ = jax.lax.scan(jax.checkpoint(body), jnp.array(0.0), cols)
+        return jax.lax.psum(ek, "aux")
+
+    return shard_map(
+        part, mesh=_rik_shard_mesh(devices),
+        in_specs=(spec(), spec(), spec("aux")), out_specs=spec(),
+        check_vma=False,
+    )(Cc, Lf, Ccp.T)
+
+
+def _rik_kmatrix_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
+                         omega=None):
+    """:func:`_rik_kmatrix` with the occupied orbitals split across devices.
+
+    ``KK_mn = Σ_jx B_mjx B_njx`` is the same sum over ``j``, so the per-device
+    partial kernels ``psum`` to the identical matrix the single-device path
+    builds. Unlike the energy this body needs only its own orbital column.
+    """
+    from jax import shard_map
+
+    Lf = _rik_cholesky(int2c_inv)
+    c2s = basis.cart2sph
+    Cc = c2s @ Cocc if c2s is not None else Cocc
+    n, naux = Cc.shape[0], Lf.shape[0]
+    Ccp, _slab = _rik_pad_occ(Cc, len(devices))
+    spec = jax.sharding.PartitionSpec
+
+    def part(Lfull, cols):
+        def body(Ka, cj):
+            B = _rik_bmj(basis, aux_basis, Lfull, cj, n, naux, omega)
+            return Ka + (B @ B.T), None
+        Kc, _ = jax.lax.scan(jax.checkpoint(body), jnp.zeros((n, n)), cols)
+        return jax.lax.psum(Kc, "aux")
+
+    Kc = shard_map(
+        part, mesh=_rik_shard_mesh(devices),
+        in_specs=(spec(), spec("aux")), out_specs=spec(), check_vma=False,
+    )(Lf, Ccp.T)
+    return c2s.T @ Kc @ c2s if c2s is not None else Kc
+
+
 def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
-                     dscale, energy_pref, grad_pref, omega=None):
+                     dscale, energy_pref, grad_pref, omega=None,
+                     devices=None):
     """Streamed RI-K exchange energy with an exact analytic gradient.
 
     Orbital-chunk RI-K: ``E_K = energy_pref · Σ_ijx (Σ_P (ij|P) L_Px)²`` (``V⁻¹=LLᵀ``),
@@ -488,20 +574,32 @@ def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
     basis/nuclear coordinates are **not** propagated, so geometry derivatives
     (forces) must use the materialized DF or exact path, not the streamed RI-K.
     """
+    # Both halves shard the same axis, so the vjp stays exact: the energy and
+    # the kernel are each a sum over occupied orbitals, and a psum of the
+    # per-device partials is the single-device value.
+    def _energy(Cocc):
+        if devices is None:
+            return _rik_energy(basis, aux_basis, int2c_inv, Cocc, omega)
+        return _rik_energy_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
+                                   omega)
+
+    def _kmat(Cocc):
+        if devices is None:
+            return _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc, omega)
+        return _rik_kmatrix_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
+                                    omega)
+
     @jax.custom_vjp
     def rik(P):
         Cocc = _rik_occ_orbitals(P, S, nocc, dscale)
-        return energy_pref * _rik_energy(basis, aux_basis, int2c_inv, Cocc,
-                                         omega)
+        return energy_pref * _energy(Cocc)
 
     def fwd(P):
         Cocc = _rik_occ_orbitals(P, S, nocc, dscale)
-        return (energy_pref
-                * _rik_energy(basis, aux_basis, int2c_inv, Cocc, omega)), Cocc
+        return energy_pref * _energy(Cocc), Cocc
 
     def bwd(Cocc, g):
-        KK = _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc, omega)
-        return (g * grad_pref * KK,)
+        return (g * grad_pref * _kmat(Cocc),)
 
     rik.defvjp(fwd, bwd)
     return rik(P)
@@ -800,8 +898,11 @@ class ShardedStreamedDFCoulomb(CoulombTerm):
     to zero, so the gathered γ is already in auxiliary order and truncating it
     to ``naux`` is exact rather than needing a position map.
 
-    Hybrids are not covered: streamed RI-K is a ``custom_vjp`` over orbital
-    chunks (:func:`_streamed_df_rik`) whose sharding is a separate problem.
+    Hybrids shard too, on a different axis: streamed RI-K sums over occupied
+    orbitals, so each device scans its own slice of them and the partials are
+    ``psum``-reduced (:func:`_rik_energy_sharded`). Both halves of its
+    ``custom_vjp`` shard the same way, so the analytic exchange Fock it returns
+    is unchanged. Range-separated hybrids ride along on the attenuated metric.
     """
 
     basis: BasisData
@@ -812,6 +913,22 @@ class ShardedStreamedDFCoulomb(CoulombTerm):
     devices: tuple = eqx.field(static=True)
     chunk: int = eqx.field(static=True)
     hf_coeff: float = eqx.field(static=True, default=0.0)
+    int2c_inv_lr: Float[Array, "naux naux"] | None = None
+    hf_coeff_lr: float = eqx.field(static=True, default=0.0)
+    omega: float = eqx.field(static=True, default=0.0)
+
+    def _rik_sum(self, e, P, S, nocc, metric_inv, ax, omega):
+        if P.shape[0] == 1:                            # closed shell: P = 2 C Cᵀ
+            return e + _streamed_df_rik(
+                self.basis, self.aux_basis, metric_inv, S, nocc[0], P[0],
+                0.5, -ax, -ax, omega, devices=self.devices,
+            )
+        for Ps, n in zip(P, nocc):                     # one spin channel
+            e = e + _streamed_df_rik(
+                self.basis, self.aux_basis, metric_inv, S, n, Ps,
+                1.0, -0.5 * ax, -ax, omega, devices=self.devices,
+            )
+        return e
 
     def energy(self, P, S, nocc):
         import numpy as np
@@ -842,12 +959,19 @@ class ShardedStreamedDFCoulomb(CoulombTerm):
         aux_rep = jax.tree.map(lambda _: rep, self.aux_basis)
         # check_vma=False for the same reason as ShardedDFCoulomb: the checker
         # cannot prove the post-all_gather value is replicated, though it is.
-        return shard_map(
+        e = shard_map(
             part, mesh=jmesh,
             in_specs=(tree_rep, aux_rep, rep, sh, sh, rep),
             out_specs=rep, check_vma=False,
         )(self.basis, self.aux_basis, self.int2c_inv, k_safe, keep,
           jnp.sum(P, axis=0))
+        if self.hf_coeff != 0.0:
+            e = self._rik_sum(e, P, S, nocc, self.int2c_inv, self.hf_coeff,
+                              None)
+        if self.hf_coeff_lr != 0.0:
+            e = self._rik_sum(e, P, S, nocc, self.int2c_inv_lr,
+                              self.hf_coeff_lr, self.omega)
+        return e
 
 
 # ---------------------------------------------------------------------------
@@ -1243,7 +1367,8 @@ def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                     basis=basis, aux_basis=spec.auxbasis,
                     int2c_inv=int2c_inv, pairs=pairs,
                     devices=tuple(devices), chunk=spec.chunk,
-                    hf_coeff=hf_coeff,
+                    hf_coeff=hf_coeff, int2c_inv_lr=int2c_inv_lr,
+                    hf_coeff_lr=hf_coeff_lr, omega=omega,
                 )
             return StreamedDFCoulomb(
                 basis=basis, aux_basis=spec.auxbasis, int2c_inv=int2c_inv,

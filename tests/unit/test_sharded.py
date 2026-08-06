@@ -115,14 +115,18 @@ def test_sharded_df_matches_unsharded():
 def test_sharded_df_guards():
     """Unsupported mesh combinations fail loudly at build, not silently.
 
-    The streamed backend shards its RI-J (see the parity test below), so what
-    is left unsupported is its *exchange*: streamed RI-K is a custom_vjp over
-    orbital chunks and has no sharded form yet.
+    The streamed backend now shards RI-J, RI-K and the range-separated
+    exchange, so a hybrid with ``mesh=`` is supported rather than guarded (see
+    the parity tests below). What remains genuinely unsupported on a sharded
+    grid is VV10: its double-grid pair quadrature is nonlocal across shards,
+    so it cannot be evaluated shard-by-shard at all.
     """
+    from dftax.energy.xc import WB97XV
+
     AUX = "def2-universal-jkfit"
     mol = Molecule.from_xyz(WATER, "sto-3g")
-    with pytest.raises(NotImplementedError):
-        KS(mol, PBE0(), grid=GRID, coulomb=df(AUX, chunk=50), mesh=mesh())
+    with pytest.raises(NotImplementedError, match="VV10"):
+        KS(mol, WB97XV(), grid=GRID, coulomb=df(AUX), mesh=mesh())
 
 
 @multi
@@ -160,6 +164,35 @@ def test_sharded_streamed_df_matches_unsharded():
         r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8)
         assert r0.converged and r1.converged
         assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)   # see the RI-J case
+
+
+@multi
+@pytest.mark.float64
+@pytest.mark.parametrize("xc", [PBE0(), CAMB3LYP()], ids=["pbe0", "camb3lyp"])
+def test_sharded_streamed_hybrid_matches_unsharded(xc):
+    """Aux-sharded streamed *exchange*: RI-K sums over occupied orbitals, so
+    each device scans its own slice of them and the partials are psum-reduced.
+
+    Both halves of the RI-K ``custom_vjp`` shard the same way, so the analytic
+    exchange Fock it returns is the single-device one and the SCF closes on the
+    same fixed point. CAM-B3LYP carries the range-separated operator through
+    the same path on the attenuated metric.
+    """
+    AUX = "def2-universal-jkfit"
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    ks0 = KS(mol, xc, grid=GRID, coulomb=df(AUX, chunk=16))
+    ksm = KS(mol, xc, grid=GRID, coulomb=df(AUX, chunk=16), mesh=mesh())
+    assert isinstance(ksm.coulomb, ShardedStreamedDFCoulomb)
+
+    P = scf(ks0, max_iter=60).P
+    e0 = float(ks0.coulomb.energy(P, ks0.S, ks0.nocc))
+    em = float(ksm.coulomb.energy(P, ksm.S, ksm.nocc))
+    assert em == pytest.approx(e0, rel=1e-10)
+
+    r0 = scf(ks0, e_tol=1e-10, d_tol=1e-8, max_iter=80)
+    r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8, max_iter=80)
+    assert r0.converged and r1.converged
+    assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)   # see the RI-J case
 
 
 @multi

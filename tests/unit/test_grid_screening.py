@@ -77,11 +77,24 @@ def test_tighter_cutoff_keeps_more_functions():
 
 
 @pytest.mark.float64
-def test_screening_refuses_open_shell():
-    """A spin-polarized functional takes both channels jointly, which the
-    block kernel does not carry yet; it must say so rather than sum the
-    channels independently."""
+@pytest.mark.parametrize("xc", [LDA(), PBE()], ids=["lda", "pbe"])
+def test_screened_xc_matches_dense_open_shell(xc):
+    """Spin-polarized screening reproduces the dense open-shell grid.
+
+    Worth its own case rather than folding into the closed-shell one:
+    ``ε_xc(ρα, ρβ, ∇ρα, ∇ρβ)`` couples the channels, so this is not a sum of
+    two independent screened energies and would be quietly wrong if it were
+    written that way.
+    """
     oh = Molecule.from_xyz("O 0 0 0; H 0.9697 0 0", "sto-3g", spin=1)
-    ks = KS(oh, LDA(), grid=_screened())
-    with pytest.raises(NotImplementedError, match="closed-shell"):
-        scf(ks, max_iter=2)
+    ks0 = KS(oh, xc, grid=becke(35, 50))
+    kss = KS(oh, xc, grid=_screened())
+    assert isinstance(kss.xc_term, ScreenedGridXC)
+
+    P = scf(ks0, max_iter=40).P
+    assert float(kss.e_xc(P)) == pytest.approx(float(ks0.e_xc(P)), abs=1e-12)
+
+    r0 = scf(ks0, max_iter=60)
+    r1 = scf(kss, max_iter=60)
+    assert r0.converged and r1.converged
+    assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)

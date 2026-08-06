@@ -983,17 +983,16 @@ class StreamedGridXC(XCTerm):
         )
 
 
-def _screened_rho_block(basis, P, cart, sph, cmask, smask, pts, need_grad):
-    """Density (and its gradient) on one block, in the block's own sub-basis.
+def _screened_sub_basis(basis, cart, cmask, sph):
+    """The block's own basis: rows gathered down to the shells that reach it,
+    plus the matching block-diagonal slice of ``cart2sph``, so ``eval_gto``
+    runs on it unchanged.
 
-    The sub-basis is the full ``BasisData`` with its rows gathered down to the
-    shells that reach this block, plus the matching block-diagonal slice of
-    ``cart2sph``; ``eval_gto`` then runs on it unchanged.
-
-    Both ends of the padding have to be masked. Padded entries index row and
-    column zero, which is a *real* basis function, so zeroing only the
-    cartesian coefficients would leave the padded spherical columns carrying
-    genuine AO values and genuine density entries into the contraction.
+    Both ends of the padding have to be masked, and the caller must apply the
+    spherical half. Padded entries index row and column zero, which is a *real*
+    basis function, so zeroing only the cartesian coefficients here would leave
+    the padded spherical columns carrying genuine AO values and genuine density
+    entries into the contraction.
     """
     sub = eqx.tree_at(
         lambda t: (t.centers, t.exponents, t.coefficients, t.angular),
@@ -1004,6 +1003,12 @@ def _screened_rho_block(basis, P, cart, sph, cmask, smask, pts, need_grad):
     if basis.cart2sph is not None:
         sub = eqx.tree_at(lambda t: t.cart2sph, sub,
                           basis.cart2sph[cart][:, sph])
+    return sub
+
+
+def _screened_rho_block(basis, P, cart, sph, cmask, smask, pts, need_grad):
+    """Density (and its gradient) on one block, in the block's own sub-basis."""
+    sub = _screened_sub_basis(basis, cart, cmask, sph)
     Psub = P[sph][:, sph]
 
     def one(r):
@@ -1067,6 +1072,69 @@ def _screened_e_xc(xc, basis, coords, weights, P, buckets, block, n_block):
     return total
 
 
+def _screened_e_xc_spin(xc, basis, coords, weights, Pa, Pb, buckets, block,
+                        n_block):
+    """Spin-polarized screened XC energy, the open-shell analog of
+    :func:`_screened_e_xc`.
+
+    Not a sum of per-channel energies: ``ε_xc(ρα, ρβ, ∇ρα, ∇ρβ)`` couples the
+    channels, so both densities ride through the same gathered sub-basis. The
+    screening plan is shared, since which shells reach a block is a property of
+    the basis and the geometry, not of the density.
+
+    Per-point nan-safe double-``where`` per channel, matching
+    :func:`_streamed_e_xc_spin`: a vanishing or (under a non-PSD perturbation)
+    negative channel must not blow up ``ρ_σ^{1/3}`` or the reduced gradient.
+    """
+    gga = xc.xc_type == "GGA"
+    mgga = xc.xc_type == "MGGA"
+    cg = coords.reshape(n_block, block, 3)
+    wg = weights.reshape(n_block, block)
+    total = jnp.zeros(())
+
+    for bucket in buckets:
+        def body(args):
+            cart, sph, cm, sm, i = args
+            sub = _screened_sub_basis(basis, cart, cm, sph)
+            Pas, Pbs = Pa[sph][:, sph], Pb[sph][:, sph]
+
+            def point(r, w):
+                ao = eval_gto(sub, r) * sm
+                rho_a = ao @ Pas @ ao
+                rho_b = ao @ Pbs @ ao
+                rho_tot = rho_a + rho_b
+                mask = rho_tot > 1e-10
+                ta, tb = rho_a > 1e-10, rho_b > 1e-10
+                rho2 = jnp.stack([jnp.where(ta, rho_a, 1e-10),
+                                  jnp.where(tb, rho_b, 1e-10)])
+                if gga or mgga:
+                    dao = jax.jacfwd(eval_gto, argnums=1)(sub, r) * sm[:, None]
+                    ga = jnp.where(ta, 2.0 * (ao @ Pas) @ dao, 0.0)
+                    gb = jnp.where(tb, 2.0 * (ao @ Pbs) @ dao, 0.0)
+                    if mgga:
+                        tau2 = jnp.stack([
+                            jnp.where(ta, 0.5 * jnp.einsum(
+                                "mx,mn,nx->", dao, Pas, dao), 1e-10),
+                            jnp.where(tb, 0.5 * jnp.einsum(
+                                "mx,mn,nx->", dao, Pbs, dao), 1e-10),
+                        ])
+                        eps = xc(rho2, jnp.stack([ga, gb], axis=-1), tau2)
+                    else:
+                        eps = xc(rho2, jnp.stack([ga, gb], axis=-1))
+                else:
+                    eps = xc(rho2)
+                return jnp.where(mask, w * eps * rho_tot, 0.0)
+
+            return jnp.sum(jax.vmap(point)(cg[i], wg[i]))
+
+        total = total + jnp.sum(jax.lax.map(
+            jax.checkpoint(body),
+            (bucket.cart, bucket.sph, bucket.cart_mask, bucket.sph_mask,
+             bucket.block_ids),
+        ))
+    return total
+
+
 class ScreenedGridXC(XCTerm):
     """XC on a blocked grid with the basis screened per block.
 
@@ -1090,18 +1158,13 @@ class ScreenedGridXC(XCTerm):
     xc: XCFunctional = eqx.field(static=True)
 
     def energy(self, P):
-        if P.shape[0] != 1:
-            # Not a sum of per-channel energies: a spin-polarized functional
-            # takes ρ_α and ρ_β *together*, so the block kernel has to carry
-            # both densities at once. Closed shell only until it does.
-            raise NotImplementedError(
-                "becke(screen=...) covers closed-shell systems; the "
-                "spin-polarized XC kernel takes both channels jointly and the "
-                "screened block kernel does not carry them yet."
-            )
-        return _screened_e_xc(self.xc, self.basis, self.grid_coords,
-                              self.weights, P[0], self.buckets, self.block,
-                              self.n_block)
+        if P.shape[0] == 1:
+            return _screened_e_xc(self.xc, self.basis, self.grid_coords,
+                                  self.weights, P[0], self.buckets, self.block,
+                                  self.n_block)
+        return _screened_e_xc_spin(self.xc, self.basis, self.grid_coords,
+                                   self.weights, P[0], P[1], self.buckets,
+                                   self.block, self.n_block)
 
 
 class ShardedGridXC(XCTerm):

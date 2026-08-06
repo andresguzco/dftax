@@ -22,6 +22,48 @@ to [Semantic Versioning](https://semver.org/).
   Both apply only to the default; an explicit `guess=minao()` still raises.
 
 ### Added
+- **Per-block basis screening for the XC quadrature**, `becke(screen=1e-10)`.
+  A contracted GTO is numerically zero over most of a large molecule's grid,
+  but the dense quadrature evaluates every function at every point and
+  contracts the whole density matrix there, so the XC term costs `ng·nao²`
+  however little of the basis reaches a region. The grid is reordered into
+  compact blocks (points grouped by nearest atom, atoms walked in neighbour
+  order), each block keeps only the shells with amplitude in it, and the
+  contraction runs in that reduced space: `ng·nsub²`.
+
+  This is the large-system knob and it says so. Measured end to end on a `grad`
+  of the XC energy, which is what an SCF iteration pays, against the streamed
+  dense path at def2-svp: **0.89x at 23 atoms (a loss), 1.53x at 53, 3.11x at
+  153**, peak memory equal or lower, energies agreeing to 5e-12. The underlying
+  significant fraction keeps falling with size (80.7% → 53.9% → 31.6% → 17.6% →
+  14.2% at 23 → 453 atoms), and the delivered speedup holds a steady ~65% of
+  what that predicts, so the gather overhead scales with the win rather than
+  swamping it. Off by default; worth turning on above ~50 atoms.
+
+  Blocks are grouped into buckets by surviving width and each bucket padded to
+  its own maximum. That is the feature, not a refinement: padding every block
+  to one global maximum recovers nothing measurable, because a single dense
+  block sets the shape for all of them. Closed and open shell both, the latter
+  carrying both spin channels through the same sub-basis, since `ε_xc` couples
+  them.
+- **Streamed density fitting now shards across a mesh.** `df(chunk=...)` with
+  `mesh=` used to raise: streaming was the only backend that fits at protein
+  scale (the materialized aux-sharded one still holds `nao²·naux/ndev` per
+  device, 15 TiB for insulin at triple zeta) and it forfeited every device but
+  one. Each device now streams its own contiguous slice of the auxiliary range
+  into its piece of `γ`, which is all that has to cross devices, and the metric
+  quadratic form is evaluated replicated.
+
+  No basis slicing is involved, unlike the materialized slabs: the streamed
+  kernel looks an auxiliary function up by index, so a device needs the whole
+  (small) auxiliary basis and only its own range. Indices are assigned
+  contiguously and padded to a multiple of the device count, so the gathered
+  `γ` is already in auxiliary order and the dense case is *bit-identical* to
+  the single-device streamed backend rather than merely close. Screened and
+  dense both, over 4 devices: fixed-density RI-J agreeing to 0.0e+00 and
+  6.9e-10, the full SCF to 5.7e-10 and 3.8e-11. RI-J only; a streamed hybrid
+  with `mesh=` still raises, since streamed RI-K is a `custom_vjp` over orbital
+  chunks with no sharded form yet.
 - **Multi-node execution.** `distributed()` joins the processes of a
   multi-task job into one JAX process group (the coordinator, the process
   count and the ids come from the SLURM environment), after which `mesh()`

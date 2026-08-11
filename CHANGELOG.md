@@ -126,6 +126,40 @@ to [Semantic Versioning](https://semver.org/).
   metric's pseudo-inverse turns into 5e-10 in the total energy.
 
 ### Fixed
+- **One second-row atom sized the integral kernels for the whole molecule.**
+  The shell-bucket planners keyed classes on the angular triple alone, so every
+  member of a class was padded to the largest primitive count any shell of that
+  class carried. In cc-pVDZ, sulfur is 12s8p1d against carbon's 9s4p1d, which
+  took the `(s,s)` class from 9x9 to 12x12 and `(p,p)` from 4x4 to 8x8 across
+  the entire basis; the cost is pad times pair-count, so it was paid by the
+  thousands of pairs containing no sulfur rather than by the handful that do.
+  On penicillin G (C16H18N2O4S) at cc-pVDZ that was 8x the padded primitive
+  work in the 3-center build and **20.3 GiB of build scratch against 12.4**.
+
+  The planners now key on the contraction lengths too, then merge classes back
+  under a padded-work budget. Both ends alone are wrong, because the two costs
+  have different shapes: padded work is a sum over classes and sets the build's
+  FLOPs, while scratch is a max over them and sets the ceiling on molecule
+  size. Keying exactly minimizes the sum but compiles one kernel per (angular
+  class x contraction combo), taking penicillin from 45 classes to 416 and
+  tripling compile time; a first-row-only molecule pays that in full and gets
+  nothing back on the max, since its heavy atoms already share a contraction
+  length. The budget is 25%, read off a measured sweep: scratch sits flat and
+  then steps once a merge re-admits a sulfur-sized class, and 25% is just below
+  the step, holding the exact partition's memory to 0.15% while merging back
+  239 of its 416 kernels. Molecules whose angular classes are already
+  contraction-uniform (PCl3: P and Cl are both 12s8p1d) collapse back to the
+  old partition exactly, since those merges are free.
+
+  Net on penicillin: scratch 20.3 -> 12.4 GiB, compile 353 -> 655 s, converging
+  in 36 iterations against 37. On the first-row control ala_4 (43 atoms):
+  scratch 7.7 -> 6.3 GiB, compile 319 -> 552 s, 26 iterations against 35. The
+  compile cost is one-time per shape and cacheable through
+  `JAX_COMPILATION_CACHE_DIR`; peak memory is what caps reachable molecules.
+  Integrals are unchanged to 1.4e-14 (cc-pVDZ), 5.7e-14 (cc-pVTZ) and 1.4e-14
+  (cc-pVQZ) across water, H2S, PCl3 and ethanol: padding contributes zero but
+  shifts the summation order inside a kernel, so the agreement is machine
+  precision rather than bit-identical.
 - **The GPU4PySCF benchmark was not comparing like with like, and the "dftax
   needs 10x the SCF iterations" conclusion it produced was an artifact of its
   own stopping test.** `scripts/bench/gpu4pyscf_bench.py` set PySCF's

@@ -61,9 +61,29 @@ to [Semantic Versioning](https://semver.org/).
   `γ` is already in auxiliary order and the dense case is *bit-identical* to
   the single-device streamed backend rather than merely close. Screened and
   dense both, over 4 devices: fixed-density RI-J agreeing to 0.0e+00 and
-  6.9e-10, the full SCF to 5.7e-10 and 3.8e-11. RI-J only; a streamed hybrid
-  with `mesh=` still raises, since streamed RI-K is a `custom_vjp` over orbital
-  chunks with no sharded form yet.
+  6.9e-10, the full SCF to 5.7e-10 and 3.8e-11.
+- **Streamed exact exchange shards too, so hybrids run on a mesh.** RI-K shards
+  on a different axis than RI-J, and a simpler one:
+  `E_K = Σ_ijx (Σ_P (ij|P) L_Px)²` is a sum over occupied orbitals, and so is
+  the exchange kernel `K_mn = Σ_jx B_mjx B_njx`, so each device scans its own
+  slice of the occupied set and the partials are `psum`-reduced. Padding the
+  occupied axis is free rather than something to mask, a zero orbital column
+  giving `B = 0` and contributing nothing to either sum.
+
+  Both halves of the `custom_vjp` shard the same way, which is what keeps the
+  gradient exact: the analytic exchange Fock the backward returns is the `psum`
+  of per-device partial kernels, i.e. the single-device matrix. The
+  range-separated operator rides the same path on the attenuated metric.
+  Water/sto-3g over 4 devices, against the single-device streamed backend: PBE0
+  fixed-density 2.5e-11 and the full SCF 4.1e-11; CAM-B3LYP fixed-density
+  bit-identical and the SCF 9.4e-11.
+
+  With this, `df(chunk=...)` with `mesh=` covers the whole functional range
+  except VV10: RI-J, RI-K and range-separated exchange, dense or
+  Schwarz-screened. VV10 is what `test_sharded_df_guards` now pins, its
+  double-grid pair quadrature being nonlocal across shards and unevaluable
+  shard by shard, which is a real limitation rather than a gap waiting to be
+  filled.
 - **Multi-node execution.** `distributed()` joins the processes of a
   multi-task job into one JAX process group (the coordinator, the process
   count and the ids come from the SLURM environment), after which `mesh()`

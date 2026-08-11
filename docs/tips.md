@@ -16,6 +16,14 @@ on an A100. Reuse needs the same shapes, so it pays off across repeated runs
 of one system (geometry optimization, conformer batches) rather than across
 different molecules.
 
+It is worth setting when your molecule mixes contraction lengths, which in
+practice means any second-row element (S, P, Cl) beside first-row ones. The
+integral kernels are compiled per shell class, and such a molecule needs more
+distinct classes than a first-row-only one of the same size: penicillin G at
+cc-pVDZ compiles in 655 s against 353 s for the one-class-per-angular-triple
+partition it replaced. That buys the memory the build is actually capped by,
+20.3 GiB of scratch down to 12.4, and the compile is paid once per shape.
+
 ## Pick the Coulomb backend by system size
 
 Exact ERI for small molecules and as the RI-free reference; `df(...)` from a

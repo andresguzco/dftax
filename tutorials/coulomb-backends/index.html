@@ -1675,9 +1675,16 @@ and holds its 3-center tensor in per-device aux slabs (no device ever
 materializes more than <code>naux/ndev</code> of it), with hybrid exact exchange computed
 slab-wise. The dense nao² matrices (S, hcore, P, Fock) stay replicated, and
 every collective differentiates, so <code>scf</code>, <code>minimize</code>, and property workflows
-run unchanged. Not supported with <code>mesh=</code>: the streamed <code>df(chunk=...)</code> backend
-(the aux-sharded materialized backend covers that memory regime); it raises at
-build time. A one-device mesh is a no-op.</p>
+run unchanged. A one-device mesh is a no-op.</p>
+<p>The streamed <code>df(chunk=...)</code> backend shards too, and it is the one that reaches
+protein scale: the materialized slabs still cost <code>nao²·naux/ndev</code> per device
+(15 TiB for insulin at triple zeta), while the streamed path holds no tensor at
+all and each device takes its own contiguous slice of the auxiliary range. RI-J,
+RI-K and range-separated exchange all shard, dense or Schwarz-screened, so the
+combination covers the whole functional range with one exception: <code>WB97XV</code>'s
+VV10 nonlocal correlation, whose double-grid pair quadrature is nonlocal across
+shards and cannot be evaluated shard by shard at all. That one raises at build
+time.</p>
 <h3 id="across-nodes">Across nodes<a class="headerlink" href="#across-nodes" title="Permanent link">¤</a></h3>
 <p>The same mesh spans several nodes once the processes have joined a group.
 JAX is multi-controller, so the launcher starts the same program once per node

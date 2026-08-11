@@ -1541,6 +1541,13 @@ build time (<code>cutoff</code>). <code>points</code> wraps an explicit grid. <c
 streaming on either spec: <code>"auto"</code> (default) materializes the AO grid values
 only when they fit a memory budget and otherwise streams in O(chunk·nao)
 memory; <code>None</code> forces the materialized grid; an int streams with that chunk.</p>
+<p><code>screen</code> is the large-system knob. With it, the grid is reordered into compact
+blocks and each block keeps only the shells that actually reach it, so the XC
+term costs <code>ng·nsub²</code> instead of <code>ng·nao²</code>. It is off by default because the
+saving depends entirely on size: measured on a <code>grad</code> of the XC energy against
+the streamed dense path at def2-svp, it is a ~10% <em>loss</em> at 23 atoms, 1.53x at
+53 and 3.11x at 153, with peak memory equal or lower and energies agreeing to
+5e-12. Turn it on above ~50 atoms.</p>
 
 
 <div class="doc doc-object doc-module">

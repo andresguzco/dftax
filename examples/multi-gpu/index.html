@@ -1454,9 +1454,13 @@
 <h1 id="multi-gpu-execution">Multi-GPU execution<a class="headerlink" href="#multi-gpu-execution" title="Permanent link">¤</a></h1>
 <p>Sharding is one value on the builder: <code>mesh()</code> spreads the XC quadrature over
 the device mesh and builds the density-fitting 3-center tensor directly in
-per-device slabs — no device ever holds more than its <code>naux/ndev</code> slice. The
+per-device slabs, so no device ever holds more than its <code>naux/ndev</code> slice. The
 numbers match single-device execution; the collectives differentiate, so SCF
 and forces are unchanged.</p>
+<p>The streamed backend, <code>df(chunk=...)</code>, shards as well and holds no tensor at
+all; that is the combination that reaches protein scale, since the slabs
+themselves stop fitting long before. RI-J, RI-K and range-separated exchange
+all shard, so hybrids run on a mesh too.</p>
 <p><em>Executed on a 4×A100 node; outputs are committed with the notebook.</em></p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="p">;</span> <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_enable_x64&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">devices</span><span class="p">())</span>

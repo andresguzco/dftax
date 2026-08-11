@@ -85,10 +85,30 @@ def test_screened_xc_matches_dense_open_shell(xc):
     ``ε_xc(ρα, ρβ, ∇ρα, ∇ρβ)`` couples the channels, so this is not a sum of
     two independent screened energies and would be quietly wrong if it were
     written that way.
+
+    Planar CH3, whose SOMO is the non-degenerate out-of-plane p, and not the OH
+    radical this case used to run on. OH puts its SOMO in the exactly
+    degenerate pi shell, where the two broken-symmetry solutions are equal in
+    energy and DIIS oscillates between them: measured across four shell-bucket
+    partitions, which move the integrals by ~1e-14, the OH solve converged in 8
+    iterations on one and failed to converge in 300 on the other three, with
+    deterministic kernels, and non-monotonically in the partition. That is the
+    degeneracy documented in test_roks_oh_degenerate_somo_cartesian_aux, and it
+    was testing the SCF's behaviour at a degenerate point rather than anything
+    about screening.
+
+    Screening itself was never implicated and the swap does not paper over it:
+    on the same four partitions the fixed-density claim below held on OH at
+    0.0e+00 to 1.8e-15 every time, including the runs whose SCF never closed.
+    CH3, NH2 and O2 all converge in 8 iterations on every partition; CH3 keeps
+    the widest margin on the agreement tolerance (1.4e-9 against O2's 5.0e-9).
     """
-    oh = Molecule.from_xyz("O 0 0 0; H 0.9697 0 0", "sto-3g", spin=1)
-    ks0 = KS(oh, xc, grid=becke(35, 50))
-    kss = KS(oh, xc, grid=_screened())
+    ch3 = Molecule.from_xyz(
+        "C 0 0 0; H 0 1.079 0; H 0.934 -0.539 0; H -0.934 -0.539 0",
+        "sto-3g", spin=1,
+    )
+    ks0 = KS(ch3, xc, grid=becke(35, 50))
+    kss = KS(ch3, xc, grid=_screened())
     assert isinstance(kss.xc_term, ScreenedGridXC)
 
     P = scf(ks0, max_iter=40).P

@@ -22,6 +22,68 @@ to [Semantic Versioning](https://semver.org/).
   Both apply only to the default; an explicit `guess=minao()` still raises.
 
 ### Added
+- **Per-block basis screening for the XC quadrature**, `becke(screen=1e-10)`.
+  A contracted GTO is numerically zero over most of a large molecule's grid,
+  but the dense quadrature evaluates every function at every point and
+  contracts the whole density matrix there, so the XC term costs `ng·nao²`
+  however little of the basis reaches a region. The grid is reordered into
+  compact blocks (points grouped by nearest atom, atoms walked in neighbour
+  order), each block keeps only the shells with amplitude in it, and the
+  contraction runs in that reduced space: `ng·nsub²`.
+
+  This is the large-system knob and it says so. Measured end to end on a `grad`
+  of the XC energy, which is what an SCF iteration pays, against the streamed
+  dense path at def2-svp: **0.89x at 23 atoms (a loss), 1.53x at 53, 3.11x at
+  153**, peak memory equal or lower, energies agreeing to 5e-12. The underlying
+  significant fraction keeps falling with size (80.7% → 53.9% → 31.6% → 17.6% →
+  14.2% at 23 → 453 atoms), and the delivered speedup holds a steady ~65% of
+  what that predicts, so the gather overhead scales with the win rather than
+  swamping it. Off by default; worth turning on above ~50 atoms.
+
+  Blocks are grouped into buckets by surviving width and each bucket padded to
+  its own maximum. That is the feature, not a refinement: padding every block
+  to one global maximum recovers nothing measurable, because a single dense
+  block sets the shape for all of them. Closed and open shell both, the latter
+  carrying both spin channels through the same sub-basis, since `ε_xc` couples
+  them.
+- **Streamed density fitting now shards across a mesh.** `df(chunk=...)` with
+  `mesh=` used to raise: streaming was the only backend that fits at protein
+  scale (the materialized aux-sharded one still holds `nao²·naux/ndev` per
+  device, 15 TiB for insulin at triple zeta) and it forfeited every device but
+  one. Each device now streams its own contiguous slice of the auxiliary range
+  into its piece of `γ`, which is all that has to cross devices, and the metric
+  quadratic form is evaluated replicated.
+
+  No basis slicing is involved, unlike the materialized slabs: the streamed
+  kernel looks an auxiliary function up by index, so a device needs the whole
+  (small) auxiliary basis and only its own range. Indices are assigned
+  contiguously and padded to a multiple of the device count, so the gathered
+  `γ` is already in auxiliary order and the dense case is *bit-identical* to
+  the single-device streamed backend rather than merely close. Screened and
+  dense both, over 4 devices: fixed-density RI-J agreeing to 0.0e+00 and
+  6.9e-10, the full SCF to 5.7e-10 and 3.8e-11.
+- **Streamed exact exchange shards too, so hybrids run on a mesh.** RI-K shards
+  on a different axis than RI-J, and a simpler one:
+  `E_K = Σ_ijx (Σ_P (ij|P) L_Px)²` is a sum over occupied orbitals, and so is
+  the exchange kernel `K_mn = Σ_jx B_mjx B_njx`, so each device scans its own
+  slice of the occupied set and the partials are `psum`-reduced. Padding the
+  occupied axis is free rather than something to mask, a zero orbital column
+  giving `B = 0` and contributing nothing to either sum.
+
+  Both halves of the `custom_vjp` shard the same way, which is what keeps the
+  gradient exact: the analytic exchange Fock the backward returns is the `psum`
+  of per-device partial kernels, i.e. the single-device matrix. The
+  range-separated operator rides the same path on the attenuated metric.
+  Water/sto-3g over 4 devices, against the single-device streamed backend: PBE0
+  fixed-density 2.5e-11 and the full SCF 4.1e-11; CAM-B3LYP fixed-density
+  bit-identical and the SCF 9.4e-11.
+
+  With this, `df(chunk=...)` with `mesh=` covers the whole functional range
+  except VV10: RI-J, RI-K and range-separated exchange, dense or
+  Schwarz-screened. VV10 is what `test_sharded_df_guards` now pins, its
+  double-grid pair quadrature being nonlocal across shards and unevaluable
+  shard by shard, which is a real limitation rather than a gap waiting to be
+  filled.
 - **Multi-node execution.** `distributed()` joins the processes of a
   multi-task job into one JAX process group (the coordinator, the process
   count and the ids come from the SLURM environment), after which `mesh()`
@@ -84,6 +146,40 @@ to [Semantic Versioning](https://semver.org/).
   metric's pseudo-inverse turns into 5e-10 in the total energy.
 
 ### Fixed
+- **One second-row atom sized the integral kernels for the whole molecule.**
+  The shell-bucket planners keyed classes on the angular triple alone, so every
+  member of a class was padded to the largest primitive count any shell of that
+  class carried. In cc-pVDZ, sulfur is 12s8p1d against carbon's 9s4p1d, which
+  took the `(s,s)` class from 9x9 to 12x12 and `(p,p)` from 4x4 to 8x8 across
+  the entire basis; the cost is pad times pair-count, so it was paid by the
+  thousands of pairs containing no sulfur rather than by the handful that do.
+  On penicillin G (C16H18N2O4S) at cc-pVDZ that was 8x the padded primitive
+  work in the 3-center build and **20.3 GiB of build scratch against 12.4**.
+
+  The planners now key on the contraction lengths too, then merge classes back
+  under a padded-work budget. Both ends alone are wrong, because the two costs
+  have different shapes: padded work is a sum over classes and sets the build's
+  FLOPs, while scratch is a max over them and sets the ceiling on molecule
+  size. Keying exactly minimizes the sum but compiles one kernel per (angular
+  class x contraction combo), taking penicillin from 45 classes to 416 and
+  tripling compile time; a first-row-only molecule pays that in full and gets
+  nothing back on the max, since its heavy atoms already share a contraction
+  length. The budget is 25%, read off a measured sweep: scratch sits flat and
+  then steps once a merge re-admits a sulfur-sized class, and 25% is just below
+  the step, holding the exact partition's memory to 0.15% while merging back
+  239 of its 416 kernels. Molecules whose angular classes are already
+  contraction-uniform (PCl3: P and Cl are both 12s8p1d) collapse back to the
+  old partition exactly, since those merges are free.
+
+  Net on penicillin: scratch 20.3 -> 12.4 GiB, compile 353 -> 655 s, converging
+  in 36 iterations against 37. On the first-row control ala_4 (43 atoms):
+  scratch 7.7 -> 6.3 GiB, compile 319 -> 552 s, 26 iterations against 35. The
+  compile cost is one-time per shape and cacheable through
+  `JAX_COMPILATION_CACHE_DIR`; peak memory is what caps reachable molecules.
+  Integrals are unchanged to 1.4e-14 (cc-pVDZ), 5.7e-14 (cc-pVTZ) and 1.4e-14
+  (cc-pVQZ) across water, H2S, PCl3 and ethanol: padding contributes zero but
+  shifts the summation order inside a kernel, so the agreement is machine
+  precision rather than bit-identical.
 - **The GPU4PySCF benchmark was not comparing like with like, and the "dftax
   needs 10x the SCF iterations" conclusion it produced was an artifact of its
   own stopping test.** `scripts/bench/gpu4pyscf_bench.py` set PySCF's

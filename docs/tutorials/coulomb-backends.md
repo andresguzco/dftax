@@ -105,9 +105,17 @@ and holds its 3-center tensor in per-device aux slabs (no device ever
 materializes more than `naux/ndev` of it), with hybrid exact exchange computed
 slab-wise. The dense nao² matrices (S, hcore, P, Fock) stay replicated, and
 every collective differentiates, so `scf`, `minimize`, and property workflows
-run unchanged. Not supported with `mesh=`: the streamed `df(chunk=...)` backend
-(the aux-sharded materialized backend covers that memory regime); it raises at
-build time. A one-device mesh is a no-op.
+run unchanged. A one-device mesh is a no-op.
+
+The streamed `df(chunk=...)` backend shards too, and it is the one that reaches
+protein scale: the materialized slabs still cost `nao²·naux/ndev` per device
+(15 TiB for insulin at triple zeta), while the streamed path holds no tensor at
+all and each device takes its own contiguous slice of the auxiliary range. RI-J,
+RI-K and range-separated exchange all shard, dense or Schwarz-screened, so the
+combination covers the whole functional range with one exception: `WB97XV`'s
+VV10 nonlocal correlation, whose double-grid pair quadrature is nonlocal across
+shards and cannot be evaluated shard by shard at all. That one raises at build
+time.
 
 ### Across nodes
 

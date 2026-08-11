@@ -17,7 +17,25 @@ def _checks(ks, r_ro, r_uks):
 
 @pytest.mark.float64
 def test_roks_ch3_radical():
-    """Doublet with a non-degenerate SOMO (the out-of-plane p of planar CH3)."""
+    """Doublet with a non-degenerate SOMO (the out-of-plane p of planar CH3).
+
+    KNOWN FLAKY on ``r_ro.converged``, and it is the ``newton()`` trust-region
+    defect that test_newton_escapes_indefinite_hessian already characterizes,
+    not a ROKS or an integral problem. This case is decided by last-digit noise
+    in the Fock matrix: measured across the shell-bucket repartitioning (which
+    moves the integrals by ~1e-14) crossed with XLA's GEMM autotuning, the same
+    physical problem converges in 3, in 22, or not at all inside 64 steps --
+    and the two partitions swap which side stalls when autotuning is turned
+    off, so neither is the "good" one. Every one of those runs lands
+    e_ro = -39.27399176 to 1e-9 with a subspace residual at 4e-16, i.e. the
+    solver finds the answer and then fails to notice; raising the budget does
+    not rescue it (a stalled configuration is still stalled at 300).
+
+    Left as-is rather than pinned to a lucky configuration or papered over with
+    a bigger max_iter, on the same reasoning as the Newton case: the trust
+    region collapsing under 1e-14 perturbations is a real robustness bug in
+    newton(), and hiding it here would cost the next person the evidence.
+    """
     mol = Molecule.from_xyz(
         "C 0 0 0; H 0 1.079 0; H 0.934 -0.539 0; H -0.934 -0.539 0",
         "sto-3g", spin=1,

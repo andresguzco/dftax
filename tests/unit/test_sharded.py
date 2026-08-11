@@ -10,7 +10,10 @@ import jax.numpy as jnp
 import pytest
 
 from dftax import KS, Molecule, becke, df, mesh, minimize, scf, scf_batched
-from dftax.ks.terms import GridXC, ShardedDFCoulomb, ShardedGridXC, StreamedGridXC
+from dftax.ks.terms import (
+    GridXC, ShardedDFCoulomb, ShardedGridXC, ShardedStreamedDFCoulomb,
+    StreamedGridXC,
+)
 from dftax.energy.xc import CAMB3LYP, LDA, PBE, PBE0
 
 jax.config.update("jax_enable_x64", True)
@@ -110,11 +113,86 @@ def test_sharded_df_matches_unsharded():
 
 @multi
 def test_sharded_df_guards():
-    """Unsupported mesh combinations fail loudly at build, not silently."""
+    """Unsupported mesh combinations fail loudly at build, not silently.
+
+    The streamed backend now shards RI-J, RI-K and the range-separated
+    exchange, so a hybrid with ``mesh=`` is supported rather than guarded (see
+    the parity tests below). What remains genuinely unsupported on a sharded
+    grid is VV10: its double-grid pair quadrature is nonlocal across shards,
+    so it cannot be evaluated shard-by-shard at all.
+    """
+    from dftax.energy.xc import WB97XV
+
     AUX = "def2-universal-jkfit"
     mol = Molecule.from_xyz(WATER, "sto-3g")
-    with pytest.raises(NotImplementedError):
-        KS(mol, PBE(), grid=GRID, coulomb=df(AUX, chunk=50), mesh=mesh())
+    with pytest.raises(NotImplementedError, match="VV10"):
+        KS(mol, WB97XV(), grid=GRID, coulomb=df(AUX), mesh=mesh())
+
+
+@multi
+@pytest.mark.float64
+def test_sharded_streamed_df_matches_unsharded():
+    """Aux-sharded *streamed* RI-J: each device streams its own slice of the
+    auxiliary range into its piece of γ, and the gathered result reproduces the
+    single-device streamed backend.
+
+    This is the combination protein scale needs and the materialized backend
+    cannot give: streaming keeps the (nao², naux) tensor from ever existing,
+    sharding divides what is left. Run screened as well as dense, because the
+    screened bra sum is the O(N) path that makes the streamed backend
+    affordable at scale and it has to survive being divided.
+    """
+    AUX = "def2-universal-jkfit"
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    for screen in (None, 1e-10):
+        ks0 = KS(mol, PBE(), grid=GRID, coulomb=df(AUX, chunk=16,
+                                                   screen=screen))
+        ksm = KS(mol, PBE(), grid=GRID, mesh=mesh(),
+                 coulomb=df(AUX, chunk=16, screen=screen))
+        assert isinstance(ksm.coulomb, ShardedStreamedDFCoulomb)
+        assert (ks0.coulomb.pairs is None) == (screen is None)
+        assert (ksm.coulomb.pairs is None) == (screen is None)
+        # The auxiliary range is split contiguously and padded to a multiple of
+        # the device count, so this exercises the padding whenever naux does
+        # not divide evenly (133 cartesian auxiliaries over 4 devices does not).
+        P = scf(ks0).P
+        e0 = float(ks0.coulomb.energy(P, ks0.S, ks0.nocc))
+        em = float(ksm.coulomb.energy(P, ksm.S, ksm.nocc))
+        assert em == pytest.approx(e0, rel=1e-10)
+
+        r0 = scf(ks0, e_tol=1e-10, d_tol=1e-8)
+        r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8)
+        assert r0.converged and r1.converged
+        assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)   # see the RI-J case
+
+
+@multi
+@pytest.mark.float64
+@pytest.mark.parametrize("xc", [PBE0(), CAMB3LYP()], ids=["pbe0", "camb3lyp"])
+def test_sharded_streamed_hybrid_matches_unsharded(xc):
+    """Aux-sharded streamed *exchange*: RI-K sums over occupied orbitals, so
+    each device scans its own slice of them and the partials are psum-reduced.
+
+    Both halves of the RI-K ``custom_vjp`` shard the same way, so the analytic
+    exchange Fock it returns is the single-device one and the SCF closes on the
+    same fixed point. CAM-B3LYP carries the range-separated operator through
+    the same path on the attenuated metric.
+    """
+    AUX = "def2-universal-jkfit"
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    ks0 = KS(mol, xc, grid=GRID, coulomb=df(AUX, chunk=16))
+    ksm = KS(mol, xc, grid=GRID, coulomb=df(AUX, chunk=16), mesh=mesh())
+    assert isinstance(ksm.coulomb, ShardedStreamedDFCoulomb)
+
+    P = scf(ks0, max_iter=60).P
+    e0 = float(ks0.coulomb.energy(P, ks0.S, ks0.nocc))
+    em = float(ksm.coulomb.energy(P, ksm.S, ksm.nocc))
+    assert em == pytest.approx(e0, rel=1e-10)
+
+    r0 = scf(ks0, e_tol=1e-10, d_tol=1e-8, max_iter=80)
+    r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8, max_iter=80)
+    assert r0.converged and r1.converged
+    assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)   # see the RI-J case
 
 
 @multi

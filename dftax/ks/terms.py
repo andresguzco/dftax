@@ -318,21 +318,18 @@ def _eri3c_bra_chunk(basis, aux_basis, inflight):
     return max(1, int(_DF_BRA_BUDGET // per))
 
 
-def _streamed_df_rij(basis, aux_basis, int2c_inv, P, chunk, pairs=None):
-    """RI-J Coulomb energy ``½ γᵀ V⁻¹ γ`` streamed over auxiliary chunks.
+def _streamed_gamma(basis, aux_basis, P, chunk, pairs, k_idx):
+    """``γ_P = Σ_μν (μν|P) P_μν`` for the auxiliary functions named by ``k_idx``.
 
-    ``γ_P = Σ_μν (μν|P) P_μν`` is formed without materializing the (nao²×naux)
-    3-center tensor: each auxiliary function's 3-center block is recomputed (and
-    rematerialized in the backward pass) and contracted with the density on the
-    fly, so DF memory is O(chunk·nao²) instead of O(nao²·naux).
-
-    ``pairs`` (``(pi, pj, w)`` from :func:`~dftax.integrals.eri4c.significant_pairs`)
-    restricts the bra sum to the significant Schwarz pairs ``i<=j`` (with the i<->j
-    weight ``w``), turning the per-aux contraction from O(nao²) to O(N) for extended
-    systems. When ``None`` the full nao² grid is used (dense, exact).
+    Split out of :func:`_streamed_df_rij` so the auxiliary axis can be *divided*
+    as well as chunked: the aux-sharded streamed backend
+    (:class:`ShardedStreamedDFCoulomb`) hands each device its own slice of the
+    indices and gathers the resulting γ pieces. Nothing else has to change,
+    because the 3-center element is looked up per auxiliary index
+    (``_eri3c_elem(..., k)``) rather than sliced out of a stored tensor, so a
+    device needs the whole (small) auxiliary basis and only a different range.
     """
     Ptil = basis.cart2sph @ P @ basis.cart2sph.T if basis.cart2sph is not None else P
-    naux = aux_basis.centers.shape[0]
     # Chunk the bra pairs so the mt³ Hermite tensor is materialized a slab at a time
     # (× the `chunk` aux vmapped concurrently) instead of across the whole nao² batch,
     # which OOMs for f/g. bra_chunk is large for small bases, so no slowdown there.
@@ -358,7 +355,24 @@ def _streamed_df_rij(basis, aux_basis, int2c_inv, P, chunk, pairs=None):
                 return _eri3c_elem(basis, aux_basis, pi[p], pj[p], k) * Pw[p]
             return jnp.sum(_chunked_vmap(pair, chunk_size=bra_chunk)(pidx))
 
-    gamma = _chunked_vmap(gamma_k, chunk_size=chunk, checkpoint=True)(jnp.arange(naux))
+    return _chunked_vmap(gamma_k, chunk_size=chunk, checkpoint=True)(k_idx)
+
+
+def _streamed_df_rij(basis, aux_basis, int2c_inv, P, chunk, pairs=None):
+    """RI-J Coulomb energy ``½ γᵀ V⁻¹ γ`` streamed over auxiliary chunks.
+
+    ``γ_P = Σ_μν (μν|P) P_μν`` is formed without materializing the (nao²×naux)
+    3-center tensor: each auxiliary function's 3-center block is recomputed (and
+    rematerialized in the backward pass) and contracted with the density on the
+    fly, so DF memory is O(chunk·nao²) instead of O(nao²·naux).
+
+    ``pairs`` (``(pi, pj, w)`` from :func:`~dftax.integrals.eri4c.significant_pairs`)
+    restricts the bra sum to the significant Schwarz pairs ``i<=j`` (with the i<->j
+    weight ``w``), turning the per-aux contraction from O(nao²) to O(N) for extended
+    systems. When ``None`` the full nao² grid is used (dense, exact).
+    """
+    naux = aux_basis.centers.shape[0]
+    gamma = _streamed_gamma(basis, aux_basis, P, chunk, pairs, jnp.arange(naux))
     return 0.5 * jnp.dot(gamma, int2c_inv @ gamma)
 
 
@@ -449,8 +463,94 @@ def _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc, omega=None):
     return c2s.T @ Kc @ c2s if c2s is not None else Kc
 
 
+def _rik_shard_mesh(devices):
+    """1-D mesh over the occupied-orbital axis (named ``aux`` for consistency
+    with the RI-J sharding, which shares the term's mesh)."""
+    import numpy as np
+
+    return jax.sharding.Mesh(np.asarray(devices), ("aux",))
+
+
+def _rik_pad_occ(Cc, ndev):
+    """Pad the occupied axis to a multiple of the device count.
+
+    A zero orbital column produces ``B = 0`` and so contributes nothing to
+    either the energy sum or the exchange kernel, which is what makes the
+    padding free rather than something to mask.
+    """
+    nocc = Cc.shape[1]
+    slab = -(-nocc // ndev)
+    pad = ndev * slab - nocc
+    return (jnp.pad(Cc, ((0, 0), (0, pad))) if pad else Cc), slab
+
+
+def _rik_energy_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
+                        omega=None):
+    """:func:`_rik_energy` with the occupied orbitals split across devices.
+
+    ``Σ_ijx B_ijx²`` is a sum over occupied ``j``, so each device scans its own
+    orbitals and the partial sums are ``psum``-reduced. The full ``Cc`` is still
+    needed inside the body (``B_ij = Ccᵀ B_j`` contracts over *all* orbitals
+    ``i``), so it rides in replicated while only the scanned axis is sharded.
+    """
+    from jax import shard_map
+
+    Lf = _rik_cholesky(int2c_inv)
+    c2s = basis.cart2sph
+    Cc = c2s @ Cocc if c2s is not None else Cocc
+    n, naux = Cc.shape[0], Lf.shape[0]
+    Ccp, _slab = _rik_pad_occ(Cc, len(devices))
+    spec = jax.sharding.PartitionSpec
+
+    def part(Cfull, Lfull, cols):
+        def body(acc, cj):
+            Bij = Cfull.T @ _rik_bmj(basis, aux_basis, Lfull, cj, n, naux,
+                                     omega)
+            return acc + jnp.sum(Bij * Bij), None
+        ek, _ = jax.lax.scan(jax.checkpoint(body), jnp.array(0.0), cols)
+        return jax.lax.psum(ek, "aux")
+
+    return shard_map(
+        part, mesh=_rik_shard_mesh(devices),
+        in_specs=(spec(), spec(), spec("aux")), out_specs=spec(),
+        check_vma=False,
+    )(Cc, Lf, Ccp.T)
+
+
+def _rik_kmatrix_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
+                         omega=None):
+    """:func:`_rik_kmatrix` with the occupied orbitals split across devices.
+
+    ``KK_mn = Σ_jx B_mjx B_njx`` is the same sum over ``j``, so the per-device
+    partial kernels ``psum`` to the identical matrix the single-device path
+    builds. Unlike the energy this body needs only its own orbital column.
+    """
+    from jax import shard_map
+
+    Lf = _rik_cholesky(int2c_inv)
+    c2s = basis.cart2sph
+    Cc = c2s @ Cocc if c2s is not None else Cocc
+    n, naux = Cc.shape[0], Lf.shape[0]
+    Ccp, _slab = _rik_pad_occ(Cc, len(devices))
+    spec = jax.sharding.PartitionSpec
+
+    def part(Lfull, cols):
+        def body(Ka, cj):
+            B = _rik_bmj(basis, aux_basis, Lfull, cj, n, naux, omega)
+            return Ka + (B @ B.T), None
+        Kc, _ = jax.lax.scan(jax.checkpoint(body), jnp.zeros((n, n)), cols)
+        return jax.lax.psum(Kc, "aux")
+
+    Kc = shard_map(
+        part, mesh=_rik_shard_mesh(devices),
+        in_specs=(spec(), spec("aux")), out_specs=spec(), check_vma=False,
+    )(Lf, Ccp.T)
+    return c2s.T @ Kc @ c2s if c2s is not None else Kc
+
+
 def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
-                     dscale, energy_pref, grad_pref, omega=None):
+                     dscale, energy_pref, grad_pref, omega=None,
+                     devices=None):
     """Streamed RI-K exchange energy with an exact analytic gradient.
 
     Orbital-chunk RI-K: ``E_K = energy_pref · Σ_ijx (Σ_P (ij|P) L_Px)²`` (``V⁻¹=LLᵀ``),
@@ -474,20 +574,32 @@ def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
     basis/nuclear coordinates are **not** propagated, so geometry derivatives
     (forces) must use the materialized DF or exact path, not the streamed RI-K.
     """
+    # Both halves shard the same axis, so the vjp stays exact: the energy and
+    # the kernel are each a sum over occupied orbitals, and a psum of the
+    # per-device partials is the single-device value.
+    def _energy(Cocc):
+        if devices is None:
+            return _rik_energy(basis, aux_basis, int2c_inv, Cocc, omega)
+        return _rik_energy_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
+                                   omega)
+
+    def _kmat(Cocc):
+        if devices is None:
+            return _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc, omega)
+        return _rik_kmatrix_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
+                                    omega)
+
     @jax.custom_vjp
     def rik(P):
         Cocc = _rik_occ_orbitals(P, S, nocc, dscale)
-        return energy_pref * _rik_energy(basis, aux_basis, int2c_inv, Cocc,
-                                         omega)
+        return energy_pref * _energy(Cocc)
 
     def fwd(P):
         Cocc = _rik_occ_orbitals(P, S, nocc, dscale)
-        return (energy_pref
-                * _rik_energy(basis, aux_basis, int2c_inv, Cocc, omega)), Cocc
+        return energy_pref * _energy(Cocc), Cocc
 
     def bwd(Cocc, g):
-        KK = _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc, omega)
-        return (g * grad_pref * KK,)
+        return (g * grad_pref * _kmat(Cocc),)
 
     rik.defvjp(fwd, bwd)
     return rik(P)
@@ -761,6 +873,107 @@ class StreamedDFCoulomb(CoulombTerm):
         return e
 
 
+class ShardedStreamedDFCoulomb(CoulombTerm):
+    """Streamed RI-J with the auxiliary axis divided across a device mesh.
+
+    The streamed backend never builds the ``(nao², naux)`` tensor, which is the
+    only thing that fits at protein scale; this divides its auxiliary axis over
+    the mesh as well, so the per-device work is ``naux/ndev`` auxiliary
+    functions streamed ``chunk`` at a time. Combining the two is the point: the
+    materialized aux-sharded backend still holds ``nao²·naux/ndev`` per device,
+    which for insulin at triple zeta is 15 TiB.
+
+    Each device streams its own contiguous slice of the auxiliary index range
+    into its piece of ``γ``, the pieces are ``all_gather``-ed (γ is a
+    ``naux``-vector, so this is negligible traffic), and the metric quadratic
+    form ``½ γᵀ V⁻¹ γ`` is evaluated replicated -- the same decomposition
+    :class:`ShardedDFCoulomb` uses, and for the same reason: γ is the only
+    quantity that has to cross devices.
+
+    The auxiliary basis is *replicated*, not sliced. The streamed kernel looks
+    an auxiliary function up by index (``_eri3c_elem(..., k)``) instead of
+    slicing a stored slab, so a device needs the whole (small) auxiliary basis
+    and only its own range of ``k``. Indices are assigned contiguously and the
+    range is padded to a multiple of the device count, with the padding masked
+    to zero, so the gathered γ is already in auxiliary order and truncating it
+    to ``naux`` is exact rather than needing a position map.
+
+    Hybrids shard too, on a different axis: streamed RI-K sums over occupied
+    orbitals, so each device scans its own slice of them and the partials are
+    ``psum``-reduced (:func:`_rik_energy_sharded`). Both halves of its
+    ``custom_vjp`` shard the same way, so the analytic exchange Fock it returns
+    is unchanged. Range-separated hybrids ride along on the attenuated metric.
+    """
+
+    basis: BasisData
+    aux_basis: BasisData
+    int2c_inv: Float[Array, "naux naux"]
+    # Significant Schwarz bra pairs (pi, pj, w) for screened RI-J (None = dense):
+    pairs: tuple[Array, Array, Float[Array, "npair"]] | None
+    devices: tuple = eqx.field(static=True)
+    chunk: int = eqx.field(static=True)
+    hf_coeff: float = eqx.field(static=True, default=0.0)
+    int2c_inv_lr: Float[Array, "naux naux"] | None = None
+    hf_coeff_lr: float = eqx.field(static=True, default=0.0)
+    omega: float = eqx.field(static=True, default=0.0)
+
+    def _rik_sum(self, e, P, S, nocc, metric_inv, ax, omega):
+        if P.shape[0] == 1:                            # closed shell: P = 2 C Cᵀ
+            return e + _streamed_df_rik(
+                self.basis, self.aux_basis, metric_inv, S, nocc[0], P[0],
+                0.5, -ax, -ax, omega, devices=self.devices,
+            )
+        for Ps, n in zip(P, nocc):                     # one spin channel
+            e = e + _streamed_df_rik(
+                self.basis, self.aux_basis, metric_inv, S, n, Ps,
+                1.0, -0.5 * ax, -ax, omega, devices=self.devices,
+            )
+        return e
+
+    def energy(self, P, S, nocc):
+        import numpy as np
+        from jax import shard_map
+
+        jmesh = jax.sharding.Mesh(np.asarray(self.devices), ("aux",))
+        spec = jax.sharding.PartitionSpec
+        rep, sh = spec(), spec("aux")
+        ndev = len(self.devices)
+        naux = self.aux_basis.centers.shape[0]
+        slab = -(-naux // ndev)                       # ceil, so ndev·slab >= naux
+
+        # Padded index range. Out-of-range entries are clamped to a valid index
+        # (so the gather they drive is in bounds) and their γ contribution is
+        # masked out, which is cheaper than a ragged shard and keeps every
+        # device's graph identical.
+        k_all = jnp.arange(ndev * slab)
+        k_safe = jnp.minimum(k_all, naux - 1)
+        keep = (k_all < naux).astype(self.int2c_inv.dtype)
+        chunk, pairs = self.chunk, self.pairs
+
+        def part(basis, aux, vinv, kk, mask, Pf):
+            g_local = mask * _streamed_gamma(basis, aux, Pf, chunk, pairs, kk)
+            g = jax.lax.all_gather(g_local, "aux", tiled=True)[:naux]
+            return 0.5 * jnp.dot(g, vinv @ g)
+
+        tree_rep = jax.tree.map(lambda _: rep, self.basis)
+        aux_rep = jax.tree.map(lambda _: rep, self.aux_basis)
+        # check_vma=False for the same reason as ShardedDFCoulomb: the checker
+        # cannot prove the post-all_gather value is replicated, though it is.
+        e = shard_map(
+            part, mesh=jmesh,
+            in_specs=(tree_rep, aux_rep, rep, sh, sh, rep),
+            out_specs=rep, check_vma=False,
+        )(self.basis, self.aux_basis, self.int2c_inv, k_safe, keep,
+          jnp.sum(P, axis=0))
+        if self.hf_coeff != 0.0:
+            e = self._rik_sum(e, P, S, nocc, self.int2c_inv, self.hf_coeff,
+                              None)
+        if self.hf_coeff_lr != 0.0:
+            e = self._rik_sum(e, P, S, nocc, self.int2c_inv_lr,
+                              self.hf_coeff_lr, self.omega)
+        return e
+
+
 # ---------------------------------------------------------------------------
 # Exchange-correlation terms
 # ---------------------------------------------------------------------------
@@ -894,6 +1107,190 @@ class StreamedGridXC(XCTerm):
         )
 
 
+def _screened_sub_basis(basis, cart, cmask, sph):
+    """The block's own basis: rows gathered down to the shells that reach it,
+    plus the matching block-diagonal slice of ``cart2sph``, so ``eval_gto``
+    runs on it unchanged.
+
+    Both ends of the padding have to be masked, and the caller must apply the
+    spherical half. Padded entries index row and column zero, which is a *real*
+    basis function, so zeroing only the cartesian coefficients here would leave
+    the padded spherical columns carrying genuine AO values and genuine density
+    entries into the contraction.
+    """
+    sub = eqx.tree_at(
+        lambda t: (t.centers, t.exponents, t.coefficients, t.angular),
+        basis,
+        (basis.centers[cart], basis.exponents[cart],
+         basis.coefficients[cart] * cmask[:, None], basis.angular[cart]),
+    )
+    if basis.cart2sph is not None:
+        sub = eqx.tree_at(lambda t: t.cart2sph, sub,
+                          basis.cart2sph[cart][:, sph])
+    return sub
+
+
+def _screened_rho_block(basis, P, cart, sph, cmask, smask, pts, need_grad):
+    """Density (and its gradient) on one block, in the block's own sub-basis."""
+    sub = _screened_sub_basis(basis, cart, cmask, sph)
+    Psub = P[sph][:, sph]
+
+    def one(r):
+        ao = eval_gto(sub, r) * smask
+        rho = ao @ Psub @ ao
+        if not need_grad:
+            return rho, jnp.zeros(3), jnp.zeros(())
+        dao = jax.jacfwd(eval_gto, argnums=1)(sub, r) * smask[:, None]
+        grad = 2.0 * (ao @ Psub) @ dao
+        tau = 0.5 * jnp.einsum("mx,mn,nx->", dao, Psub, dao)
+        return rho, grad, tau
+
+    return jax.vmap(one)(pts)
+
+
+def _screened_e_xc(xc, basis, coords, weights, P, buckets, block, n_block):
+    """XC energy with the basis screened per grid block (see
+    :mod:`dftax.grid.screen`).
+
+    One jitted kernel per bucket, ``lax.map`` over that bucket's blocks. The
+    quadrature is the same sum in a different order, so the value matches the
+    dense path to the screening cutoff.
+    """
+    gga = xc.xc_type == "GGA"
+    mgga = xc.xc_type == "MGGA"
+    need = gga or mgga
+    cg = coords.reshape(n_block, block, 3)
+    wg = weights.reshape(n_block, block)
+    total = jnp.zeros(())
+
+    for bucket in buckets:
+        ids = bucket.block_ids
+
+        def body(args, _ids=ids):
+            cart, sph, cm, sm, i = args
+            rho, grad, tau = _screened_rho_block(
+                basis, P, cart, sph, cm, sm, cg[i], need)
+            w = wg[i]
+            mask = rho > 1e-10
+            safe = jnp.where(mask, rho, 1.0)
+            # The functionals take one point at a time (scalar ρ, (3,) ∇ρ), so
+            # the block's points are vmapped over rather than passed as arrays.
+            if mgga:
+                eps = jax.vmap(xc)(safe, jnp.where(mask[:, None], grad, 0.0),
+                                   jnp.where(mask, tau, 1.0))
+            elif gga:
+                eps = jax.vmap(xc)(safe, jnp.where(mask[:, None], grad, 0.0))
+            else:
+                eps = jax.vmap(xc)(safe)
+            return jnp.sum(jnp.where(mask, w * eps * rho, 0.0))
+
+        # Rematerialize per block in the backward pass, as the streamed path
+        # does. Without it lax.map keeps every block's AO values (and their
+        # gradients) as scan residuals, which is O(ng·nsub) for the whole grid
+        # rather than O(block·nsub): ~45 GiB on a 153-atom peptide, where the
+        # dense path stays flat.
+        total = total + jnp.sum(jax.lax.map(
+            jax.checkpoint(body),
+            (bucket.cart, bucket.sph, bucket.cart_mask, bucket.sph_mask, ids),
+        ))
+    return total
+
+
+def _screened_e_xc_spin(xc, basis, coords, weights, Pa, Pb, buckets, block,
+                        n_block):
+    """Spin-polarized screened XC energy, the open-shell analog of
+    :func:`_screened_e_xc`.
+
+    Not a sum of per-channel energies: ``ε_xc(ρα, ρβ, ∇ρα, ∇ρβ)`` couples the
+    channels, so both densities ride through the same gathered sub-basis. The
+    screening plan is shared, since which shells reach a block is a property of
+    the basis and the geometry, not of the density.
+
+    Per-point nan-safe double-``where`` per channel, matching
+    :func:`_streamed_e_xc_spin`: a vanishing or (under a non-PSD perturbation)
+    negative channel must not blow up ``ρ_σ^{1/3}`` or the reduced gradient.
+    """
+    gga = xc.xc_type == "GGA"
+    mgga = xc.xc_type == "MGGA"
+    cg = coords.reshape(n_block, block, 3)
+    wg = weights.reshape(n_block, block)
+    total = jnp.zeros(())
+
+    for bucket in buckets:
+        def body(args):
+            cart, sph, cm, sm, i = args
+            sub = _screened_sub_basis(basis, cart, cm, sph)
+            Pas, Pbs = Pa[sph][:, sph], Pb[sph][:, sph]
+
+            def point(r, w):
+                ao = eval_gto(sub, r) * sm
+                rho_a = ao @ Pas @ ao
+                rho_b = ao @ Pbs @ ao
+                rho_tot = rho_a + rho_b
+                mask = rho_tot > 1e-10
+                ta, tb = rho_a > 1e-10, rho_b > 1e-10
+                rho2 = jnp.stack([jnp.where(ta, rho_a, 1e-10),
+                                  jnp.where(tb, rho_b, 1e-10)])
+                if gga or mgga:
+                    dao = jax.jacfwd(eval_gto, argnums=1)(sub, r) * sm[:, None]
+                    ga = jnp.where(ta, 2.0 * (ao @ Pas) @ dao, 0.0)
+                    gb = jnp.where(tb, 2.0 * (ao @ Pbs) @ dao, 0.0)
+                    if mgga:
+                        tau2 = jnp.stack([
+                            jnp.where(ta, 0.5 * jnp.einsum(
+                                "mx,mn,nx->", dao, Pas, dao), 1e-10),
+                            jnp.where(tb, 0.5 * jnp.einsum(
+                                "mx,mn,nx->", dao, Pbs, dao), 1e-10),
+                        ])
+                        eps = xc(rho2, jnp.stack([ga, gb], axis=-1), tau2)
+                    else:
+                        eps = xc(rho2, jnp.stack([ga, gb], axis=-1))
+                else:
+                    eps = xc(rho2)
+                return jnp.where(mask, w * eps * rho_tot, 0.0)
+
+            return jnp.sum(jax.vmap(point)(cg[i], wg[i]))
+
+        total = total + jnp.sum(jax.lax.map(
+            jax.checkpoint(body),
+            (bucket.cart, bucket.sph, bucket.cart_mask, bucket.sph_mask,
+             bucket.block_ids),
+        ))
+    return total
+
+
+class ScreenedGridXC(XCTerm):
+    """XC on a blocked grid with the basis screened per block.
+
+    Holds the spatially reordered quadrature (padded with zero-weight points to
+    fill the last block) and the plan naming, for each block, the shells that
+    reach it. Cost is ``ng·nsub²`` rather than ``ng·nao²``, which is worth
+    little on small molecules and a great deal on large ones: the padded cost
+    ratio measured on an alanine ladder at def2-svp is 0.74 at 23 atoms and
+    0.045 at 453.
+    """
+
+    basis: BasisData
+    grid_coords: Float[Array, "ng 3"]
+    weights: Float[Array, "ng"]
+    # Pytree leaves, not static: the index arrays are large, and jit compares
+    # static arguments by equality, which arrays do not support. Only the
+    # block geometry below has to be static.
+    buckets: tuple
+    block: int = eqx.field(static=True)
+    n_block: int = eqx.field(static=True)
+    xc: XCFunctional = eqx.field(static=True)
+
+    def energy(self, P):
+        if P.shape[0] == 1:
+            return _screened_e_xc(self.xc, self.basis, self.grid_coords,
+                                  self.weights, P[0], self.buckets, self.block,
+                                  self.n_block)
+        return _screened_e_xc_spin(self.xc, self.basis, self.grid_coords,
+                                   self.weights, P[0], P[1], self.buckets,
+                                   self.block, self.n_block)
+
+
 class ShardedGridXC(XCTerm):
     """XC integral sharded over grid points across a 1-D device mesh.
 
@@ -950,7 +1347,7 @@ class ShardedGridXC(XCTerm):
 
 def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                   eri_lr=None, int3c_lr=None, int2c_inv_lr=None,
-                  hf_coeff_lr=0.0, omega=0.0):
+                  hf_coeff_lr=0.0, omega=0.0, devices=None):
     """Wrap the integral arrays built for ``spec`` into the matching Coulomb term.
 
     ``hf_coeff_lr`` (with the ``*_lr`` attenuated tensors and ``omega``) is the
@@ -965,6 +1362,14 @@ def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                 "the public constructors resolve basis-set names."
             )
         if spec.chunk is not None:
+            if devices is not None:
+                return ShardedStreamedDFCoulomb(
+                    basis=basis, aux_basis=spec.auxbasis,
+                    int2c_inv=int2c_inv, pairs=pairs,
+                    devices=tuple(devices), chunk=spec.chunk,
+                    hf_coeff=hf_coeff, int2c_inv_lr=int2c_inv_lr,
+                    hf_coeff_lr=hf_coeff_lr, omega=omega,
+                )
             return StreamedDFCoulomb(
                 basis=basis, aux_basis=spec.auxbasis, int2c_inv=int2c_inv,
                 pairs=pairs, chunk=spec.chunk, hf_coeff=hf_coeff,

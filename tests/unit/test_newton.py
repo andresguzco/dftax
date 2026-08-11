@@ -69,12 +69,21 @@ def test_newton_escapes_indefinite_hessian():
     """
     mol = Molecule.from_xyz("N 0 0 0; N 0 0 2.5", "sto-3g")
     ks = KS(mol, PBE(), grid=becke(35, 50))
-    # max_iter=120, not 60: the step count here depends on which kernels XLA
-    # autotuning picks, which depends on what else is on the GPU. Measured 5
-    # steps in isolation (five repeats, identical), against 60-and-not-
-    # converged inside a three-shard sweep sharing the node -- and that run
-    # still reached the same energy to eight digits, so it was the criterion
-    # that had not tripped, not the solve that had failed.
+    # KNOWN FLAKY, and the cause is characterized rather than guessed. With
+    # XLA's GEMM autotuning disabled, so kernel selection is reproducible, this
+    # converges in 3 steps at the default g_tol=1e-6 (identically at 1e-5 and
+    # 1e-4, same energy). With autotuning on it takes 3 steps on some runs and
+    # fails to converge in 120 on others -- roughly half, measured over four
+    # repeats.
+    #
+    # A 40x swing in step count from kernel selection is not the
+    # achievable-gradient floor that
+    # test_newton_reaches_tight_tolerances_directly sits on; a floor would cap
+    # the tolerance, not send a solve that needs 3 steps past 120. It points at
+    # the trust region occasionally collapsing under last-digit changes in the
+    # Fock matrix, i.e. a robustness issue in newton() itself. Left failing
+    # rather than pinned to a lucky configuration, because masking it with a
+    # deterministic-kernel flag would hide a real defect.
     r1 = newton(ks, max_iter=120)
     assert r1.converged                                # no longer stalls
     assert r1.n_iter <= 60
@@ -86,7 +95,7 @@ def test_newton_reaches_tight_tolerances_directly():
     """The coarse-grid tight-tolerance case from the DF conditioning study:
     DIIS grinds against its noise floor (borderline non-convergence, >100
     iterations when it does close); Newton drives the orbital gradient to
-    g_tol=1e-9 in a handful of steps."""
+    g_tol=1e-7 in a handful of steps."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     ks = KS(mol, PBE(), grid=becke(35, 50))
     with warnings.catch_warnings():
@@ -100,12 +109,20 @@ def test_newton_reaches_tight_tolerances_directly():
     # 1e-8 inside the 64-step budget (it lands at 1e-7 in 6). The core start
     # sits on the achievable-gradient floor of the coarse grid; minao starts
     # inside it.
-    r1 = newton(ks, g_tol=1e-9, e_tol=1e-12)
+    # g_tol=1e-7, not 1e-9. This case sits on the achievable-gradient floor of
+    # a becke(35, 50) grid, and 1e-9 is below it: with XLA's GEMM autotuning
+    # disabled, so that kernel selection is reproducible, Newton reaches 1e-7
+    # in 4 steps, 1e-8 in 40, and does not reach 1e-9 inside the 64-step budget
+    # at all -- while every one of those lands the same energy to 1e-9 Ha. The
+    # test used to ask for 1e-9 and passed only on the autotuning draws that
+    # happened to fall the right way, which is why it failed roughly one run in
+    # three. Asking for a tolerance the grid can actually resolve makes it
+    # deterministic without pinning the platform's kernel choice.
+    r1 = newton(ks, g_tol=1e-7, e_tol=1e-12)
     assert r1.converged
-    # A budget, not "a handful": the step count on this coarse grid swings
-    # with last-digit changes in the integrals (measured 6 from minao, and on
-    # CPU 7 vs 43 across two Boys tables that agree to 2.5e-14). Pinning it
-    # would test the platform's last digit; the claim is that Newton closes a
-    # tolerance DIIS grinds against.
+    # A budget, not a pin: the step count still moves with last-digit changes
+    # in the integrals (on CPU, 7 vs 43 across two Boys tables agreeing to
+    # 2.5e-14). The claim is that Newton closes a tolerance DIIS grinds
+    # against, not that it takes exactly four steps.
     assert r1.n_iter <= 50
     assert (not r0.converged) or r0.n_iter >= 50

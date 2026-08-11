@@ -48,6 +48,124 @@ _ORBITAL_L_MAX = 6
 # index bytes the class scatters hand to XLA.
 _IDX = np.int32
 
+# Padding budget for the bucket merge below: how much padded primitive work a
+# plan may carry above the exact-contraction partition, in exchange for fewer
+# compiled kernels.
+#
+# Measured on penicillin G (C16H18N2O4S) / cc-pVDZ / DF / A100, reporting the
+# 3-center class count, the build's peak scratch, and its compile time:
+#
+#     budget    classes    scratch    compile
+#     0 (exact)     416   12.42 GiB     1065 s
+#     0.25          177   12.44 GiB      655 s
+#     0.5           138   17.76 GiB      594 s
+#     1.0           104   17.59 GiB      492 s
+#     inf (old)      45   20.26 GiB      353 s
+#
+# Scratch is a max over classes, not a sum, so it does not fall smoothly with
+# the budget: it sits flat until one particular merge re-admits a sulfur-sized
+# class. 0.25 is just below that step -- it keeps the memory of the exact
+# partition to 0.15% while merging back 239 of its 416 kernels. Raising it to
+# 0.5 buys 60 s of compile and gives back 5.3 GiB, which is the wrong trade
+# when peak memory is what caps the molecules this engine can reach.
+_PAD_TOL = 0.25
+
+
+def _merge_padded_buckets(nprims, counts, tol=None):
+    """Group same-angular-class sub-buckets, trading padding for kernel count.
+
+    Bucketing shells by angular class alone pads every member to the largest
+    primitive count any shell of that class carries, so one second-row atom
+    re-sizes the kernels for triples it does not appear in: in cc-pVDZ, sulfur
+    is 12s8p1d against carbon's 9s4p1d, which takes the (s,s) class from 9x9
+    to 12x12 and (p,p) from 4x4 to 8x8 for the whole molecule. On penicillin G
+    that is 8x the padded primitive work in the 3-center build and 20.3 GiB of
+    scratch against 12.4 GiB.
+
+    Keying on the contraction lengths instead removes the padding entirely,
+    but compile time scales with the number of distinct (angular class x
+    contraction combo) kernels -- measured at ~1.4 s per 3-center class -- and
+    exact keying takes penicillin from 45 classes to 416, tripling the build's
+    compile time.
+
+    Neither end is right, because the two costs have different shapes: padded
+    work is a sum over classes (it sets the build's FLOPs) while scratch is a
+    max over them (it sets the ceiling on molecule size). A first-row-only
+    molecule pays the full compile for exact keying and gets nothing back on
+    the max, since its heavy atoms already share a contraction length.
+
+    So: start exact and merge greedily, cheapest merge first, while the total
+    padded work stays inside ``(1 + tol)`` of the exact partition. Merges that
+    cost nothing (equal counts) are always taken, so a molecule whose angular
+    classes are already contraction-uniform collapses back to the angular
+    partition exactly.
+
+    Args:
+        nprims: per-sub-bucket tuples of primitive counts (2- or 3-tuples).
+        counts: per-sub-bucket number of shell pairs/triples.
+        tol: padded-work budget above the exact partition;
+            ``None`` uses the module default ``_PAD_TOL``.
+
+    Returns:
+        A list of index groups over ``nprims``/``counts``.
+    """
+    tol = _PAD_TOL if tol is None else tol
+
+    def work(npr, cnt):
+        w = cnt
+        for x in npr:
+            w *= x
+        return w
+
+    groups = [[i] for i in range(len(nprims))]
+    npr = [list(p) for p in nprims]
+    cnt = list(counts)
+    total = sum(work(p, c) for p, c in zip(nprims, counts))
+    budget = total * (1.0 + tol)
+    while len(groups) > 1:
+        best = None
+        for i in range(len(groups)):
+            for j in range(i + 1, len(groups)):
+                merged = [max(a, b) for a, b in zip(npr[i], npr[j])]
+                delta = (work(merged, cnt[i] + cnt[j])
+                         - work(npr[i], cnt[i]) - work(npr[j], cnt[j]))
+                if best is None or delta < best[0]:
+                    best = (delta, i, j, merged)
+        delta, i, j, merged = best
+        if total + delta > budget:
+            break
+        total += delta
+        groups[i] = groups[i] + groups[j]
+        npr[i] = merged
+        cnt[i] += cnt[j]
+        del groups[j], npr[j], cnt[j]
+    return groups
+
+
+def _merge_classes(buckets, nprims, nang, npayload, tol=None):
+    """Apply :func:`_merge_padded_buckets` to a planner's raw buckets.
+
+    ``buckets`` maps ``(angular... , nprims...)`` to a tuple of ``npayload``
+    row lists. Returns ``[(angular_key, nprims, payload_lists), ...]`` in a
+    deterministic order, one entry per emitted class.
+    """
+    by_ang = defaultdict(list)
+    for key in sorted(buckets):
+        by_ang[key[:nang]].append(key)
+    out = []
+    for ang, keys in sorted(by_ang.items()):
+        counts = [len(buckets[k][0]) for k in keys]
+        for grp in _merge_padded_buckets([nprims[k] for k in keys], counts,
+                                         tol):
+            npr = tuple(max(nprims[keys[i]][d] for i in grp)
+                        for d in range(len(nprims[keys[0]])))
+            payload = tuple(
+                [r for i in sorted(grp) for r in buckets[keys[i]][s]]
+                for s in range(npayload)
+            )
+            out.append((ang, npr, payload))
+    return sorted(out, key=lambda e: (e[0], e[1]))
+
 
 def _scatter_blocks(out, starts, vals):
     """Write one dense block per shell (triple) into ``out``.
@@ -250,21 +368,27 @@ def plan_eri3c(basis, aux_basis, keep_pairs=None):
                 continue
             ib = ia + jb_off
             for kc, (lc, rc, ncc, npc) in enumerate(aux):
-                key = (la, lb, lc)
+                # Contraction lengths join the key, so a triple is never padded
+                # to a heavier shell it does not contain; _merge_classes below
+                # then merges the sub-buckets back wherever the padding it
+                # would reintroduce is cheap. See _merge_padded_buckets.
+                key = (la, lb, lc, npa, npb, npc)
                 b = buckets[key]
                 b[0].append(ra); b[1].append(rb); b[2].append(rc)
                 b[3].append(bra_sph[ia]); b[4].append(bra_sph[ib])
                 b[5].append(aux_sph[kc])
-                cur = nprims.get(key, (0, 0, 0))
-                nprims[key] = (max(cur[0], npa), max(cur[1], npb),
-                               max(cur[2], npc))
+                nprims[key] = (npa, npb, npc)
 
     def ang_tup(ang, row0, l, ncomp):
         return tuple(tuple(int(x) for x in ang[row0 + i])
                      for i in range(ncomp))
 
     classes = []
-    for (la, lb, lc), rows in sorted(buckets.items()):
+    # The emitted class tuple is unchanged in shape; there are simply more of
+    # them where merging did not put them back together, each carrying the
+    # primitive counts its own members need, so every consumer unpacks exactly
+    # as before.
+    for (la, lb, lc), npr, rows in _merge_classes(buckets, nprims, 3, 6):
         rows_a, rows_b, rows_c, sph_a, sph_b, sph_c = rows
         nca = (la + 1) * (la + 2) // 2
         ncb = (lb + 1) * (lb + 2) // 2
@@ -275,7 +399,7 @@ def plan_eri3c(basis, aux_basis, keep_pairs=None):
             ang_tup(ang_b, rows_b[0], lb, ncb),
             ang_tup(ang_a, rows_c[0], lc, ncc),
             tuple(rows_a), tuple(rows_b), tuple(rows_c),
-            nprims[(la, lb, lc)],
+            npr,
             tuple(sph_a), tuple(sph_b), tuple(sph_c),
         ))
     nao = int(np.asarray(basis.angular).shape[0])
@@ -461,24 +585,27 @@ def plan_pairs(basis):
     nprims = {}
     for ia, (la, ra, nca, npa) in enumerate(bra):
         for lb, rb, ncb, npb in bra[ia:]:
-            key = (la, lb)
+            # Contraction lengths join the key, merged back below where the
+            # padding is cheap; see plan_eri3c / _merge_padded_buckets.
+            key = (la, lb, npa, npb)
             b = buckets[key]
             b[0].append(ra); b[1].append(rb)
-            cur = nprims.get(key, (0, 0))
-            nprims[key] = (max(cur[0], npa), max(cur[1], npb))
+            nprims[key] = (npa, npb)
 
     def ang_tup(row0, l, ncomp):
         return tuple(tuple(int(x) for x in ang[row0 + i])
                      for i in range(ncomp))
 
     classes = []
-    for (la, lb), (rows_a, rows_b) in sorted(buckets.items()):
+    # Same tuple shape as before; consumers are unaffected.
+    for (la, lb), npr, (rows_a, rows_b) in _merge_classes(buckets, nprims,
+                                                          2, 2):
         nca = (la + 1) * (la + 2) // 2
         ncb = (lb + 1) * (lb + 2) // 2
         classes.append((
             la, lb,
             ang_tup(rows_a[0], la, nca), ang_tup(rows_b[0], lb, ncb),
-            tuple(rows_a), tuple(rows_b), nprims[(la, lb)],
+            tuple(rows_a), tuple(rows_b), npr,
         ))
     return (int(np.asarray(basis.angular).shape[0]), tuple(classes))
 

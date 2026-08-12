@@ -4,7 +4,7 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.6.0] - 2026-08-12
 
 ### Changed (behavior)
 - **The default initial guess is `minao()`, not the core Hamiltonian.** The

@@ -260,3 +260,39 @@ class TestAuxSlabs:
             prev_c, prev_s = hi, shi
         assert prev_c == aux.centers.shape[0]
         assert prev_s == aux.cart2sph.shape[1]
+
+
+@pytest.mark.float64
+class TestBucketedEri4c:
+    def test_matches_flat_cartesian(self):
+        import jax.numpy as jnp
+
+        from dftax.integrals.eri4c import (
+            _eri4c_matrix_flat, _unique_quartets, eri4c_matrix,
+        )
+
+        b = build_basis_data(["O", "H", "H"], COORDS3, "sto-3g")
+        qi, qj, qk, ql, qof = _unique_quartets(b.centers.shape[0])
+        quart = jnp.stack([jnp.asarray(x) for x in (qi, qj, qk, ql)], axis=1)
+        ref = np.asarray(_eri4c_matrix_flat(b, quartets=quart, qof=qof))
+        new = np.asarray(eri4c_matrix(b))
+        assert np.abs(new - ref).max() < 1e-12
+
+    @pytest.mark.slow  # the flat REFERENCE engine is the slow side of the A/B
+    def test_matches_flat_spherical_d_shells_lr(self):
+        import jax.numpy as jnp
+
+        from dftax.integrals.eri4c import (
+            _eri4c_matrix_flat, _unique_quartets, eri4c_matrix,
+        )
+
+        b = build_basis_data(["O", "H"], COORDS3[:2], "def2-svp",
+                             spherical=True)
+        qi, qj, qk, ql, qof = _unique_quartets(b.centers.shape[0])
+        quart = jnp.stack([jnp.asarray(x) for x in (qi, qj, qk, ql)], axis=1)
+        for omega in (None, 0.33):
+            ref = np.asarray(
+                _eri4c_matrix_flat(b, quartets=quart, qof=qof, omega=omega)
+            )
+            new = np.asarray(eri4c_matrix(b, omega=omega))
+            assert np.abs(new - ref).max() < 1e-12

@@ -83,7 +83,7 @@ def read_xyz(name: str) -> str:
 CONV_TOL = 1e-8
 
 
-def run_dftax(atom, basis, aux, xc, level, repeat, ndev):
+def run_dftax(atom, basis, aux, xc, level, repeat, ndev, screen=1e-10):
     import jax
 
     jax.config.update("jax_enable_x64", True)
@@ -100,7 +100,13 @@ def run_dftax(atom, basis, aux, xc, level, repeat, ndev):
     # (which *is* pruned) against an unpruned PySCF, as this harness did
     # before, gave dftax a grid 1.7x smaller than the one it was measured
     # against.
-    grid = becke(*level, prune=None)
+    # Grid block screening ON by default: GPU4PySCF's numint always screens
+    # AOs per grid batch internally (it cannot be disabled), so an unscreened
+    # dftax XC term pays ng*nao^2 everywhere and the comparison measures the
+    # missing feature, not the engine. becke(screen=) is the matched setting;
+    # pass --screen 0 to measure the dense term.
+    grid = becke(*level, prune=None,
+                 screen=screen if screen and screen > 0 else None)
     functional = getattr(xcmod, xc)()
     walls = []
     ks = res = None
@@ -119,7 +125,7 @@ def run_dftax(atom, basis, aux, xc, level, repeat, ndev):
                   d_tol=CONV_TOL ** 0.5)          # PySCF's rule, see CONV_TOL
         e = float(res.e_tot)
         walls.append(time.perf_counter() - t0)
-    peak = max(int(d.memory_stats().get("peak_bytes_in_use", 0))
+    peak = max(int((d.memory_stats() or {}).get("peak_bytes_in_use", 0))
                for d in jax.devices())
     return dict(e_tot=e, walls=walls, n_iter=int(res.n_iter),
                 converged=bool(res.converged), peak_bytes=peak,
@@ -200,7 +206,7 @@ def drive(args):
             cmd = [py, os.path.abspath(__file__), "--engine", engine,
                    "--mol", name, "--basis", args.basis, "--aux", args.aux,
                    "--xc", args.xc, "--repeat", str(args.repeat),
-                   "--ndev", str(args.ndev)]
+                   "--ndev", str(args.ndev), "--screen", str(args.screen)]
             env = dict(os.environ)
             # Both engines see exactly the same GPUs: GPU4PySCF 1.8 spreads
             # over every visible device on its own, so pinning the set is the
@@ -263,14 +269,19 @@ def main():
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--ndev", type=int, default=1)
     ap.add_argument("--grid", nargs=2, type=int, default=[75, 302])
+    ap.add_argument("--screen", type=float, default=1e-10,
+                    help="dftax grid block-screening threshold (0 disables)")
     args = ap.parse_args()
 
     if args.drive:
         return drive(args)
     atom = read_xyz(args.mol)
-    fn = run_dftax if args.engine == "dftax" else run_gpu4pyscf
-    rec = fn(atom, args.basis, args.aux, args.xc, tuple(args.grid),
-             args.repeat, args.ndev)
+    if args.engine == "dftax":
+        rec = run_dftax(atom, args.basis, args.aux, args.xc, tuple(args.grid),
+                        args.repeat, args.ndev, args.screen)
+    else:
+        rec = run_gpu4pyscf(atom, args.basis, args.aux, args.xc,
+                            tuple(args.grid), args.repeat, args.ndev)
     rec.update(engine=args.engine, mol=args.mol, basis=args.basis, xc=args.xc)
     print("RESULT " + json.dumps(rec))
 

@@ -1095,3 +1095,44 @@ class R2SCAN(XCFunctional):
         return self.exchange(density, grad_density, tau) + self.correlation(
             density, grad_density, tau
         )
+
+
+# ---------------------------------------------------------------------------
+# String registry: functional("wb97x-v") instead of importing the class
+# ---------------------------------------------------------------------------
+
+_FUNCTIONALS: dict[str, type[XCFunctional]] = {
+    "lda": LDA, "svwn": LDA, "svwn5": LDA,
+    "pbe": PBE,
+    "b3lyp": B3LYP,
+    "pbe0": PBE0, "pbeh": PBE0,
+    "camb3lyp": CAMB3LYP,
+    "wb97x": WB97X,
+    "wb97xv": WB97XV,
+    "r2scan": R2SCAN,
+}
+
+
+def functional(name: str) -> XCFunctional:
+    """The XC functional named ``name``, ready to pass to :class:`~dftax.KS`.
+
+    Lookup ignores case and punctuation, so ``"wB97X-V"``, ``"wb97xv"`` and
+    ``"WB97X_V"`` all resolve to the same functional. Dispersion stays a
+    separate axis (``KS(..., dispersion=d3bj())``), matching the library's
+    choices-as-values style: a functional is a functional, not a functional
+    plus a correction.
+
+    Example:
+        ```python
+        KS(mol, functional("r2scan"))
+        KS(mol, functional("b3lyp"), dispersion=d3bj())
+        ```
+    """
+    key = "".join(ch for ch in name.lower() if ch.isalnum())
+    try:
+        return _FUNCTIONALS[key]()
+    except KeyError:
+        known = ", ".join(sorted({cls().name for cls in _FUNCTIONALS.values()}))
+        raise ValueError(
+            f"unknown functional {name!r}; available: {known}"
+        ) from None

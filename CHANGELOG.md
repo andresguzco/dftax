@@ -25,12 +25,20 @@ to [Semantic Versioning](https://semver.org/).
 - **Analytic nuclear Hessian**, `hessian(method="analytic")`: the exact
   orbital-rotation Schur complement `H = E_RR − E_Rκ (E_κκ)⁻¹ E_κR` at one
   tightly converged reference (Newton-polished), one CG response solve per
-  column; 3N response solves replace the FD path's 6N SCF solves. Closed
-  shell and materialized Coulomb backends for now. Validated against
-  FD-of-forces on the exact backend (H2 8.5e-7, water 3.0e-6, translational
-  sum rule); on DF paths finite-difference references are noise-limited
-  (per-leg energy reproducibility ~2e-10 Ha amplifies as 1/h²), so the DF
-  Hessian is pinned by a large-step energy-FD scan (1.3e-7 at h=1e-2).
+  column; 3N response solves replace the FD path's 6N SCF solves. RKS and
+  UKS (per-channel rotation generators; a stationarity guard rejects
+  non-stationary references, e.g. ROKS, and smeared results are rejected
+  outright). An explicit `df(chunk=<int>)` streams the response through the
+  forces backend's frozen exchange with the *traced* rotated occupieds, so
+  the 3-center tensor is never materialized; `chunk="auto"` stays
+  materialized (the response's memory profile is not the forces budget).
+  Validated against FD-of-forces on the exact backend (H2 8.5e-7, water
+  3.0e-6, H3 doublet 2e-5, translational sum rules); on DF paths
+  finite-difference references are noise-limited (per-leg energy
+  reproducibility ~2e-10 Ha amplifies as 1/h²), so the DF Hessian is pinned
+  by a large-step energy-FD scan (1.3e-7 at h=1e-2) and the streamed one by
+  materialized parity (machine precision on a well-conditioned aux, 5.8e-8
+  on jkfit).
 - **Bucketed 4-center ERI build.** The unscreened exact backend now runs
   through shell-quartet class kernels (contraction lengths in the bucket key,
   merged back under the padded-work budget; 8-fold symmetry by index-permuted

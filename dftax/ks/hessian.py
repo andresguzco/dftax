@@ -26,11 +26,18 @@ does not (it is stationary only under the constrained rotations), and smeared
 (fractionally occupied) results have no integer projector at all; both are
 rejected, the former by the stationarity check below.
 
-Materialized Coulomb backends (``df(chunk=None)`` / ``exact()``) only: the
-rotated orbitals are traced, which the frozen-orbital streamed exchange does
-not support (its ``Zs`` are fixed). The reference must be tightly converged
-(``κ* = 0`` is assumed); a loose SCF biases the response term exactly like it
-biases the finite-difference Hessian.
+An explicit ``df(chunk=<int>)`` streams the response: the closure swaps in
+the forces backend's :class:`~dftax.ks.terms.StreamedDFForcesCoulomb` with
+the *traced* rotated occupieds ``Z(κ)`` as its ``Zs``. That term is plain
+autodiff in ``Zs`` and ``S`` (forces merely choose to stop-gradient their
+``Z``), and within the projector parametrization its frozen exchange equals
+the exchange energy of ``P(κ)``, so the κ-derivatives are exact; the
+(nao, nao, naux) tensor never exists, at slab-rebuild cost per CG iteration.
+``chunk="auto"`` stays materialized here: the response solve's memory profile
+(nested jvp through the slab scan) is not the forces budget, so streaming is
+explicit opt-in. The reference must be tightly converged (``κ* = 0`` is
+assumed); a loose SCF biases the response term exactly like it biases the
+finite-difference Hessian.
 """
 
 from __future__ import annotations
@@ -42,7 +49,7 @@ import jax.numpy as jnp
 from dftax.basis.loader import build_basis_data
 from dftax.grid import becke_grid, becke_grid_size, points
 from dftax.ks.energy import KS, System, _resolve_chunk
-from dftax.ks.terms import DFSpec, ExactSpec, df
+from dftax.ks.terms import DFSpec, ExactSpec, StreamedDFForcesCoulomb, df
 
 
 def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
@@ -61,15 +68,19 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
             "the analytic Hessian supports only the plain materialized "
             "exact() backend."
         )
+    df_chunk = None
     if isinstance(coulomb, DFSpec):
-        if isinstance(coulomb.chunk, int):
+        # An explicit int chunk streams the response (see the module
+        # docstring); "auto" stays materialized here, since the response
+        # solve's memory profile is not the forces budget.
+        df_chunk = coulomb.chunk if isinstance(coulomb.chunk, int) else None
+        if df_chunk is not None and coulomb.spherical is True:
             raise NotImplementedError(
-                "the analytic Hessian needs a materialized Coulomb backend "
-                "(df(chunk=None) or exact()): the orbital response traces "
-                "the occupied orbitals, which the frozen-orbital streamed "
-                "exchange cannot."
+                "df(spherical=True) requires a materialized backend: the "
+                "streamed response uses the cartesian auxiliary span; pass "
+                "df(chunk=None)."
             )
-        coulomb = DFSpec(auxbasis=coulomb.auxbasis, chunk=None,
+        coulomb = DFSpec(auxbasis=coulomb.auxbasis, chunk=df_chunk,
                          screen=coulomb.screen, spherical=coulomb.spherical)
 
     symbols = mol.symbols
@@ -94,12 +105,28 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
                 "the analytic Hessian rebuilds the auxiliary basis per "
                 "geometry; pass df(<basis-set name>)."
             )
+        # Spherical aux on the materialized path (matching the KS default);
+        # the streamed slab contraction keeps the cartesian span, like the
+        # streamed SCF backend and forces.
         aux_t, a_idx = build_basis_data(
             symbols, mol.atom_coords(), coulomb.auxbasis,
             return_atom_index=True,
-            spherical=coulomb.spherical is not False,
+            spherical=coulomb.spherical is not False and df_chunk is None,
         )
         aux_atom_idx = jnp.asarray(a_idx)
+
+    hf_ax = float(getattr(xc, "hf_coeff", 0.0))
+    hf_lr = float(getattr(xc, "hf_coeff_lr", 0.0))
+    slab_plans = None
+    if df_chunk is not None:
+        from dftax.integrals.eri3c_bucketed import (
+            _shell_pair_keep, plan_aux_slabs,
+        )
+
+        keep = None
+        if coulomb.screen is not None:
+            keep = _shell_pair_keep(basis_t, float(coulomb.screen))
+        slab_plans = plan_aux_slabs(basis_t, aux_t, df_chunk, keep)
 
     nao_final = (
         basis_t.cart2sph.shape[1]
@@ -126,7 +153,7 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
             aux_b = eqx.tree_at(
                 lambda b: b.centers, aux_t, coords[aux_atom_idx]
             )
-            spec = df(aux_b, chunk=None)
+            spec = df(aux_b, chunk=df_chunk)
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune,
             grid.r_max,
@@ -137,9 +164,10 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
             xc, grid=points(gc, gw, chunk=xc_chunk), coulomb=spec, spin=spin,
             dispersion=dispersion,
         )
-        Ps = []
+        Zs, Ps = [], []
         for C0, nmo, n_s, kappa in zip(C0s, nmos, nocc, kappas):
             if n_s == 0:                       # empty channel (e.g. H atom β)
+                Zs.append(C0[:, :0])
                 Ps.append(jnp.zeros_like(ks.S))
                 continue
             K = jnp.zeros((nmo, nmo), dtype=C0.dtype)
@@ -148,7 +176,24 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
             Z = (C0 @ jax.scipy.linalg.expm(K))[:, :n_s]   # rotated occupieds
             # Eigh-free projector against the traced S(R): smooth in both
             # slots.
+            Zs.append(Z)
             Ps.append(w * (Z @ jnp.linalg.solve(Z.T @ ks.S @ Z, Z.T)))
+        if slab_plans is not None:
+            # Streamed response: the forces backend's frozen exchange is
+            # plain autodiff in its Zs, so passing the TRACED Z(kappa)
+            # (where forces pass a stopped gradient) makes its energy
+            # exactly the exchange of P(kappa) at every kappa, with the
+            # 3-center rebuilt per slab instead of materialized.
+            ks = eqx.tree_at(
+                lambda k: k.coulomb, ks,
+                StreamedDFForcesCoulomb(
+                    basis=ks.coulomb.basis, aux_basis=ks.coulomb.aux_basis,
+                    int2c_inv=ks.coulomb.int2c_inv, Zs=tuple(Zs),
+                    hf_coeff=hf_ax, slab_plans=slab_plans,
+                    int2c_inv_lr=ks.coulomb.int2c_inv_lr,
+                    hf_coeff_lr=hf_lr, omega=ks.coulomb.omega,
+                ),
+            )
         return ks.total(jnp.stack(Ps))
 
     k0 = tuple(jnp.zeros((n_s, nmo - n_s)) for n_s, nmo in zip(nocc, nmos))

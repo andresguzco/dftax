@@ -285,6 +285,49 @@ class TestAnalyticHessian:
                                           None))
         assert np.abs(Hr - Hu).max() < 1e-7
 
+    def test_streamed_matches_materialized(self):
+        """Streamed response (df(chunk=<int>): the frozen-exchange term with
+        the TRACED Z(kappa), 3-center rebuilt per slab) against the
+        materialized analytic Hessian in the same cartesian fit space. Never
+        against FD on DF paths (noise-limited; see the class docstring). A
+        well-conditioned sto-3g aux pins machine precision (measured 5e-15
+        LDA, 3e-15 PBE0); jkfit sits at the metric-band amplification
+        (measured 5.8e-8)."""
+        from dftax.energy.xc import LDA, PBE0
+
+        mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.74", "sto-3g")
+        g = becke(35, 50)
+        for xc, aux, tol in ((LDA(), "sto-3g", 1e-12),
+                             (PBE0(), "sto-3g", 1e-12),
+                             (PBE0(), "def2-universal-jkfit", 5e-7)):
+            Hm = np.asarray(hessian(
+                mol, xc, method="analytic", grid=g,
+                coulomb=df(aux, chunk=None, spherical=False), **TOL))
+            Hs = np.asarray(hessian(mol, xc, method="analytic", grid=g,
+                                    coulomb=df(aux, chunk=4), **TOL))
+            assert np.abs(Hm - Hs).max() < tol
+
+    def test_streamed_open_shell_matches_materialized(self):
+        """UKS + hybrid + streamed: per-channel frozen exchange with traced
+        Z(kappa) per spin. The strongest single coverage point of the
+        streamed response. sto-3g aux removes the metric-band noise, but the
+        parity floors at the response CG tolerance (cg_tol=1e-10; the two
+        backends' CG iterates round differently), not at machine precision
+        like H2, whose one-dimensional response CG solves exactly: measured
+        1.3e-10, pinned an order above."""
+        from dftax.energy.xc import PBE0
+
+        mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.9; H 0 0.2 1.8",
+                                "sto-3g", spin=1)
+        g = becke(35, 50)
+        kw = dict(e_tol=1e-10, d_tol=1e-8)
+        Hm = np.asarray(hessian(
+            mol, PBE0(), method="analytic", grid=g,
+            coulomb=df("sto-3g", chunk=None, spherical=False), **kw))
+        Hs = np.asarray(hessian(mol, PBE0(), method="analytic", grid=g,
+                                coulomb=df("sto-3g", chunk=4), **kw))
+        assert np.abs(Hm - Hs).max() < 1e-9
+
     def test_empty_beta_channel(self):
         """Edge channels: the H atom's beta channel is empty (nocc=0) and its
         alpha channel has no virtuals in sto-3g (kappa is (1, 0)); the

@@ -275,7 +275,7 @@ def hessian(mol, xc, *, method: str = "fd", step: float = 1e-3,
     Pulay-free forces (6N SCF solves). ``method="analytic"``: the exact
     orbital-rotation Schur complement
     ``H = E_RR − E_Rκ (E_κκ)⁻¹ E_κR`` at one tightly converged reference
-    (3N CG response solves; closed shell, materialized Coulomb backends;
+    (3N CG response solves; RKS and UKS, materialized Coulomb backends;
     see :mod:`dftax.ks.hessian`). ``step`` applies to the FD path,
     ``cg_iters`` to the analytic response solves.
     """
@@ -293,8 +293,12 @@ def hessian(mol, xc, *, method: str = "fd", step: float = 1e-3,
         # The Schur complement assumes a stationary reference (κ* = 0); a
         # warm Newton polish reaches a tight orbital gradient even where
         # DIIS grinds at its coarse-grid noise floor (quadratic cleanup,
-        # a few iterations from a converged density).
-        res = newton(ks, guess=res.P, g_tol=1e-8, e_tol=1e-12, max_iter=24)
+        # a few iterations from a converged density). e_tol 1e-11, not
+        # 1e-12: open-shell polishes on coarse grids sit at that energy
+        # noise floor with the orbital gradient (the criterion the Schur
+        # complement actually needs, guarded in _analytic_hessian) long
+        # converged.
+        res = newton(ks, guess=res.P, g_tol=1e-8, e_tol=1e-11, max_iter=48)
         return _analytic_hessian(mol, xc, res, g, coulomb, None,
                                  cg_iters=cg_iters)
     H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw, coulomb=coulomb)

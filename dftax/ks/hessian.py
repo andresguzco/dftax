@@ -17,11 +17,20 @@ solve per Hessian column (each iteration costs a couple of Fock builds), so
 the assembly replaces the 6N SCF solves of the finite-difference path with 3N
 response solves at one converged reference.
 
-Closed shell, materialized Coulomb backends (``df(chunk=None)`` / ``exact()``)
-only: the rotated orbitals are traced, which the frozen-orbital streamed
-exchange does not support (its ``Zs`` are fixed). The reference must be
-tightly converged (``κ* = 0`` is assumed); a loose SCF biases the response
-term exactly like it biases the finite-difference Hessian.
+Open shells rotate each spin channel by its own generator: ``κ`` is the
+pytree ``(κ_α, κ_β)``, the projector weight drops to 1 per channel, and the
+Schur complement runs over the concatenated generator (``jvp`` and CG operate
+on the pytree as-is). The reference must be a *stationary point of the
+unconstrained spin-polarized energy*: a UKS solution qualifies, an ROKS one
+does not (it is stationary only under the constrained rotations), and smeared
+(fractionally occupied) results have no integer projector at all; both are
+rejected, the former by the stationarity check below.
+
+Materialized Coulomb backends (``df(chunk=None)`` / ``exact()``) only: the
+rotated orbitals are traced, which the frozen-orbital streamed exchange does
+not support (its ``Zs`` are fixed). The reference must be tightly converged
+(``κ* = 0`` is assumed); a loose SCF biases the response term exactly like it
+biases the finite-difference Hessian.
 """
 
 from __future__ import annotations
@@ -38,11 +47,12 @@ from dftax.ks.terms import DFSpec, ExactSpec, df
 
 def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
                       cg_iters=64, cg_tol=1e-10):
-    """(3N, 3N) analytic Hessian at the converged closed-shell ``res``."""
-    if len(res.nocc) != 1:
+    """(3N, 3N) analytic Hessian at the converged ``res`` (RKS or UKS)."""
+    if float(getattr(res, "ts", 0.0)) > 1e-12:
         raise NotImplementedError(
-            "the analytic Hessian supports closed shells only (got a "
-            "spin-polarized result); use the finite-difference path."
+            "the analytic Hessian needs an integer-occupation reference; a "
+            "smeared (fractionally occupied) result has no orbital-rotation "
+            "projector. Use the finite-difference path."
         )
     if coulomb is None:
         coulomb = df()                          # match the KS default backend
@@ -60,13 +70,16 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
                 "exchange cannot."
             )
         coulomb = DFSpec(auxbasis=coulomb.auxbasis, chunk=None,
-                         screen=coulomb.screen)
+                         screen=coulomb.screen, spherical=coulomb.spherical)
 
     symbols = mol.symbols
     coords0 = jnp.asarray(mol.atom_coords())
     charges = jnp.asarray(mol.atom_charges())
     nelec = mol.nelectron
-    nocc = res.nocc[0]
+    nocc = tuple(int(n) for n in res.nocc)
+    nspin = len(nocc)
+    w = 2.0 if nspin == 1 else 1.0
+    spin = None if nspin == 1 else nocc[0] - nocc[1]
 
     basis_t, atom_idx = build_basis_data(
         symbols, mol.atom_coords(), mol.basis, return_atom_index=True,
@@ -84,6 +97,7 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
         aux_t, a_idx = build_basis_data(
             symbols, mol.atom_coords(), coulomb.auxbasis,
             return_atom_index=True,
+            spherical=coulomb.spherical is not False,
         )
         aux_atom_idx = jnp.asarray(a_idx)
 
@@ -99,18 +113,13 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
         nao_final,
     )
 
-    # Converged reference orbitals (S(R0)-orthonormal, canonical). The full
-    # set including virtuals parametrizes the rotation; everything below is
-    # a fixed constant of the differentiated function.
-    C0 = jax.lax.stop_gradient(res.mo_coeff[0])            # (nao, nmo)
-    nmo = C0.shape[1]
-    nvirt = nmo - nocc
+    # Converged reference orbitals (S(R0)-orthonormal, canonical), one full
+    # set per spin channel: the virtuals parametrize the rotation; everything
+    # below is a fixed constant of the differentiated function.
+    C0s = tuple(jax.lax.stop_gradient(res.mo_coeff[s]) for s in range(nspin))
+    nmos = tuple(C.shape[1] for C in C0s)
 
-    def energy(coords, kappa):
-        K = jnp.zeros((nmo, nmo), dtype=C0.dtype)
-        K = K.at[:nocc, nocc:].set(kappa)
-        K = K.at[nocc:, :nocc].set(-kappa.T)
-        Z = (C0 @ jax.scipy.linalg.expm(K))[:, :nocc]      # rotated occupieds
+    def energy(coords, kappas):
         basis = eqx.tree_at(lambda b: b.centers, basis_t, coords[atom_idx])
         spec = None
         if aux_t is not None:
@@ -123,17 +132,45 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
             grid.r_max,
         )
         ks = KS(
-            System(basis=basis, coords=coords, charges=charges, nelec=nelec),
-            xc, grid=points(gc, gw, chunk=xc_chunk), coulomb=spec,
+            System(basis=basis, coords=coords, charges=charges, nelec=nelec,
+                   spin=0 if spin is None else spin),
+            xc, grid=points(gc, gw, chunk=xc_chunk), coulomb=spec, spin=spin,
             dispersion=dispersion,
         )
-        # Eigh-free projector against the traced S(R): smooth in both slots.
-        P = 2.0 * (Z @ jnp.linalg.solve(Z.T @ ks.S @ Z, Z.T))
-        return ks.total(P[None])
+        Ps = []
+        for C0, nmo, n_s, kappa in zip(C0s, nmos, nocc, kappas):
+            if n_s == 0:                       # empty channel (e.g. H atom β)
+                Ps.append(jnp.zeros_like(ks.S))
+                continue
+            K = jnp.zeros((nmo, nmo), dtype=C0.dtype)
+            K = K.at[:n_s, n_s:].set(kappa)
+            K = K.at[n_s:, :n_s].set(-kappa.T)
+            Z = (C0 @ jax.scipy.linalg.expm(K))[:, :n_s]   # rotated occupieds
+            # Eigh-free projector against the traced S(R): smooth in both
+            # slots.
+            Ps.append(w * (Z @ jnp.linalg.solve(Z.T @ ks.S @ Z, Z.T)))
+        return ks.total(jnp.stack(Ps))
 
-    k0 = jnp.zeros((nocc, nvirt))
+    k0 = tuple(jnp.zeros((n_s, nmo - n_s)) for n_s, nmo in zip(nocc, nmos))
     g_R = jax.grad(energy, argnums=0)
     g_k = jax.grad(energy, argnums=1)
+
+    # Stationarity guard: the Schur complement is the exact Hessian only at
+    # kappa* = 0. A loose SCF, or an ROKS reference (stationary only under
+    # its constrained rotations), lands here with a visible orbital gradient.
+    gk0 = g_k(coords0, k0)
+    gnorm = max(
+        (float(jnp.max(jnp.abs(leaf))) for leaf in gk0 if leaf.size),
+        default=0.0,
+    )
+    if gnorm > 1e-5:
+        raise ValueError(
+            f"the reference is not stationary (max orbital gradient "
+            f"{gnorm:.1e} > 1e-5): converge tighter (the hessian() driver "
+            f"Newton-polishes automatically), and note an ROKS solution is "
+            f"not a stationary point of the unconstrained spin-polarized "
+            f"energy."
+        )
 
     def kk_hvp(x):                                          # E_κκ · x
         return jax.jvp(lambda k: g_k(coords0, k), (k0,), (x,))[1]

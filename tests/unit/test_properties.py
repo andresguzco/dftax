@@ -246,6 +246,57 @@ class TestAnalyticHessian:
         trans = np.abs(Ha.reshape(n, 3, n, 3).sum(axis=0)).max()
         assert trans < 1e-4                          # sum rule (response-limited)
 
+    def test_open_shell_matches_fd(self):
+        """UKS Schur complement (per-channel kappa pytree, unequal nocc):
+        the H3 doublet against FD-of-forces on the exact backend, plus the
+        translational sum rule."""
+        from dftax.energy.xc import LDA
+
+        mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.9; H 0 0.2 1.8",
+                                "sto-3g", spin=1)
+        Ha = np.asarray(hessian(mol, LDA(), method="analytic",
+                                grid=becke(35, 50), coulomb=exact(),
+                                e_tol=1e-10, d_tol=1e-8))
+        Hf = np.asarray(hessian(mol, LDA(), step=1e-3, grid=becke(35, 50),
+                                coulomb=exact(), e_tol=1e-10, d_tol=1e-8))
+        assert np.abs(Ha - Hf).max() < 2e-5
+        trans = np.abs(Ha.reshape(3, 3, 3, 3).sum(axis=0)).max()
+        assert trans < 1e-4
+
+    def test_uks_path_matches_rks_on_closed_shell(self):
+        """Invariant: a closed-shell molecule pushed through the spin-
+        polarized path (spin=0 forces two channels) must reproduce the RKS
+        analytic Hessian; the two parametrizations describe the same
+        surface."""
+        from dftax.energy.xc import LDA
+        from dftax.grid import becke_grid, points
+        from dftax.ks.hessian import _analytic_hessian
+        from dftax.ks.newton import newton
+
+        mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.74", "sto-3g")
+        g = becke(35, 50)
+        Hr = np.asarray(hessian(mol, LDA(), method="analytic", grid=g,
+                                coulomb=exact(), **TOL))
+        gc, gw = becke_grid(mol.symbols, mol.atom_coords(), g.n_radial,
+                            g.lebedev, g.prune, g.r_max)
+        ks_u = KS(mol, LDA(), grid=points(gc, gw), coulomb=exact(), spin=0)
+        res_u = newton(ks_u, g_tol=1e-9, e_tol=1e-13, max_iter=64)
+        Hu = np.asarray(_analytic_hessian(mol, LDA(), res_u, g, exact(),
+                                          None))
+        assert np.abs(Hr - Hu).max() < 1e-7
+
+    def test_empty_beta_channel(self):
+        """Edge channels: the H atom's beta channel is empty (nocc=0) and its
+        alpha channel has no virtuals in sto-3g (kappa is (1, 0)); the
+        Hessian of a free atom is ~0."""
+        from dftax.energy.xc import LDA
+
+        mol = Molecule.from_xyz("H 0 0 0", "sto-3g", spin=1)
+        Ha = np.asarray(hessian(mol, LDA(), method="analytic",
+                                grid=becke(35, 50), coulomb=exact(), **TOL))
+        assert Ha.shape == (3, 3)
+        assert np.abs(Ha).max() < 1e-6
+
 
 @pytest.mark.float64
 class TestVibrationalSpectra:

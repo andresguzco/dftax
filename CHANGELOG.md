@@ -7,6 +7,17 @@ to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **wB97M-V** (`functional("wb97m-v")`): the 12-parameter range-separated
+  hybrid meta-GGA with VV10 (ω=0.3, 0.15 SR + 0.85 LR exact exchange,
+  b=6.0/C=0.01), on the B97 double power series with the τ variable
+  `w = (τ_unif − τ)/(τ_unif + τ)` and libxc's p-weighted opposite-spin
+  form. Coefficients verbatim from libxc; note the B97M-V family is defined
+  on the *modified* PW92 constants (the GGA B97s use the original set),
+  which this port matches. Pointwise parity vs libxc at machine precision
+  (9e-16, closed and spin-polarized); full RKS solve vs PySCF at 1e-10 Ha.
+- **A functional registry**: `functional("cam-b3lyp")` resolves names case-
+  and punctuation-insensitively with the standard aliases; unknown names
+  raise listing what exists.
 - **Streamed DF forces.** `forces` no longer requires the materialized
   3-center tensor: `df()` (`chunk="auto"`) streams the geometry gradient over
   shell-aligned auxiliary slabs once the tensor exceeds the memory budget (an

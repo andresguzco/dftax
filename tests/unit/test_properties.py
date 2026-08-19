@@ -158,6 +158,46 @@ class TestResponse:
 
 
 @pytest.mark.float64
+class TestAnalyticHessian:
+    """The orbital-rotation Schur-complement Hessian (dftax.ks.hessian):
+    H = E_RR − E_Rκ (E_κκ)⁻¹ E_κR at one converged reference. The FD-of-
+    analytic-forces reference is exact-backend only here: on DF paths the FD
+    legs' cross-solve force noise (metric-amplified, ~2e-6 Ha/Bohr; see
+    _metric_pinv) divided by the step swamps the comparison at ~1e-3. A
+    direct energy-FD curvature step-scan pins the DF analytic Hessian at
+    1.3e-7 (h=1e-2; smaller steps diverge as ~2e-10 Ha of per-leg DF
+    energy noise amplifies by 1/h²), so the analytic path is more accurate
+    than either FD reference on DF."""
+
+    def test_h2_matches_fd(self):
+        from dftax.energy.xc import LDA
+
+        mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.74", "sto-3g")
+        Ha = np.asarray(hessian(mol, LDA(), method="analytic",
+                                grid=becke(35, 50), coulomb=exact(), **TOL))
+        Hf = np.asarray(hessian(mol, LDA(), step=1e-3, grid=becke(35, 50),
+                                coulomb=exact(), **TOL))
+        assert np.abs(Ha - Hf).max() < 1e-5          # measured 8.5e-7
+        assert np.abs(Ha - Ha.T).max() == 0.0        # symmetrized exactly
+
+    def test_water_matches_fd(self):
+        """Multi-orbital response (nocc=5): the full matrix against the FD
+        reference, plus the translational sum rule."""
+        from dftax.energy.xc import LDA
+
+        mol = Molecule.from_xyz(WATER, "sto-3g")
+        Ha = np.asarray(hessian(mol, LDA(), method="analytic",
+                                grid=becke(35, 50), coulomb=exact(),
+                                e_tol=1e-10, d_tol=1e-8))
+        Hf = np.asarray(hessian(mol, LDA(), step=1e-3, grid=becke(35, 50),
+                                coulomb=exact(), e_tol=1e-10, d_tol=1e-8))
+        assert np.abs(Ha - Hf).max() < 2e-5          # measured 3.0e-6
+        n = Ha.shape[0] // 3
+        trans = np.abs(Ha.reshape(n, 3, n, 3).sum(axis=0)).max()
+        assert trans < 1e-4                          # sum rule (response-limited)
+
+
+@pytest.mark.float64
 class TestVibrationalSpectra:
     """Sanity for IR / Raman (no pyscf-properties reference available, so we check
     shape, finiteness, the non-negativity guaranteed by the formulas, and that the

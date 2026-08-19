@@ -261,13 +261,40 @@ def _harmonic(H, mol):
     return freq_cm, V, m3
 
 
-def hessian(mol, xc, *, step: float = 1e-3, origin=(0.0, 0.0, 0.0),
+def hessian(mol, xc, *, method: str = "fd", step: float = 1e-3,
+            origin=(0.0, 0.0, 0.0),
             grid: Becke | None = None,
             coulomb: ExactSpec | DFSpec | None = None,
+            cg_iters: int = 64,
             **scf_kw) -> Float[Array, "n n"]:
-    """Nuclear Hessian ``∂²E/∂R_A∂R_B`` (Ha/Bohr², shape ``(3N, 3N)``) by central
-    finite difference of the analytic Pulay-free forces."""
-    g = _becke_spec(grid)   # spec only: the FD legs build their own per-geometry grids
+    """Nuclear Hessian ``∂²E/∂R_A∂R_B`` (Ha/Bohr², shape ``(3N, 3N)``).
+
+    ``method="fd"`` (default): central finite difference of the analytic
+    Pulay-free forces (6N SCF solves). ``method="analytic"``: the exact
+    orbital-rotation Schur complement
+    ``H = E_RR − E_Rκ (E_κκ)⁻¹ E_κR`` at one tightly converged reference
+    (3N CG response solves; closed shell, materialized Coulomb backends;
+    see :mod:`dftax.ks.hessian`). ``step`` applies to the FD path,
+    ``cg_iters`` to the analytic response solves.
+    """
+    g = _becke_spec(grid)   # spec only: both paths build their own per-geometry grids
+    if method == "analytic":
+        from dftax.ks.hessian import _analytic_hessian
+        from dftax.ks.newton import newton
+
+        gc, gw = becke_grid(
+            mol.symbols, mol.atom_coords(), g.n_radial, g.lebedev,
+            g.prune, g.r_max,
+        )
+        ks = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
+        res = scf(ks, **scf_kw)
+        # The Schur complement assumes a stationary reference (κ* = 0); a
+        # warm Newton polish reaches a tight orbital gradient even where
+        # DIIS grinds at its coarse-grid noise floor (quadratic cleanup,
+        # a few iterations from a converged density).
+        res = newton(ks, guess=res.P, g_tol=1e-8, e_tol=1e-12, max_iter=24)
+        return _analytic_hessian(mol, xc, res, g, coulomb, None,
+                                 cg_iters=cg_iters)
     H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw, coulomb=coulomb)
     return jnp.asarray(H)
 

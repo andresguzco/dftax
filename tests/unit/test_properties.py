@@ -12,7 +12,7 @@ import pytest
 from dftax.energy.xc import PBE
 from dftax.system.molecule import Molecule
 from dftax import (
-    KS, System, becke, exact, scf,
+    KS, System, becke, df, exact, scf,
     dipole, polarizability, hessian, ir_spectrum, raman_spectrum,
     alchemical_deriv,
 )
@@ -41,6 +41,25 @@ class TestDipole:
                               coulomb=exact(), **TOL)[1]
             fd.append(-(ep - em) / (2 * h))
         assert np.max(np.abs(mu - np.array(fd))) < 1e-6
+
+    def test_dipole_vs_finite_field_df(self):
+        """μ_i == -dE/dE_i on the (default) DF backend. Calibrated at 2e-5:
+        measured 9.2e-6 (spherical jkfit fit), the exact-path 1e-6 plus what
+        the FD legs lose to RI-metric rounding of the two field-displaced
+        solves (~1e-9 Ha per leg over h=1e-4). The analytic dipole is the
+        clean side here; the FD reference carries the DF noise."""
+        mol = Molecule.from_xyz(WATER, "sto-3g")
+        mu = np.asarray(dipole(mol, PBE(), coulomb=df(), **TOL))
+        (gc, gw), _ = _grid(mol, becke(75, 302))
+        h = 1e-4
+        fd = []
+        for i in range(3):
+            ep = _solve_field(mol, PBE(), gc, gw, field=jnp.zeros(3).at[i].set(h),
+                              coulomb=df(), **TOL)[1]
+            em = _solve_field(mol, PBE(), gc, gw, field=jnp.zeros(3).at[i].set(-h),
+                              coulomb=df(), **TOL)[1]
+            fd.append(-(ep - em) / (2 * h))
+        assert np.max(np.abs(mu - np.array(fd))) < 2e-5
 
     def test_dipole_vs_pyscf(self):
         pyscf = pytest.importorskip("pyscf")
@@ -120,6 +139,37 @@ class TestResponse:
                 System(basis=basis, coords=jnp.asarray(coords),
                        charges=jnp.asarray(charges), nelec=mol.nelectron),
                 PBE(), grid=(gc, gw),
+            )
+            return float(scf(k, **TOL).e_tot)
+
+        ch0 = np.asarray(mol.atom_charges(), float); h = 1e-3
+        fd = np.array([(E_at(ch0 + h * (np.arange(len(ch0)) == a))
+                        - E_at(ch0 - h * (np.arange(len(ch0)) == a))) / (2 * h)
+                       for a in range(len(ch0))])
+        assert np.max(np.abs(dEdZ - fd)) < 1e-5
+
+    def test_alchemical_df_vs_finite_difference(self):
+        """DF-backed alchemical gradient (the aux basis resolved eagerly, so
+        the raw-System charge closure shares the fitted backend) against a
+        finite difference on the same DF surface. The FD reference builds the
+        aux spherical, matching the resolver's materialized default."""
+        from dftax.basis.loader import build_basis_data
+
+        mol = Molecule.from_xyz(WATER, "sto-3g")
+        coords = mol.atom_coords()
+        aux = "def2-universal-jkfit"
+        dEdZ = np.asarray(alchemical_deriv(
+            mol, PBE(), grid=becke(60, 194), coulomb=df(aux), **TOL
+        ))
+        (gc, gw), _ = _grid(mol, becke(60, 194))
+        basis = KS(mol, PBE(), grid=(gc, gw)).basis
+        aux_b = build_basis_data(mol.symbols, coords, aux, spherical=True)
+
+        def E_at(charges):
+            k = KS(
+                System(basis=basis, coords=jnp.asarray(coords),
+                       charges=jnp.asarray(charges), nelec=mol.nelectron),
+                PBE(), grid=(gc, gw), coulomb=df(aux_b),
             )
             return float(scf(k, **TOL).e_tot)
 

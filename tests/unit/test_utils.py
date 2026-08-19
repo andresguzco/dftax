@@ -1,10 +1,9 @@
-"""Tests for utility functions (vmap, energy_aux)."""
+"""Tests for utility functions (vmap)."""
 
 import jax
 import jax.numpy as jnp
 
 from dftax.utils.vmap import vmap
-from dftax.utils.energy_aux import EnergyAux, pack_energy_aux
 
 
 class TestVmap:
@@ -31,31 +30,3 @@ class TestVmap:
         assert result.shape == (5, 3)
         assert jnp.allclose(result[0], jnp.array([2.0, 3.0, 4.0]))
 
-
-class TestEnergyAux:
-
-    def test_pack_unpack(self):
-        aux = pack_energy_aux(
-            kinetic=1.0, hartree=2.0, xc=3.0, external=4.0, nelec=10.0,
-        )
-        assert aux.kinetic == 1.0
-        assert aux.hartree == 2.0
-        assert aux.xc == 3.0
-        assert aux.external == 4.0
-        assert aux.nelec == 10.0
-
-    def test_named_tuple_fields(self):
-        fields = EnergyAux._fields
-        assert "kinetic" in fields
-        assert "hartree" in fields
-        assert "xc" in fields
-        assert "external" in fields
-        assert "nelec" in fields
-
-    def test_optional_fields_default_none(self):
-        aux = pack_energy_aux(
-            kinetic=1.0, hartree=2.0, xc=3.0, external=4.0, nelec=10.0,
-        )
-        assert aux.kl_div is None
-        assert aux.tv_dist is None
-        assert aux.entropy is None

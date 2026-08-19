@@ -51,6 +51,11 @@ for setup, meaning basis parsing and geometry only).
 
 ## Can I take geometry gradients through the streamed backends?
 
-Streamed XC: yes. Streamed RI-K (hybrids with `df(chunk=...)`): no, since its
-`custom_vjp` supplies the exchange Fock w.r.t. the density only. `forces`
-enforces this: use the materialized `df(...)` for DF-surface forces.
+Streamed XC: yes. Streamed DF: yes, through `forces`. The SCF-side streamed
+RI-K `custom_vjp` supplies the exchange Fock w.r.t. the density only, so
+`forces` swaps in a frozen-orbital RI-K that recomputes the 3-center
+integrals per auxiliary slab and differentiates end-to-end; range-separated
+hybrids stream both exchange channels, and `df(screen=...)` streams as well
+(the Schwarz shell-pair mask is baked into the contraction plans at the
+reference geometry). No DF configuration requires the materialized tensor
+for forces.

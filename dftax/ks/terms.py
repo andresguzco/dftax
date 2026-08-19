@@ -162,7 +162,12 @@ def _metric_pinv(V: Float[Array, "naux naux"]) -> Float[Array, "naux naux"]:
     converged solves differ at ~2e-6 Ha/Bohr (GPU vs CPU, batched vs serial);
     that is d_tol-level density difference amplified through the
     ill-conditioned auxiliary directions, not filter noise: at a matched
-    density the paths agree to 5e-15. Tikhonov filters w/(w² + σ²) trade
+    density the paths agree to 5e-15. The same amplification bounds the
+    matched-density agreement between *different contraction orders* (e.g.
+    materialized vs streamed DF forces): machine precision with a
+    well-conditioned auxiliary metric, ~2e-9 (H2) to ~5e-7 (water) with the
+    overcomplete jkfit metric, whose kept band amplifies the reordered
+    rounding by ~1e7. Tikhonov filters w/(w² + σ²) trade
     strictly worse: σ = 1e-7·w_max damps the fit-relevant band of a redundant
     h/i auxiliary metric (Fe/jkfit RI error 1.7 -> 16 mHa), σ = 1e-9·w_max
     lets the Schwarz-screening perturbation through (screened-vs-dense RI-J

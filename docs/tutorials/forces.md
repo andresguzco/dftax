@@ -31,8 +31,14 @@ print("net |Σ F| =", np.abs(F.sum(0)).max())   # ~0 (translational invariance)
 open shells work through the same call (you can also pass the occupied coefficients
 directly). Pass the same `becke(...)` grid spec as the energy calculation; explicit
 point grids cannot follow the nuclei, so only Becke specs are accepted. With
-`coulomb=df("...")` the forces are for the density-fitted energy surface
-(materialized DF only; the streamed backends do not propagate geometry gradients).
+`coulomb=df("...")` the forces are for the density-fitted energy surface. The
+default `chunk="auto"` materializes the 3-center tensor when it fits the
+memory budget and otherwise streams the geometry gradient over auxiliary
+slabs (hybrid exchange through a frozen-orbital RI-K, fully differentiable;
+range-separated hybrids stream both exchange channels); an int `chunk`
+forces streaming. `screen=` streams too: the Schwarz shell-pair selection is
+resolved at the reference geometry and baked into the contraction plans, so
+every DF configuration carries geometry gradients.
 
 A finite-difference check (central difference of the energy) agrees with the analytic
 force to ~1e-9; see `examples/03_forces_h2.py`.

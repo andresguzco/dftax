@@ -83,7 +83,8 @@ def _becke_spec(grid) -> Becke:
 
 def _grid(mol, grid):
     g = _becke_spec(grid)
-    return becke_grid(mol.symbols, mol.atom_coords(), g.n_radial, g.lebedev), g
+    return becke_grid(mol.symbols, mol.atom_coords(), g.n_radial, g.lebedev,
+                      g.prune, g.r_max), g
 
 
 def _solve_field(mol, xc, gc, gw, *, chunk=None, field=None,
@@ -192,7 +193,8 @@ def _displaced(mol, coords) -> Molecule:
 def _eval_at(mol, xc, coords, origin, g, scf_kw, coulomb=None):
     """Analytic forces ``(n_atom,3)`` and dipole ``(3,)`` at a geometry."""
     m = _displaced(mol, coords)
-    gc, gw = becke_grid(m.symbols, m.atom_coords(), g.n_radial, g.lebedev)
+    gc, gw = becke_grid(m.symbols, m.atom_coords(), g.n_radial, g.lebedev,
+                        g.prune, g.r_max)
     ks = KS(m, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
     res = scf(ks, **scf_kw)
     F = forces(m, xc, res, grid=g, coulomb=coulomb)
@@ -377,12 +379,23 @@ def alchemical_deriv(
     nuclear charges, which enter only the nuclear-attraction and
     nuclear-repulsion terms.
 
-    ``coulomb=None`` resolves to :func:`~dftax.ks.terms.exact` here (not the DF
-    default): the charge closure rebuilds through a raw :class:`System`, which
-    has no element symbols to resolve an auxiliary basis, and both legs of the
-    Hellmann-Feynman derivative must use the same Coulomb backend."""
+    ``coulomb=None`` resolves to :func:`~dftax.ks.terms.exact` here (not the
+    DF default) for backward compatibility, but ``df(...)`` works: the
+    auxiliary basis is resolved eagerly against the molecule (its centers are
+    geometry-fixed here; only the charges vary), so the raw-:class:`System`
+    charge closure and the outer solve share the same fitted backend."""
+    from dftax.basis.loader import build_basis_data
+    from dftax.energy.gto import BasisData
+
     (gc, gw), g = _grid(mol, grid)
     coulomb = exact() if coulomb is None else coulomb
+    if isinstance(coulomb, DFSpec) and not isinstance(coulomb.auxbasis, BasisData):
+        aux = build_basis_data(
+            mol.symbols, mol.atom_coords(), coulomb.auxbasis,
+            spherical=coulomb.spherical is not False,
+        )
+        coulomb = DFSpec(auxbasis=aux, chunk=coulomb.chunk,
+                         screen=coulomb.screen, spherical=coulomb.spherical)
     ks = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
     res = scf(ks, **scf_kw)
     # Per-channel occupied coefficients spanning the converged density

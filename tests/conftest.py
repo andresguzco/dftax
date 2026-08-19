@@ -14,7 +14,6 @@ import jax
 jax.config.update("jax_enable_x64", True)
 
 import pytest
-import jax.numpy as jnp
 import jax.random as jr
 
 # Heavy modules (full SCF sweeps, finite-difference properties, CPHF, direct
@@ -30,9 +29,9 @@ _SLOW_MODULES = {
     "test_guess", "test_grid_pruning", "test_high_l_aux", "test_rsh",
     "test_mgga", "test_d3", "test_d4", "test_vv10", "test_adiis", "test_newton",
     "test_smearing", "test_roks",
-    # thorough integral-vs-PySCF builds (full matrices, batched, high-l, spherical):
+    # thorough integral-vs-PySCF builds (full matrices, high-l, spherical):
     # slow per-element kernels; the PR smoke exercises the integrals via energy.
-    "test_eri", "test_integrals", "test_integrals_batched", "test_jax_df_integrals",
+    "test_eri", "test_integrals",
     "test_spherical", "test_high_l",
 }
 
@@ -113,15 +112,6 @@ def h2_ks(h2_mol):
     return mf
 
 
-@pytest.fixture(scope="session")
-def water_orbitals(water_mol, water_ks):
-    """Occupied MO coefficients and occupations from a converged PySCF RKS."""
-    C = jnp.asarray(water_ks.mo_coeff[:, water_ks.mo_occ > 0])
-    occ = jnp.asarray(water_ks.mo_occ[water_ks.mo_occ > 0])
-    return C, occ
-
-
-@pytest.fixture(scope="session")
 def water_grid(water_mol):
     """Small DFT integration grid (level 0) for tests."""
     g = dft.gen_grid.Grids(water_mol)

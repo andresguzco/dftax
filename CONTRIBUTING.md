@@ -37,3 +37,15 @@ reference energy/grid and compare. GPU correctness is validated interactively
 
 Keep PRs focused, include a test that fails without the change, and run the
 (non-slow) suite + ruff before submitting.
+
+## Release checklist
+
+Version drift has bitten before (CITATION.cff sat at 0.2.0 across two
+releases); on every release:
+
+- Bump `version` in `pyproject.toml` AND `CITATION.cff`.
+- Move the CHANGELOG `[Unreleased]` section under the new version heading.
+- Refresh local editable installs (`uv sync`) so `dftax.__version__`, which
+  reads installed metadata, reports the new version.
+- `publish.yml` fires on ANY `v*` tag push; disable it before force-pushing
+  tags, re-enable after.

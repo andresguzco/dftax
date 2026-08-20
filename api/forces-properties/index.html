@@ -1619,7 +1619,7 @@ their own SCF from <code>(mol, xc)</code> and take a <code>grid=becke(...)</code
 
 
 <h4 id="dftax.ks.forces.forces" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">forces</span><span class="o">.</span><span class="n">forces</span><span class="p">(</span><span class="n">mol</span><span class="p">:</span> <span class="n">Molecule</span><span class="p">,</span> <span class="n">xc</span><span class="p">:</span> <span class="n">XCFunctional</span><span class="p">,</span> <span class="n">result</span><span class="p">:</span> <span class="n">KSResult</span> <span class="o">|</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="n">Array</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">grid</span><span class="p">:</span> <span class="n">Becke</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">coulomb</span><span class="p">:</span> <span class="n">ExactSpec</span> <span class="o">|</span> <span class="n">DFSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dispersion</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;n_atom 3&#39;</span><span class="p">]</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">forces</span><span class="o">.</span><span class="n">forces</span><span class="p">(</span><span class="n">mol</span><span class="p">:</span> <span class="n">Molecule</span><span class="p">,</span> <span class="n">xc</span><span class="p">:</span> <span class="n">XCFunctional</span><span class="p">,</span> <span class="n">result</span><span class="p">:</span> <span class="n">KSResult</span> <span class="o">|</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="n">Array</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">grid</span><span class="p">:</span> <span class="n">Becke</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">coulomb</span><span class="p">:</span> <span class="n">ExactSpec</span> <span class="o">|</span> <span class="n">DFSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dispersion</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'n_atom 3'</span><span class="p">]</span></code>
 
 <a href="#dftax.ks.forces.forces" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -1724,11 +1724,22 @@ Becke specs are accepted.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>a <em>materialized</em> :func:<code>~dftax.ks.terms.df</code> (default,
-matching the KS default backend) or :func:<code>~dftax.ks.terms.exact</code>;
-the streamed DF backends do not propagate geometry gradients (see
-:func:<code>dftax.ks.terms._streamed_df_rik</code>), so <code>chunk="auto"</code>
-resolves to materialized here regardless of size.</p>
+                <p>a :func:<code>~dftax.ks.terms.df</code> spec (default, matching the KS
+default backend) or a plain materialized
+:func:<code>~dftax.ks.terms.exact</code>. <code>df(chunk="auto")</code> materializes
+the nao²×naux 3-center tensor when it fits the memory budget and
+otherwise streams the geometry gradient over shell-aligned
+auxiliary slabs (RI-J by plain autodiff, RI-K at the frozen
+occupied coefficients; see
+:func:<code>dftax.ks.terms._streamed_df_rik_frozen</code>); an int <code>chunk</code>
+forces streaming, <code>chunk=None</code> forces the materialized tensor.
+Range-separated hybrids stream both exchange channels (the LR
+3-center rebuilt per slab). <code>screen=</code> (with an int <code>chunk</code>)
+streams too: the Schwarz shell-pair mask is resolved at the
+reference geometry and baked into the slab plans. The streamed
+path uses the cartesian auxiliary span, like the streamed SCF
+backend. Smeared (fractionally occupied) hybrid results need the
+materialized backend.</p>
               </div>
             </td>
             <td>
@@ -1767,7 +1778,7 @@ neutral molecule the result is independent of <code>origin</code>.</p>
 
 
 <h4 id="dftax.ks.properties.polarizability" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">polarizability</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">:</span> <span class="n">XCFunctional</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">method</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;fd&#39;</span><span class="p">,</span> <span class="n">field</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.002</span><span class="p">,</span> <span class="n">origin</span><span class="o">=</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span> <span class="n">grid</span><span class="p">:</span> <span class="n">Becke</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">coulomb</span><span class="p">:</span> <span class="n">ExactSpec</span> <span class="o">|</span> <span class="n">DFSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">scf_kw</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;3 3&#39;</span><span class="p">]</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">polarizability</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">:</span> <span class="n">XCFunctional</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">method</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'fd'</span><span class="p">,</span> <span class="n">field</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.002</span><span class="p">,</span> <span class="n">origin</span><span class="o">=</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span> <span class="n">grid</span><span class="p">:</span> <span class="n">Becke</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">coulomb</span><span class="p">:</span> <span class="n">ExactSpec</span> <span class="o">|</span> <span class="n">DFSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">scf_kw</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'3 3'</span><span class="p">]</span></code>
 
 <a href="#dftax.ks.properties.polarizability" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -1790,15 +1801,21 @@ through the converged density, no field stepping. Returned symmetrized.</p>
 
 
 <h4 id="dftax.ks.properties.hessian" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">hessian</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">step</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.001</span><span class="p">,</span> <span class="n">origin</span><span class="o">=</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span> <span class="n">grid</span><span class="p">:</span> <span class="n">Becke</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">coulomb</span><span class="p">:</span> <span class="n">ExactSpec</span> <span class="o">|</span> <span class="n">DFSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">scf_kw</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;n n&#39;</span><span class="p">]</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">hessian</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">method</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'fd'</span><span class="p">,</span> <span class="n">step</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.001</span><span class="p">,</span> <span class="n">origin</span><span class="o">=</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span> <span class="n">grid</span><span class="p">:</span> <span class="n">Becke</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">coulomb</span><span class="p">:</span> <span class="n">ExactSpec</span> <span class="o">|</span> <span class="n">DFSpec</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">cg_iters</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">64</span><span class="p">,</span> <span class="o">**</span><span class="n">scf_kw</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'n n'</span><span class="p">]</span></code>
 
 <a href="#dftax.ks.properties.hessian" class="headerlink" title="Permanent link">¤</a></h4>
 
 
     <div class="doc doc-contents first">
 
-        <p>Nuclear Hessian <code>∂²E/∂R_A∂R_B</code> (Ha/Bohr², shape <code>(3N, 3N)</code>) by central
-finite difference of the analytic Pulay-free forces.</p>
+        <p>Nuclear Hessian <code>∂²E/∂R_A∂R_B</code> (Ha/Bohr², shape <code>(3N, 3N)</code>).</p>
+<p><code>method="fd"</code> (default): central finite difference of the analytic
+Pulay-free forces (6N SCF solves). <code>method="analytic"</code>: the exact
+orbital-rotation Schur complement
+<code>H = E_RR − E_Rκ (E_κκ)⁻¹ E_κR</code> at one tightly converged reference
+(3N CG response solves; RKS and UKS, materialized Coulomb backends;
+see :mod:<code>dftax.ks.hessian</code>). <code>step</code> applies to the FD path,
+<code>cg_iters</code> to the analytic response solves.</p>
 
 
     </div>
@@ -1877,10 +1894,11 @@ at every ±Cartesian displacement (<code>O(N)</code> Hessians' worth of work).</
 its solve-based projector) and the energy is differentiated w.r.t. the
 nuclear charges, which enter only the nuclear-attraction and
 nuclear-repulsion terms.</p>
-<p><code>coulomb=None</code> resolves to :func:<code>~dftax.ks.terms.exact</code> here (not the DF
-default): the charge closure rebuilds through a raw :class:<code>System</code>, which
-has no element symbols to resolve an auxiliary basis, and both legs of the
-Hellmann-Feynman derivative must use the same Coulomb backend.</p>
+<p><code>coulomb=None</code> resolves to :func:<code>~dftax.ks.terms.exact</code> here (not the
+DF default) for backward compatibility, but <code>df(...)</code> works: the
+auxiliary basis is resolved eagerly against the molecule (its centers are
+geometry-fixed here; only the charges vary), so the raw-:class:<code>System</code>
+charge closure and the outer solve share the same fitted backend.</p>
 
 
     </div>

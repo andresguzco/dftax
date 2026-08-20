@@ -1546,8 +1546,8 @@ or Maple. PySCF appears only as a test-time reference oracle.</p>
 <h2 id="highlights">Highlights<a class="headerlink" href="#highlights" title="Permanent link">¤</a></h2>
 <ul>
 <li>Closed- and open-shell (spin-polarized) DFT through one spin-stacked <code>KS</code>
-  functional; LDA, PBE, PBE0, B3LYP, CAM-B3LYP, ωB97X, ωB97X-V (with VV10
-  nonlocal correlation), and r2SCAN, with orbital bases up to 5Z/6Z
+  functional; LDA, PBE, PBE0, B3LYP, CAM-B3LYP, ωB97X, ωB97X-V and ωB97M-V
+  (with VV10 nonlocal correlation), and r2SCAN, with orbital bases up to 5Z/6Z
   (h and i shells).</li>
 <li>Solvers for every regime: on-device DIIS SCF (optional level shifting and
   ADIIS acceleration), trust-region Newton (<code>newton</code>, saddle-robust
@@ -1576,12 +1576,12 @@ pip<span class="w"> </span>install<span class="w"> </span>dftax<span class="o">[
 </code></pre></div>
 <h2 id="quick-example">Quick example<a class="headerlink" href="#quick-example" title="Permanent link">¤</a></h2>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
-<span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_enable_x64&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>   <span class="c1"># DFT energies want float64</span>
+<span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">"jax_enable_x64"</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>   <span class="c1"># DFT energies want float64</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">KS</span><span class="p">,</span> <span class="n">Molecule</span><span class="p">,</span> <span class="n">scf</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dftax.energy.xc</span><span class="w"> </span><span class="kn">import</span> <span class="n">PBE</span>
 
-<span class="n">water</span> <span class="o">=</span> <span class="n">Molecule</span><span class="o">.</span><span class="n">from_xyz</span><span class="p">(</span><span class="s2">&quot;O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043&quot;</span><span class="p">,</span> <span class="s2">&quot;sto-3g&quot;</span><span class="p">)</span>
+<span class="n">water</span> <span class="o">=</span> <span class="n">Molecule</span><span class="o">.</span><span class="n">from_xyz</span><span class="p">(</span><span class="s2">"O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043"</span><span class="p">,</span> <span class="s2">"sto-3g"</span><span class="p">)</span>
 <span class="n">ks</span>  <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">water</span><span class="p">,</span> <span class="n">PBE</span><span class="p">())</span>                      <span class="c1"># density fitting + default becke() grid (75, 302)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">)</span><span class="o">.</span><span class="n">e_tot</span><span class="p">)</span>                        <span class="c1"># -75.146...</span>
 </code></pre></div>

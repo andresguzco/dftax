@@ -1464,25 +1464,31 @@ the SCF loop is unnecessary for forces.) A result converged under <code>fermi()<
 is handled automatically: the full fractional-occupation density is frozen instead of
 an integer projector, and the reported force is the gradient of the Mermin free
 energy. Any <code>dispersion=d3bj()</code> / <code>d4()</code> term differentiates along with the rest.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="p">;</span> <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_enable_x64&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="p">;</span> <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">"jax_enable_x64"</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">KS</span><span class="p">,</span> <span class="n">Molecule</span><span class="p">,</span> <span class="n">becke</span><span class="p">,</span> <span class="n">forces</span><span class="p">,</span> <span class="n">scf</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dftax.energy.xc</span><span class="w"> </span><span class="kn">import</span> <span class="n">PBE</span>
 
-<span class="n">mol</span> <span class="o">=</span> <span class="n">Molecule</span><span class="o">.</span><span class="n">from_xyz</span><span class="p">(</span><span class="s2">&quot;H 0 0 0; H 0 0 0.74&quot;</span><span class="p">,</span> <span class="s2">&quot;sto-3g&quot;</span><span class="p">)</span>
+<span class="n">mol</span> <span class="o">=</span> <span class="n">Molecule</span><span class="o">.</span><span class="n">from_xyz</span><span class="p">(</span><span class="s2">"H 0 0 0; H 0 0 0.74"</span><span class="p">,</span> <span class="s2">"sto-3g"</span><span class="p">)</span>
 <span class="n">grid</span> <span class="o">=</span> <span class="n">becke</span><span class="p">(</span><span class="n">n_radial</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span> <span class="n">lebedev</span><span class="o">=</span><span class="mi">110</span><span class="p">)</span>
 <span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">grid</span><span class="o">=</span><span class="n">grid</span><span class="p">))</span>
 <span class="n">F</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">forces</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">res</span><span class="p">,</span> <span class="n">grid</span><span class="o">=</span><span class="n">grid</span><span class="p">))</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">F</span><span class="p">)</span>                       <span class="c1"># (n_atom, 3) Ha/Bohr</span>
-<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;net |Σ F| =&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">F</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>   <span class="c1"># ~0 (translational invariance)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"net |Σ F| ="</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">F</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>   <span class="c1"># ~0 (translational invariance)</span>
 </code></pre></div>
 <p><code>forces(mol, xc, res, *, grid=..., coulomb=None)</code> takes the converged <code>KSResult</code>
 (from <code>scf</code> or <code>minimize</code>) and slices the per-channel occupied orbitals itself;
 open shells work through the same call (you can also pass the occupied coefficients
 directly). Pass the same <code>becke(...)</code> grid spec as the energy calculation; explicit
 point grids cannot follow the nuclei, so only Becke specs are accepted. With
-<code>coulomb=df("...")</code> the forces are for the density-fitted energy surface
-(materialized DF only; the streamed backends do not propagate geometry gradients).</p>
+<code>coulomb=df("...")</code> the forces are for the density-fitted energy surface. The
+default <code>chunk="auto"</code> materializes the 3-center tensor when it fits the
+memory budget and otherwise streams the geometry gradient over auxiliary
+slabs (hybrid exchange through a frozen-orbital RI-K, fully differentiable;
+range-separated hybrids stream both exchange channels); an int <code>chunk</code>
+forces streaming. <code>screen=</code> streams too: the Schwarz shell-pair selection is
+resolved at the reference geometry and baked into the contraction plans, so
+every DF configuration carries geometry gradients.</p>
 <p>A finite-difference check (central difference of the energy) agrees with the analytic
 force to ~1e-9; see <code>examples/03_forces_h2.py</code>.</p>
 <p>For forces over <strong>many geometries at once</strong>, see <a href="../batched/">batched evaluation</a>.</p>

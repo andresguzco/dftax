@@ -1502,6 +1502,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#why-does-scf_batched-reject-dfscreen" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why does scf_batched reject df(screen=...)?
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1571,7 +1582,7 @@
 <p>DFT total energies are large numbers with small chemically-meaningful
 differences; float32 loses them. Enable it once, before any array exists:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
-<span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_enable_x64&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
+<span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">"jax_enable_x64"</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="my-energy-differs-from-pyscf-in-the-5th-decimal">My energy differs from PySCF in the 5th decimal<a class="headerlink" href="#my-energy-differs-from-pyscf-in-the-5th-decimal" title="Permanent link">¤</a></h2>
 <p>Almost always the quadrature grid. Grid-free pieces (integrals, exact ERIs)
@@ -1603,9 +1614,21 @@ the <em>specification</em> <code>(mol, xc, grid=becke(...))</code>, not a solved
 test-time reference oracle, and as an <em>input</em> format (<code>KS</code> accepts a <code>Mole</code>
 for setup, meaning basis parsing and geometry only).</p>
 <h2 id="can-i-take-geometry-gradients-through-the-streamed-backends">Can I take geometry gradients through the streamed backends?<a class="headerlink" href="#can-i-take-geometry-gradients-through-the-streamed-backends" title="Permanent link">¤</a></h2>
-<p>Streamed XC: yes. Streamed RI-K (hybrids with <code>df(chunk=...)</code>): no, since its
-<code>custom_vjp</code> supplies the exchange Fock w.r.t. the density only. <code>forces</code>
-enforces this: use the materialized <code>df(...)</code> for DF-surface forces.</p>
+<p>Streamed XC: yes. Streamed DF: yes, through <code>forces</code>. The SCF-side streamed
+RI-K <code>custom_vjp</code> supplies the exchange Fock w.r.t. the density only, so
+<code>forces</code> swaps in a frozen-orbital RI-K that recomputes the 3-center
+integrals per auxiliary slab and differentiates end-to-end; range-separated
+hybrids stream both exchange channels, and <code>df(screen=...)</code> streams as well
+(the Schwarz shell-pair mask is baked into the contraction plans at the
+reference geometry). No DF configuration requires the materialized tensor
+for forces.</p>
+<h2 id="why-does-scf_batched-reject-dfscreen">Why does <code>scf_batched</code> reject <code>df(screen=...)</code>?<a class="headerlink" href="#why-does-scf_batched-reject-dfscreen" title="Permanent link">¤</a></h2>
+<p>Schwarz screening is value-based: which shell pairs are negligible depends
+on the geometry. Inside <code>scf_batched</code> every geometry is traced through one
+compiled build, so the pair selection cannot be re-derived per geometry, and
+freezing one reference mask across the batch is unsound (a pair negligible
+at one geometry need not be at another). Drop <code>screen=</code> for batched runs, or
+loop unbatched; single-geometry <code>scf</code>, <code>forces</code> and <code>hessian</code> all support it.</p>
 
 
 

@@ -1039,10 +1039,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#analytic-hessian-status" class="md-nav__link">
+  <a href="#analytic-hessian" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Analytic Hessian: status
+        Analytic Hessian
       
     </span>
   </a>
@@ -1532,30 +1532,37 @@ of the SCF iteration count.</p>
 <h2 id="analytic-polarizability">Analytic polarizability<a class="headerlink" href="#analytic-polarizability" title="Permanent link">¤</a></h2>
 <p>The headline use is the exact coupled-perturbed-KS polarizability, a single
 <code>jax.jacobian</code> of the dipole through the converged density, no field stepping:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="p">;</span> <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_enable_x64&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="p">;</span> <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">"jax_enable_x64"</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">Molecule</span><span class="p">,</span> <span class="n">polarizability</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dftax.energy.xc</span><span class="w"> </span><span class="kn">import</span> <span class="n">PBE</span>
 
-<span class="n">mol</span> <span class="o">=</span> <span class="n">Molecule</span><span class="o">.</span><span class="n">from_xyz</span><span class="p">(</span><span class="s2">&quot;O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043&quot;</span><span class="p">,</span> <span class="s2">&quot;sto-3g&quot;</span><span class="p">)</span>
-<span class="n">a_analytic</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">polarizability</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;analytic&quot;</span><span class="p">))</span>
-<span class="n">a_fd</span>       <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">polarizability</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;fd&quot;</span><span class="p">))</span>
+<span class="n">mol</span> <span class="o">=</span> <span class="n">Molecule</span><span class="o">.</span><span class="n">from_xyz</span><span class="p">(</span><span class="s2">"O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043"</span><span class="p">,</span> <span class="s2">"sto-3g"</span><span class="p">)</span>
+<span class="n">a_analytic</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">polarizability</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">method</span><span class="o">=</span><span class="s2">"analytic"</span><span class="p">))</span>
+<span class="n">a_fd</span>       <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">polarizability</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">method</span><span class="o">=</span><span class="s2">"fd"</span><span class="p">))</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">a_analytic</span> <span class="o">-</span> <span class="n">a_fd</span><span class="p">)))</span>     <span class="c1"># ~2e-6  (analytic CPHF == finite field)</span>
 </code></pre></div>
 <p>Validation: the energy gradient <em>through</em> <code>implicit_density</code> reproduces the analytic
 forces to ~7e-9, and the analytic polarizability matches the finite-field tensor to
 ~2e-6.</p>
-<h2 id="analytic-hessian-status">Analytic Hessian: status<a class="headerlink" href="#analytic-hessian-status" title="Permanent link">¤</a></h2>
-<p>The analytic <em>geometry</em> Hessian is not yet available: <code>hessian</code> remains finite
-difference of the analytic forces (the validated default; water/sto-3g frequencies match
-PySCF to &lt;5 cm⁻¹). The blocker is not the implicit machinery (the density response
-<code>dP*/dR</code> is well-behaved) but a NaN in the <strong>second geometric derivative of the energy at
-fixed density</strong>. The grid/XC second derivative was investigated and ruled out (freezing the
-Becke weights still NaNs, and the XC kernel is double-<code>where</code>-guarded); the remaining
-suspect is a non-twice-differentiable op (<code>sqrt</code>/<code>where</code>/<code>clip</code>) in one of the integral
-primitives (Boys / McMurchie-Davidson), not yet isolated. The analytic polarizability is
-unaffected because a field perturbation never touches the grid. An analytic Hessian awaits
-that primitive being made twice-differentiable.</p>
+<h2 id="analytic-hessian">Analytic Hessian<a class="headerlink" href="#analytic-hessian" title="Permanent link">¤</a></h2>
+<p>The analytic geometry Hessian is available: <code>hessian(mol, xc,
+method="analytic")</code> assembles the exact orbital-rotation Schur complement
+<code>H = E_RR − E_Rκ (E_κκ)⁻¹ E_κR</code> at one tightly converged (Newton-polished)
+reference, one CG response solve per column, so 3N response solves replace
+the finite-difference path's 6N SCF solves. RKS and UKS are supported, on
+the materialized Coulomb backends by default; an explicit <code>df(chunk=&lt;int&gt;)</code>
+streams the response through the forces backend's frozen exchange with the
+traced rotated occupieds, so the 3-center tensor is never materialized.
+<code>method="fd"</code> (the default) remains the finite difference of the analytic
+forces (water/sto-3g frequencies match PySCF to &lt;5 cm⁻¹).</p>
+<p>A historical note: this was long blocked on a NaN in the second geometric
+derivative of the energy at fixed density; the culprit turned out to be the
+retired pre-0.4.0 flat integral paths, and the shell-class bucketed engine
+is cleanly twice-differentiable. On density-fitted surfaces, validate
+second derivatives against exact-backend parity or large-step energy finite
+differences, never small-step FD: the FD legs' RI-metric noise (~2e-10 Ha
+per solve) amplifies as 1/h² and swamps the comparison.</p>
 
 
 

@@ -1579,14 +1579,14 @@
 <p>This page tells you essentially everything you need to know to use dftax.
 It assumes a working install (see <a href="../">Home</a>) and one global setting:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
-<span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_enable_x64&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>   <span class="c1"># DFT energies want float64</span>
+<span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">"jax_enable_x64"</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>   <span class="c1"># DFT energies want float64</span>
 </code></pre></div>
 <h2 id="1-molecules">1. Molecules<a class="headerlink" href="#1-molecules" title="Permanent link">¤</a></h2>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">dftax</span><span class="w"> </span><span class="kn">import</span> <span class="n">Molecule</span>
 
-<span class="n">water</span> <span class="o">=</span> <span class="n">Molecule</span><span class="o">.</span><span class="n">from_xyz</span><span class="p">(</span><span class="s2">&quot;O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043&quot;</span><span class="p">,</span> <span class="s2">&quot;sto-3g&quot;</span><span class="p">)</span>
-<span class="n">ch3</span>   <span class="o">=</span> <span class="n">Molecule</span><span class="o">.</span><span class="n">from_xyz</span><span class="p">(</span><span class="s2">&quot;C 0 0 0; H 0 1.079 0; H 0.934 -0.539 0; H -0.934 -0.539 0&quot;</span><span class="p">,</span>
-                          <span class="s2">&quot;sto-3g&quot;</span><span class="p">,</span> <span class="n">spin</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>          <span class="c1"># spin = 2S</span>
+<span class="n">water</span> <span class="o">=</span> <span class="n">Molecule</span><span class="o">.</span><span class="n">from_xyz</span><span class="p">(</span><span class="s2">"O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043"</span><span class="p">,</span> <span class="s2">"sto-3g"</span><span class="p">)</span>
+<span class="n">ch3</span>   <span class="o">=</span> <span class="n">Molecule</span><span class="o">.</span><span class="n">from_xyz</span><span class="p">(</span><span class="s2">"C 0 0 0; H 0 1.079 0; H 0.934 -0.539 0; H -0.934 -0.539 0"</span><span class="p">,</span>
+                          <span class="s2">"sto-3g"</span><span class="p">,</span> <span class="n">spin</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>          <span class="c1"># spin = 2S</span>
 </code></pre></div>
 <p><code>Molecule.from_xyz</code> takes a PySCF-style atom string (Ångström by default) and a
 basis-set name; coordinates are stored in Bohr. <code>charge</code>, <code>spin</code> (= 2S) and
@@ -1600,7 +1600,7 @@ of the system, not of any one calculation.</p>
 <span class="n">ks</span> <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">water</span><span class="p">,</span> <span class="n">PBE</span><span class="p">())</span>                                <span class="c1"># all defaults</span>
 <span class="n">ks</span> <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">water</span><span class="p">,</span> <span class="n">PBE0</span><span class="p">(),</span>
         <span class="n">grid</span>    <span class="o">=</span> <span class="n">becke</span><span class="p">(</span><span class="n">n_radial</span><span class="o">=</span><span class="mi">75</span><span class="p">,</span> <span class="n">lebedev</span><span class="o">=</span><span class="mi">302</span><span class="p">),</span>   <span class="c1"># quadrature quality</span>
-        <span class="n">coulomb</span> <span class="o">=</span> <span class="n">df</span><span class="p">(</span><span class="s2">&quot;def2-universal-jkfit&quot;</span><span class="p">),</span>        <span class="c1"># RI density fitting</span>
+        <span class="n">coulomb</span> <span class="o">=</span> <span class="n">df</span><span class="p">(</span><span class="s2">"def2-universal-jkfit"</span><span class="p">),</span>        <span class="c1"># RI density fitting</span>
         <span class="n">mesh</span>    <span class="o">=</span> <span class="n">mesh</span><span class="p">())</span>                            <span class="c1"># shard across local devices</span>
 </code></pre></div>
 <p><code>KS(system, xc, *, grid=None, coulomb=None, spin=None, mesh=None)</code> assembles the

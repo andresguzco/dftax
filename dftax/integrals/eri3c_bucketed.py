@@ -407,6 +407,62 @@ def plan_eri3c(basis, aux_basis, keep_pairs=None):
     return (nao, naux, nao_sph, naux_sph, tuple(classes))
 
 
+def slice_aux(aux_basis, lo, hi, slo, shi):
+    """The auxiliary functions in cartesian rows ``lo:hi`` as a standalone
+    BasisData. Shell-aligned only: a present ``cart2sph`` is block-diagonal
+    per shell, so its ``[lo:hi, slo:shi]`` block is the slice's exact
+    transform. Slices traced ``centers`` cleanly (static bounds)."""
+    import equinox as eqx
+
+    out = eqx.tree_at(
+        lambda b: (b.centers, b.exponents, b.coefficients, b.angular),
+        aux_basis,
+        (aux_basis.centers[lo:hi], aux_basis.exponents[lo:hi],
+         aux_basis.coefficients[lo:hi], aux_basis.angular[lo:hi]),
+    )
+    if aux_basis.cart2sph is not None:
+        out = eqx.tree_at(
+            lambda b: b.cart2sph, out, aux_basis.cart2sph[lo:hi, slo:shi]
+        )
+    return out
+
+
+def plan_aux_slabs(basis, aux_basis, max_fns, keep_pairs=None):
+    """Shell-aligned auxiliary slabs for the streamed DF contractions.
+
+    Returns a tuple of ``(lo, hi, slo, shi, plan)`` per slab: cartesian row
+    bounds, final (spherical) function bounds, and the :func:`plan_eri3c`
+    skeleton of the ``basis`` x aux-slice block. Consecutive aux shells are
+    grouped until a slab would exceed ``max_fns`` final functions (a single
+    larger shell forms its own slab), so slabs never cut a shell and the
+    ``(nao, nao, slab)`` block stays within the caller's memory budget.
+    ``keep_pairs`` (from :func:`_shell_pair_keep`) prunes bra shell pairs
+    from every slab plan (Schwarz screening; see :func:`plan_eri3c`).
+    Everything is python ints in nested tuples: hashable, safe as a static
+    module field, computed where the basis metadata is concrete.
+    """
+    shells, _ = _shells(aux_basis.angular, aux_basis.exponents)
+    sph = aux_basis.cart2sph is not None
+    bounds = []
+    lo_c = lo_s = 0
+    end_c = end_s = 0
+    fns = 0
+    for (l, r0, ncomp, _np) in shells:
+        nf = (2 * l + 1) if sph else ncomp
+        if fns and fns + nf > max_fns:
+            bounds.append((lo_c, end_c, lo_s, end_s))
+            lo_c, lo_s, fns = end_c, end_s, 0
+        end_c = r0 + ncomp
+        end_s += nf
+        fns += nf
+    bounds.append((lo_c, end_c, lo_s, end_s))
+    return tuple(
+        (lc, hc, ls, hs,
+         plan_eri3c(basis, slice_aux(aux_basis, lc, hc, ls, hs), keep_pairs))
+        for (lc, hc, ls, hs) in bounds
+    )
+
+
 # ---------------------------------------------------------------------------
 # Right-sized table builders (trace-time unrolled, per-level vectorized)
 # ---------------------------------------------------------------------------

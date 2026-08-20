@@ -40,15 +40,23 @@ Validation: the energy gradient *through* `implicit_density` reproduces the anal
 forces to ~7e-9, and the analytic polarizability matches the finite-field tensor to
 ~2e-6.
 
-## Analytic Hessian: status
+## Analytic Hessian
 
-The analytic *geometry* Hessian is not yet available: `hessian` remains finite
-difference of the analytic forces (the validated default; water/sto-3g frequencies match
-PySCF to <5 cm⁻¹). The blocker is not the implicit machinery (the density response
-`dP*/dR` is well-behaved) but a NaN in the **second geometric derivative of the energy at
-fixed density**. The grid/XC second derivative was investigated and ruled out (freezing the
-Becke weights still NaNs, and the XC kernel is double-`where`-guarded); the remaining
-suspect is a non-twice-differentiable op (`sqrt`/`where`/`clip`) in one of the integral
-primitives (Boys / McMurchie-Davidson), not yet isolated. The analytic polarizability is
-unaffected because a field perturbation never touches the grid. An analytic Hessian awaits
-that primitive being made twice-differentiable.
+The analytic geometry Hessian is available: `hessian(mol, xc,
+method="analytic")` assembles the exact orbital-rotation Schur complement
+`H = E_RR − E_Rκ (E_κκ)⁻¹ E_κR` at one tightly converged (Newton-polished)
+reference, one CG response solve per column, so 3N response solves replace
+the finite-difference path's 6N SCF solves. RKS and UKS are supported, on
+the materialized Coulomb backends by default; an explicit `df(chunk=<int>)`
+streams the response through the forces backend's frozen exchange with the
+traced rotated occupieds, so the 3-center tensor is never materialized.
+`method="fd"` (the default) remains the finite difference of the analytic
+forces (water/sto-3g frequencies match PySCF to <5 cm⁻¹).
+
+A historical note: this was long blocked on a NaN in the second geometric
+derivative of the energy at fixed density; the culprit turned out to be the
+retired pre-0.4.0 flat integral paths, and the shell-class bucketed engine
+is cleanly twice-differentiable. On density-fitted surfaces, validate
+second derivatives against exact-backend parity or large-step energy finite
+differences, never small-step FD: the FD legs' RI-metric noise (~2e-10 Ha
+per solve) amplifies as 1/h² and swamps the comparison.

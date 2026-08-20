@@ -50,7 +50,8 @@ import jax
 jax.config.update("jax_enable_x64", True)   # DFT energies want float64
 
 from dftax import KS, Molecule, scf
-from dftax.energy.xc import PBE   # also LDA, PBE0, B3LYP, CAM-B3LYP, wB97X(-V), r2SCAN
+from dftax.energy.xc import PBE   # or functional("..."): LDA, PBE0, B3LYP,
+                                  # CAM-B3LYP, wB97X(-V), wB97M-V, r2SCAN
 
 mol = Molecule.from_xyz("O 0 0 0; H 0.757 0.587 0; H -0.757 0.587 0", "sto-3g")
 res = scf(KS(mol, PBE()))            # DIIS SCF -> KSResult
@@ -98,13 +99,13 @@ Against PySCF on water / sto-3g (see
 | PBE   | 1.5e-5 |
 | PBE0  | 1.1e-5 |
 
-LDA and B3LYP reproduce libxc to machine precision. PBE and PBE0 sit near
-1e-5 Ha, a gap in the hand-rolled GGA enhancement factors rather than in the SCF
-or the integrals, and well within chemical accuracy. The later rungs were
-ported against their references directly: r2SCAN matches libxc to ~1e-9,
-ωB97X-V (including its VV10 term) matches a full PySCF solve to ~2e-13 on
-matched grids, and the D3(BJ)/D4 dispersion models match tad-dftd3/tad-dftd4
-to machine precision. Analytic forces match finite differences to about
+LDA, PBE, B3LYP and PBE0 reproduce libxc to machine precision (an earlier
+~1e-5 Ha PBE gap traced to one truncated constant, now exact). The later
+rungs were ported against their references directly: r2SCAN matches libxc
+to ~1e-9, ωB97X-V (including its VV10 term) matches a full PySCF solve to
+~2e-13 on matched grids, ωB97M-V matches libxc pointwise to machine
+precision and a full PySCF solve to ~1e-10, and the D3(BJ)/D4 dispersion
+models match tad-dftd3/tad-dftd4 to machine precision. Analytic forces match finite differences to about
 4e-8 Ha/Bohr, the CPHF polarizability matches finite-field to about 1e-4, and
 vibrational frequencies match PySCF to a few cm⁻¹.
 

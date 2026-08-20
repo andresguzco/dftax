@@ -40,7 +40,7 @@ extra keyword arguments are forwarded to `scf`. `vibrations`, `ir_spectrum`, and
 |---|---|---|
 | `dipole` | `μ = Σ Z_A R_A − Tr(P r)` | exact (dipole integrals) |
 | `polarizability` | `α_ij = ∂μ_i/∂E_j` | finite field, or `method="analytic"` (CPHF) |
-| `hessian` | `∂²E/∂R∂R'` | FD of analytic forces |
+| `hessian` | `∂²E/∂R∂R'` | FD of analytic forces, or `method="analytic"` (orbital-rotation Schur complement) |
 | `vibrations` | harmonic frequencies + normal modes | mass-weighted Hessian, Eckart-projected |
 | `ir_spectrum` | frequencies + IR intensities | `|dμ/dQ|²` |
 | `raman_spectrum` | frequencies + Raman activities | `dα/dQ` (expensive) |

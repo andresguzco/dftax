@@ -83,7 +83,8 @@ def _becke_spec(grid) -> Becke:
 
 def _grid(mol, grid):
     g = _becke_spec(grid)
-    return becke_grid(mol.symbols, mol.atom_coords(), g.n_radial, g.lebedev), g
+    return becke_grid(mol.symbols, mol.atom_coords(), g.n_radial, g.lebedev,
+                      g.prune, g.r_max), g
 
 
 def _solve_field(mol, xc, gc, gw, *, chunk=None, field=None,
@@ -192,7 +193,8 @@ def _displaced(mol, coords) -> Molecule:
 def _eval_at(mol, xc, coords, origin, g, scf_kw, coulomb=None):
     """Analytic forces ``(n_atom,3)`` and dipole ``(3,)`` at a geometry."""
     m = _displaced(mol, coords)
-    gc, gw = becke_grid(m.symbols, m.atom_coords(), g.n_radial, g.lebedev)
+    gc, gw = becke_grid(m.symbols, m.atom_coords(), g.n_radial, g.lebedev,
+                        g.prune, g.r_max)
     ks = KS(m, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
     res = scf(ks, **scf_kw)
     F = forces(m, xc, res, grid=g, coulomb=coulomb)
@@ -261,13 +263,44 @@ def _harmonic(H, mol):
     return freq_cm, V, m3
 
 
-def hessian(mol, xc, *, step: float = 1e-3, origin=(0.0, 0.0, 0.0),
+def hessian(mol, xc, *, method: str = "fd", step: float = 1e-3,
+            origin=(0.0, 0.0, 0.0),
             grid: Becke | None = None,
             coulomb: ExactSpec | DFSpec | None = None,
+            cg_iters: int = 64,
             **scf_kw) -> Float[Array, "n n"]:
-    """Nuclear Hessian ``∂²E/∂R_A∂R_B`` (Ha/Bohr², shape ``(3N, 3N)``) by central
-    finite difference of the analytic Pulay-free forces."""
-    g = _becke_spec(grid)   # spec only: the FD legs build their own per-geometry grids
+    """Nuclear Hessian ``∂²E/∂R_A∂R_B`` (Ha/Bohr², shape ``(3N, 3N)``).
+
+    ``method="fd"`` (default): central finite difference of the analytic
+    Pulay-free forces (6N SCF solves). ``method="analytic"``: the exact
+    orbital-rotation Schur complement
+    ``H = E_RR − E_Rκ (E_κκ)⁻¹ E_κR`` at one tightly converged reference
+    (3N CG response solves; RKS and UKS, materialized Coulomb backends;
+    see :mod:`dftax.ks.hessian`). ``step`` applies to the FD path,
+    ``cg_iters`` to the analytic response solves.
+    """
+    g = _becke_spec(grid)   # spec only: both paths build their own per-geometry grids
+    if method == "analytic":
+        from dftax.ks.hessian import _analytic_hessian
+        from dftax.ks.newton import newton
+
+        gc, gw = becke_grid(
+            mol.symbols, mol.atom_coords(), g.n_radial, g.lebedev,
+            g.prune, g.r_max,
+        )
+        ks = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
+        res = scf(ks, **scf_kw)
+        # The Schur complement assumes a stationary reference (κ* = 0); a
+        # warm Newton polish reaches a tight orbital gradient even where
+        # DIIS grinds at its coarse-grid noise floor (quadratic cleanup,
+        # a few iterations from a converged density). e_tol 1e-11, not
+        # 1e-12: open-shell polishes on coarse grids sit at that energy
+        # noise floor with the orbital gradient (the criterion the Schur
+        # complement actually needs, guarded in _analytic_hessian) long
+        # converged.
+        res = newton(ks, guess=res.P, g_tol=1e-8, e_tol=1e-11, max_iter=48)
+        return _analytic_hessian(mol, xc, res, g, coulomb, None,
+                                 cg_iters=cg_iters)
     H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw, coulomb=coulomb)
     return jnp.asarray(H)
 
@@ -350,12 +383,23 @@ def alchemical_deriv(
     nuclear charges, which enter only the nuclear-attraction and
     nuclear-repulsion terms.
 
-    ``coulomb=None`` resolves to :func:`~dftax.ks.terms.exact` here (not the DF
-    default): the charge closure rebuilds through a raw :class:`System`, which
-    has no element symbols to resolve an auxiliary basis, and both legs of the
-    Hellmann-Feynman derivative must use the same Coulomb backend."""
+    ``coulomb=None`` resolves to :func:`~dftax.ks.terms.exact` here (not the
+    DF default) for backward compatibility, but ``df(...)`` works: the
+    auxiliary basis is resolved eagerly against the molecule (its centers are
+    geometry-fixed here; only the charges vary), so the raw-:class:`System`
+    charge closure and the outer solve share the same fitted backend."""
+    from dftax.basis.loader import build_basis_data
+    from dftax.energy.gto import BasisData
+
     (gc, gw), g = _grid(mol, grid)
     coulomb = exact() if coulomb is None else coulomb
+    if isinstance(coulomb, DFSpec) and not isinstance(coulomb.auxbasis, BasisData):
+        aux = build_basis_data(
+            mol.symbols, mol.atom_coords(), coulomb.auxbasis,
+            spherical=coulomb.spherical is not False,
+        )
+        coulomb = DFSpec(auxbasis=aux, chunk=coulomb.chunk,
+                         screen=coulomb.screen, spherical=coulomb.spherical)
     ks = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
     res = scf(ks, **scf_kw)
     # Per-channel occupied coefficients spanning the converged density

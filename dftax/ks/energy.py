@@ -65,6 +65,7 @@ from dftax.integrals.eri3c_bucketed import (
 )
 from dftax.integrals.eri4c import (
     eri4c_matrix,
+    plan_eri4c,
     screened_quartets,
     significant_pairs,
 )
@@ -370,7 +371,7 @@ def ao_on_grid(
 def _build_integrals(
     basis, coords, charges, grid_coords, aux_basis, materialize_ao, materialize_int3c,
     eri_quartets=None, eri_qof=None, stream_exact=False, omega=None,
-    eri3c_plan=None, pair_plan=None, aux_pair_plan=None,
+    eri3c_plan=None, pair_plan=None, aux_pair_plan=None, eri4c_plan=None,
 ):
     """Build all integral arrays in one jitted pass.
 
@@ -396,13 +397,16 @@ def _build_integrals(
     if aux_basis is None:
         # stream_exact: skip the O(N⁴) tensor; J/K are contracted on the fly
         # in StreamedExactCoulomb (coulomb_j_4c / exchange_k_4c).
-        eri = None if stream_exact else eri4c_matrix(basis, quartets=eri_quartets, qof=eri_qof)
+        eri = (None if stream_exact
+               else eri4c_matrix(basis, quartets=eri_quartets, qof=eri_qof,
+                                 plan=eri4c_plan))
         int3c = None
         int2c_inv = None
         if omega is not None:
             # Long-range erf(ω·r₁₂)/r₁₂ tensor for range-separated hybrids.
             eri_lr = eri4c_matrix(
-                basis, quartets=eri_quartets, qof=eri_qof, omega=omega
+                basis, quartets=eri_quartets, qof=eri_qof, omega=omega,
+                plan=eri4c_plan,
             )
     else:
         # int3c (nao²×naux) is the big DF tensor; skip it when streaming RI-J.
@@ -589,6 +593,13 @@ class KS(eqx.Module):
         aux_pair_plan = (
             plan_pairs(aux_basis) if aux_basis is not None else None
         )
+        # The unscreened exact path runs bucketed; a Schwarz quartet list
+        # keeps the flat per-element route (the plan is unused there).
+        eri4c_plan = (
+            plan_eri4c(basis)
+            if aux_basis is None and not spec.stream and quartets is None
+            else None
+        )
         (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
          eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(
             basis, coords, charges, grid_coords, aux_basis,
@@ -596,7 +607,7 @@ class KS(eqx.Module):
             (not shard_df) and not (is_df and spec.chunk is not None),
             quartets, qof, (not is_df) and spec.stream,
             omega if hf_lr != 0.0 else None,
-            eri3c_plan, pair_plan, aux_pair_plan,
+            eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan,
         )
         # Dispersion is P-independent: a scalar of the (traced) coordinates,
         # mirroring e_nn, so the rebuilt energies in forces/batched carry its

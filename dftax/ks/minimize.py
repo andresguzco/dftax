@@ -174,7 +174,7 @@ def minimize(
     C = X @ Cp
     return KSResult(
         e_tot=e_tot,
-        e_elec=e_tot - float(ks.e_nn),
+        e_elec=e_tot - float(ks.e_nn) - float(ks.e_disp),
         converged=converged,
         n_iter=n_iter,
         nocc=ks.nocc,

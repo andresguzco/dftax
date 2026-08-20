@@ -119,6 +119,32 @@ The conclusion that changes most is *which* factor dominates. It is no longer
 iteration count, which was an artifact; it is per-iteration throughput, and
 within that the streamed XC term.
 
+**Stale against the harness (re-run pending).** The table above measures the
+dominant term, the XC quadrature, *without* dftax's grid block screening
+(`becke(screen=...)`, landed after this run), while GPU4PySCF's numint always
+screens AOs per grid batch internally. That is one more not-like-with-like in
+the dense direction: the unscreened dftax XC pays `ng·nao²` everywhere on a
+molecule where most basis functions reach few blocks. The harness now defaults
+to `--screen 1e-10` on the dftax side (measured effect on the energy: ~1.6e-9
+Ha on water at that threshold, far inside CONV_TOL); the next GPU run should
+replace this table.
+
+**Incremental (ΔP) Fock builds: assessed and rejected for this workload.**
+The classic direct-SCF trick (build J/K from ΔP = P_i − P_{i−1} with
+Schwarz·|ΔP| screening, so late iterations touch few integrals) has no
+purchase here, for three reasons that stack. First, on the DF path measured
+above, J/K are dense GEMMs against the materialized (or slab-streamed)
+3-center tensor: their cost is independent of how sparse ΔP is, so
+incrementality buys nothing even in principle. Second, the measured dominant
+cost is the XC quadrature, which is nonlinear in P and has no exact
+incremental form. Third, dftax's SCF is one `lax.while_loop` inside a single
+jit: every iteration runs the identical compiled graph, so value-dependent
+per-iteration sparsity is expressible only as masking (which computes
+everything anyway) or as a Python-loop recompile per iteration, and compile
+time is already the engine's weakest axis. The one place the trick classically
+pays, direct 4-center SCF, is dftax's validation backend, not its production
+path.
+
 Same coronene, both engines given all four GPUs (`--ndev 4`; dftax shards the
 auxiliary axis with `mesh()`, GPU4PySCF uses its own multi-GPU path). The pool
 column is summed over the four devices; the in-use column is the largest

@@ -31,9 +31,15 @@ from dftax.energy.xc import XCFunctional
 from dftax.basis.loader import build_basis_data
 from dftax.grid import Becke, becke, becke_grid, becke_grid_size, points
 from dftax.integrals import overlap_matrix
-from dftax.ks.energy import KS, System, _resolve_chunk
+from dftax.ks.energy import KS, System, _resolve_chunk, _resolve_df_chunk
 from dftax.ks.scf import KSResult
-from dftax.ks.terms import DFSpec, ExactSpec, _rik_occ_orbitals, df
+from dftax.ks.terms import (
+    DFSpec,
+    ExactSpec,
+    StreamedDFForcesCoulomb,
+    _rik_occ_orbitals,
+    df,
+)
 from dftax.system.molecule import Molecule
 
 
@@ -152,29 +158,28 @@ def forces(
             energy calculation; a ``chunk`` on the spec streams the XC grid
             here too). Explicit point grids cannot follow the nuclei, so only
             Becke specs are accepted.
-        coulomb: a *materialized* :func:`~dftax.ks.terms.df` (default,
-            matching the KS default backend) or :func:`~dftax.ks.terms.exact`;
-            the streamed DF backends do not propagate geometry gradients (see
-            :func:`dftax.ks.terms._streamed_df_rik`), so ``chunk="auto"``
-            resolves to materialized here regardless of size.
+        coulomb: a :func:`~dftax.ks.terms.df` spec (default, matching the KS
+            default backend) or a plain materialized
+            :func:`~dftax.ks.terms.exact`. ``df(chunk="auto")`` materializes
+            the nao²×naux 3-center tensor when it fits the memory budget and
+            otherwise streams the geometry gradient over shell-aligned
+            auxiliary slabs (RI-J by plain autodiff, RI-K at the frozen
+            occupied coefficients; see
+            :func:`dftax.ks.terms._streamed_df_rik_frozen`); an int ``chunk``
+            forces streaming, ``chunk=None`` forces the materialized tensor.
+            Range-separated hybrids stream both exchange channels (the LR
+            3-center rebuilt per slab). ``screen=`` (with an int ``chunk``)
+            streams too: the Schwarz shell-pair mask is resolved at the
+            reference geometry and baked into the slab plans. The streamed
+            path uses the cartesian auxiliary span, like the streamed SCF
+            backend. Smeared (fractionally occupied) hybrid results need the
+            materialized backend.
     """
     grid = becke() if grid is None else grid
     if not isinstance(grid, Becke):
         raise ValueError("forces need a geometry-following grid: pass becke(...).")
     if coulomb is None:
         coulomb = df()                          # match the KS default backend
-    if isinstance(coulomb, DFSpec):
-        if isinstance(coulomb.chunk, int):
-            raise ValueError(
-                "forces need the materialized DF backend: df(...) without an "
-                "explicit chunk (the streamed RI-K vjp does not propagate "
-                "geometry gradients)."
-            )
-        if coulomb.chunk == "auto":
-            coulomb = DFSpec(
-                auxbasis=coulomb.auxbasis, chunk=None, screen=coulomb.screen,
-                spherical=coulomb.spherical,
-            )
     if isinstance(coulomb, ExactSpec) and (coulomb.stream or coulomb.screen):
         raise ValueError("forces support only the plain materialized exact() backend.")
 
@@ -212,8 +217,27 @@ def forces(
         w = 2.0 if len(Zs) == 1 else 1.0
         spin = None if len(Zs) == 1 else Zs[0].shape[1] - Zs[1].shape[1]
     atom_idx = jnp.asarray(atom_idx)
+
+    # Final (spherical) orbital dimension, needed to price both the XC and the
+    # DF memory policies below.
+    nao_final = (
+        basis_t.cart2sph.shape[1]
+        if basis_t.cart2sph is not None
+        else basis_t.centers.shape[0]
+    )
+
+    # Resolve the DF memory policy eagerly (same budget and span policy as the
+    # KS builder's _resolve_aux): materialize the nao²×naux tensor when it
+    # fits, stream the geometry gradient over auxiliary slabs otherwise. Under
+    # jax.grad the tensor is held together with its cotangent, so streaming
+    # kicks in exactly where the materialized reverse pass would OOM. The
+    # spherical span belongs to the materialized path; "auto" prices it first
+    # and re-prices the (larger) cartesian span on the streaming fallback.
+    hf_ax = float(getattr(xc, "hf_coeff", 0.0))
+    hf_lr = float(getattr(xc, "hf_coeff_lr", 0.0))
     aux_t = None
     aux_atom_idx = None
+    df_chunk = None
     if isinstance(coulomb, DFSpec):
         auxbasis = coulomb.auxbasis
         if not isinstance(auxbasis, str):
@@ -221,21 +245,66 @@ def forces(
                 "forces rebuild the auxiliary basis per geometry; pass "
                 "df(<basis-set name>), not a prebuilt BasisData."
             )
-        # spherical aux: matches the KS materialized default (forces always
-        # resolve to the materialized path)
+        df_chunk = coulomb.chunk
+        want_sph = (coulomb.spherical is not False
+                    and not isinstance(df_chunk, int))
         aux_t, a_idx = build_basis_data(
             symbols, mol.atom_coords(), auxbasis, return_atom_index=True,
-            spherical=coulomb.spherical is not False,
+            spherical=want_sph,
         )
+        # RSH doubles the materialized footprint (Coulomb + attenuated
+        # tensors), so the budget prices both.
+        lr_fold = 2 if hf_lr != 0.0 else 1
+        if df_chunk == "auto":
+            naux_final = (
+                aux_t.cart2sph.shape[1]
+                if aux_t.cart2sph is not None
+                else aux_t.centers.shape[0]
+            )
+            df_chunk = _resolve_df_chunk(
+                "auto", nao_final, naux_final * lr_fold, False,
+            )
+        if isinstance(df_chunk, int) and aux_t.cart2sph is not None:
+            if coulomb.spherical is True:
+                raise NotImplementedError(
+                    "df(spherical=True) requires a materialized backend: the "
+                    "streamed force gradient uses the cartesian auxiliary "
+                    "span; pass df(chunk=None)."
+                )
+            aux_t, a_idx = build_basis_data(
+                symbols, mol.atom_coords(), auxbasis, return_atom_index=True,
+            )
+            if coulomb.chunk == "auto":
+                df_chunk = _resolve_df_chunk(
+                    "auto", nao_final, aux_t.centers.shape[0] * lr_fold, False,
+                )
         aux_atom_idx = jnp.asarray(a_idx)
+
+    streamed = isinstance(df_chunk, int)
+    if streamed and smeared and (hf_ax != 0.0 or hf_lr != 0.0):
+        raise NotImplementedError(
+            "streamed hybrid forces freeze integer-occupation orbitals; a "
+            "smeared (fractionally occupied) density needs the materialized "
+            "DF backend: pass df(chunk=None)."
+        )
+    # Schwarz screening is plan-level on the streamed path: the shell-pair
+    # keep-set is resolved eagerly at the reference geometry (concrete
+    # templates) and baked into the slab plans the traced rebuild consumes;
+    # the pair selection is frozen across the infinitesimal displacement,
+    # like the eager quartet screening on the exact path.
+    slab_plans = None
+    if streamed:
+        from dftax.integrals.eri3c_bucketed import (
+            _shell_pair_keep, plan_aux_slabs,
+        )
+
+        keep = None
+        if coulomb.screen is not None:
+            keep = _shell_pair_keep(basis_t, float(coulomb.screen))
+        slab_plans = plan_aux_slabs(basis_t, aux_t, df_chunk, keep)
 
     # Resolve the "auto" XC streaming policy eagerly: the grid is rebuilt with
     # traced coordinates inside `energy`, but its size is static per spec.
-    nao_final = (
-        basis_t.cart2sph.shape[1]
-        if basis_t.cart2sph is not None
-        else basis_t.centers.shape[0]
-    )
     xc_chunk = _resolve_chunk(
         grid.chunk,
         becke_grid_size(symbols, grid.n_radial, grid.lebedev, grid.prune, grid.r_max),
@@ -247,7 +316,10 @@ def forces(
         spec = None
         if aux_t is not None:
             aux_basis = eqx.tree_at(lambda b: b.centers, aux_t, coords[aux_atom_idx])
-            spec = df(aux_basis, chunk=None)              # materialized DF
+            # Screening rides in the slab plans on the streamed path (a traced
+            # basis cannot resolve element-level Schwarz pairs), and is
+            # frozen out of the materialized rebuild.
+            spec = df(aux_basis, chunk=df_chunk)
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max
         )
@@ -260,6 +332,25 @@ def forces(
             xc, grid=points(gc, gw, chunk=xc_chunk), coulomb=spec, spin=spin,
             dispersion=dispersion,
         )
+        if slab_plans is not None:
+            # The streamed RI-K's custom_vjp differentiates wrt P only, and
+            # the flat element streaming is the slow engine under grad; swap
+            # in the slab-streamed term with frozen-orbital exchange, which
+            # within this projector parametrization is the same energy with
+            # full geometry gradients (both the Coulomb-metric and the
+            # attenuated LR channels). The slab plans carry the Schwarz
+            # pruning when screen= is set (RI-J and frozen RI-K alike).
+            ks = eqx.tree_at(
+                lambda k: k.coulomb, ks,
+                StreamedDFForcesCoulomb(
+                    basis=ks.coulomb.basis, aux_basis=ks.coulomb.aux_basis,
+                    int2c_inv=ks.coulomb.int2c_inv,
+                    Zs=() if smeared else Zs,
+                    hf_coeff=hf_ax, slab_plans=slab_plans,
+                    int2c_inv_lr=ks.coulomb.int2c_inv_lr,
+                    hf_coeff_lr=hf_lr, omega=ks.coulomb.omega,
+                ),
+            )
         if smeared:
             P = jnp.stack([_density_frac(Phi, f, ks.S) for Phi, f in nos])
         else:

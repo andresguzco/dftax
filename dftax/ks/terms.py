@@ -162,7 +162,12 @@ def _metric_pinv(V: Float[Array, "naux naux"]) -> Float[Array, "naux naux"]:
     converged solves differ at ~2e-6 Ha/Bohr (GPU vs CPU, batched vs serial);
     that is d_tol-level density difference amplified through the
     ill-conditioned auxiliary directions, not filter noise: at a matched
-    density the paths agree to 5e-15. Tikhonov filters w/(w² + σ²) trade
+    density the paths agree to 5e-15. The same amplification bounds the
+    matched-density agreement between *different contraction orders* (e.g.
+    materialized vs streamed DF forces): machine precision with a
+    well-conditioned auxiliary metric, ~2e-9 (H2) to ~5e-7 (water) with the
+    overcomplete jkfit metric, whose kept band amplifies the reordered
+    rounding by ~1e7. Tikhonov filters w/(w² + σ²) trade
     strictly worse: σ = 1e-7·w_max damps the fit-relevant band of a redundant
     h/i auxiliary metric (Fe/jkfit RI error 1.7 -> 16 mHa), σ = 1e-9·w_max
     lets the Schwarz-screening perturbation through (screened-vs-dense RI-J
@@ -373,6 +378,47 @@ def _streamed_df_rij(basis, aux_basis, int2c_inv, P, chunk, pairs=None):
     """
     naux = aux_basis.centers.shape[0]
     gamma = _streamed_gamma(basis, aux_basis, P, chunk, pairs, jnp.arange(naux))
+    return 0.5 * jnp.dot(gamma, int2c_inv @ gamma)
+
+
+def _aux_slab_tensor(basis, aux_basis, slab, omega=None):
+    """(nao, nao, slab_fns) 3-center block for one shell-aligned aux slab,
+    built through the bucketed class kernels. ``omega`` switches the kernel
+    to the long-range ``erf(ω·r₁₂)/r₁₂``."""
+    from dftax.integrals.eri3c_bucketed import (
+        eri3c_matrix_bucketed, slice_aux,
+    )
+
+    lo, hi, slo, shi, plan = slab
+    return eri3c_matrix_bucketed(
+        basis, slice_aux(aux_basis, lo, hi, slo, shi), omega=omega, plan=plan
+    )
+
+
+def _streamed_df_rij_slabs(basis, aux_basis, int2c_inv, P, slabs):
+    """RI-J Coulomb energy ``½ γᵀ V⁻¹ γ`` streamed over auxiliary slabs.
+
+    The slab-plan sibling of :func:`_streamed_df_rij`, used by the forces
+    backend: each shell-aligned aux slab's block (``slabs`` from
+    :func:`~dftax.integrals.eri3c_bucketed.plan_aux_slabs`) is built through
+    the bucketed class kernels, contracted with the density, and dropped
+    (checkpointed, so the backward pass rematerializes it), keeping DF memory
+    at O(slab·nao²) instead of O(nao²·naux). Plain autodiff end to end, so
+    geometry gradients flow through the rebuilt integrals.
+
+    Schwarz screening lives in the *plans* (``keep_pairs`` baked in by
+    :func:`~dftax.integrals.eri3c_bucketed.plan_aux_slabs`): a screened build
+    is the same dense contraction over pruned slab plans, whose dropped bra
+    shell-pair blocks are exact zeros in the slab tensor.
+    """
+    def gamma_slab(Pf, slab):
+        T = _aux_slab_tensor(basis, aux_basis, slab)     # (nao, nao, k)
+        return jnp.einsum("mnk,mn->k", T, Pf)
+
+    gamma = jnp.concatenate([
+        jax.checkpoint(lambda Pf, s=slab: gamma_slab(Pf, s))(P)
+        for slab in slabs
+    ])
     return 0.5 * jnp.dot(gamma, int2c_inv @ gamma)
 
 
@@ -603,6 +649,60 @@ def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
 
     rik.defvjp(fwd, bwd)
     return rik(P)
+
+
+def _rik_dmat(basis, aux_basis, slabs, C, omega=None):
+    """Occupied-pair blocks ``D_X = Cᵀ T_X C``, shape ``(naux, nocc, nocc)``.
+
+    Built one shell-aligned aux slab at a time with the 3-center recomputed
+    through the bucketed kernels (checkpointed, so the backward pass
+    rematerializes per slab); one pass over the integrals total, memory
+    O(slab·nao² + naux·nocc²).
+    """
+    def d_slab(Cf, slab):
+        T = _aux_slab_tensor(basis, aux_basis, slab, omega)  # (nao, nao, k)
+        return jnp.einsum("mnk,mi,nj->kij", T, Cf, Cf)
+
+    return jnp.concatenate([
+        jax.checkpoint(lambda Cf, s=slab: d_slab(Cf, s))(C)
+        for slab in slabs
+    ])
+
+
+def _streamed_df_rik_frozen(basis, aux_basis, int2c_inv, S, Zs, prefs, slabs,
+                            omega=None):
+    """Streamed RI-K exchange at *frozen* occupied coefficients, differentiable
+    end-to-end (geometry gradients included). The forces backend.
+
+    With the projector parametrization ``P_σ = w_σ Z_σ M_σ⁻¹ Z_σᵀ``
+    (``M_σ = Z_σᵀ S Z_σ``, ``Z_σ`` fixed) the exchange quadratic reduces to
+    occupied-pair quantities: ``Tr(P T_X P T_Y) = w² Tr(M⁻¹ D_X M⁻¹ D_Y)`` with
+    ``D_X = Zᵀ T_X Z`` and ``(T_X)_mn = (mn|X)``, so
+
+        E_K = Σ_σ pref_σ · Σ_XY V⁻¹_XY Tr(M_σ⁻¹ D_X^σ M_σ⁻¹ D_Y^σ),
+
+    ``pref = -a_x`` for a closed shell (``w = 2``, energy ``-a_x/4·Tr(PK(P))``)
+    and ``-a_x/2`` per spin channel (``w = 1``). ``D`` comes from
+    :func:`_rik_dmat` (aux-slab streaming through the bucketed kernels,
+    rematerialized in the backward pass), so the nao²×naux tensor never
+    exists; memory is O(slab·nao² + naux·nocc²). Unlike
+    :func:`_streamed_df_rik` there is no orbital extraction and no
+    ``custom_vjp``: plain autodiff propagates both the Pulay term (through
+    ``S`` inside ``M``) and the integral geometry derivatives.
+    """
+    e = jnp.asarray(0.0)
+    for Z, pref in zip(Zs, prefs):
+        if Z.shape[1] == 0:                    # empty spin channel (e.g. H atom β)
+            continue
+        M = Z.T @ S @ Z
+        D = _rik_dmat(basis, aux_basis, slabs, Z, omega)    # (naux, nocc, nocc)
+        naux = D.shape[0]
+        Q = jnp.linalg.solve(M, D)                          # M⁻¹ D_X, batched over X
+        QF = Q.reshape(naux, -1)                            # vec(Q_X)
+        QT = Q.transpose(0, 2, 1).reshape(naux, -1)         # vec(Q_Xᵀ)
+        # Σ_XY V⁻¹_XY Tr(Q_X Q_Y), as one (naux,naux)@(naux,nocc²) matmul.
+        e = e + pref * jnp.vdot(QF, int2c_inv @ QT)
+    return e
 
 
 # ---------------------------------------------------------------------------
@@ -870,6 +970,49 @@ class StreamedDFCoulomb(CoulombTerm):
         if self.hf_coeff_lr != 0.0:
             e = self._rik_sum(e, P, S, nocc, self.int2c_inv_lr,
                               self.hf_coeff_lr, self.omega)
+        return e
+
+
+class StreamedDFForcesCoulomb(CoulombTerm):
+    """Streamed DF with geometry-differentiable exchange at frozen occupied
+    coefficients; constructed only by :func:`dftax.ks.forces.forces`.
+
+    RI-J is the slab-streamed contraction of the passed density
+    (:func:`_streamed_df_rij_slabs`: plain autodiff, geometry gradients flow
+    through the bucketed rebuild). Exchange bypasses the ``custom_vjp`` RI-K
+    (whose gradient is wrt ``P`` only) and evaluates
+    :func:`_streamed_df_rik_frozen` from the fixed per-spin occupied
+    coefficients ``Zs`` and the traced overlap ``S``: within the forces
+    parametrization ``P_σ = w_σ Z_σ (Z_σᵀ S Z_σ)⁻¹ Z_σᵀ`` this is *identical*
+    to the exchange energy of ``P``; note the term ignores the passed ``P``
+    for exchange, so ``∂E/∂P`` is **not** the KS Fock here. Forces only.
+    """
+
+    basis: BasisData
+    aux_basis: BasisData
+    int2c_inv: Float[Array, "naux naux"]
+    Zs: tuple[Array, ...]
+    hf_coeff: float = eqx.field(static=True)
+    slab_plans: tuple = eqx.field(static=True)
+    int2c_inv_lr: Float[Array, "naux naux"] | None = None
+    hf_coeff_lr: float = eqx.field(static=True, default=0.0)
+    omega: float = eqx.field(static=True, default=0.0)
+
+    def energy(self, P, S, nocc):
+        Ptot = jnp.sum(P, axis=0)
+        e = _streamed_df_rij_slabs(
+            self.basis, self.aux_basis, self.int2c_inv, Ptot, self.slab_plans
+        )
+        for ax, vinv, om in (
+            (self.hf_coeff, self.int2c_inv, None),
+            (self.hf_coeff_lr, self.int2c_inv_lr, self.omega),
+        ):
+            if ax != 0.0:
+                prefs = (-ax,) if len(self.Zs) == 1 else (-0.5 * ax, -0.5 * ax)
+                e = e + _streamed_df_rik_frozen(
+                    self.basis, self.aux_basis, vinv,
+                    S, self.Zs, prefs, self.slab_plans, om,
+                )
         return e
 
 

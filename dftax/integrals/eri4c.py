@@ -34,6 +34,8 @@ build it for small systems / validation. For energies on larger systems use
 the fly and never materialise the full tensor (O(N²) memory).
 """
 
+from functools import lru_cache
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -266,19 +268,34 @@ def eri4c_matrix(
     quartets=None,
     qof=None,
     omega: float | None = None,
+    plan: tuple | None = None,
 ) -> Float[Array, "nao nao nao nao"]:
     """Full 4-center ERI tensor (μν|λσ) in the AO basis (spherical).
 
     O(N⁴) memory, intended for the exact Coulomb/exchange backend on small
-    systems and for validation against PySCF int2e. Compute is ~N⁴/8: only the
-    canonical 8-fold-unique quartets are evaluated, then the full Cartesian
-    tensor is reconstructed by a single gather over the orbit map.
-
-    ``quartets``/``qof`` optionally supply a pre-screened canonical quartet list
-    and its orbit map (see :func:`screened_quartets`); when given, only those
-    quartets are evaluated and screened-out positions are exactly zero. When
-    omitted, the full 8-fold-unique set is used.
+    systems and for validation against PySCF int2e. The unscreened build runs
+    through the shell-quartet class kernels (:func:`eri4c_matrix_bucketed`;
+    ``plan`` is its static skeleton from :func:`plan_eri4c`, derived here when
+    the basis metadata is concrete). ``quartets``/``qof`` supply a pre-screened
+    canonical quartet list and its orbit map (see :func:`screened_quartets`),
+    which selects the flat per-element path: only those quartets are evaluated
+    and screened-out positions are exactly zero.
     """
+    if quartets is None:
+        return eri4c_matrix_bucketed(basis, omega=omega, plan=plan)
+    return _eri4c_matrix_flat(basis, chunk, quartets, qof, omega)
+
+
+def _eri4c_matrix_flat(
+    basis: BasisData,
+    chunk: int = 256,
+    quartets=None,
+    qof=None,
+    omega: float | None = None,
+) -> Float[Array, "nao nao nao nao"]:
+    """Flat per-element reference build (one ``_element`` per canonical
+    quartet, orbit-map gather). Kept for the Schwarz-screened quartet-list
+    path and as the bucketed engine's A/B oracle."""
     L = int(basis.max_l)                         # size the recursion to the molecule
     if L > 6:
         raise ValueError(
@@ -308,6 +325,208 @@ def eri4c_matrix(
         result = jnp.einsum("ck,ijcd->ijkd", C, result)
         result = jnp.einsum("dl,ijkd->ijkl", C, result)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Shell-quartet-class bucketed build (the unscreened engine)
+# ---------------------------------------------------------------------------
+
+def plan_eri4c(basis):
+    """Static shell-quartet bucket plan for :func:`eri4c_matrix_bucketed`.
+
+    Canonical 8-fold-unique shell quartets (bra pair ``ia<=jb``, ket pair
+    ``kc<=ld``, bra-pair index <= ket-pair index) grouped by their
+    ``(l_a, l_b, l_c, l_d)`` class with per-class primitive trims
+    (contraction lengths join the key and are merged back where the padding
+    is cheap; see
+    :func:`~dftax.integrals.eri3c_bucketed._merge_padded_buckets`). Same
+    contract as :func:`~dftax.integrals.eri3c_bucketed.plan_eri3c`: python
+    ints in nested tuples, computed where the basis metadata is concrete,
+    safe as a static jit argument.
+    """
+    from collections import defaultdict
+
+    from dftax.integrals.eri3c_bucketed import (
+        _check_orbital_l, _merge_classes, _shells,
+    )
+
+    _check_orbital_l(basis)
+    shells, ang = _shells(basis.angular, basis.exponents)
+    ns = len(shells)
+    spairs = [(ia, jb) for ia in range(ns) for jb in range(ia, ns)]
+    buckets = defaultdict(lambda: ([], [], [], []))
+    nprims = {}
+    for Pp, (ia, jb) in enumerate(spairs):
+        la, ra, nca, npa = shells[ia]
+        lb, rb, ncb, npb = shells[jb]
+        for kc, ld_ in spairs[Pp:]:
+            lc, rc, ncc, npc = shells[kc]
+            ldl, rd, ncd, npd = shells[ld_]
+            key = (la, lb, lc, ldl, npa, npb, npc, npd)
+            b = buckets[key]
+            b[0].append(ra); b[1].append(rb); b[2].append(rc); b[3].append(rd)
+            nprims[key] = (npa, npb, npc, npd)
+
+    def ang_tup(row0, ncomp):
+        return tuple(tuple(int(x) for x in ang[row0 + i]) for i in range(ncomp))
+
+    classes = []
+    for (la, lb, lc, ldl), npr, rows in _merge_classes(buckets, nprims, 4, 4):
+        rows_a, rows_b, rows_c, rows_d = rows
+        ncs = tuple((l + 1) * (l + 2) // 2 for l in (la, lb, lc, ldl))
+        classes.append((
+            la, lb, lc, ldl,
+            ang_tup(rows_a[0], ncs[0]), ang_tup(rows_b[0], ncs[1]),
+            ang_tup(rows_c[0], ncs[2]), ang_tup(rows_d[0], ncs[3]),
+            tuple(rows_a), tuple(rows_b), tuple(rows_c), tuple(rows_d),
+            npr,
+        ))
+    return (int(np.asarray(basis.angular).shape[0]), tuple(classes))
+
+
+def _make_eri4c_kernel(la, lb, lc, ld, anga, angb, angc, angd, omega=None):
+    """Kernel for one (la, lb, lc, ld) shell-quartet class; one quartet ->
+    (nca, ncb, ncc, ncd). Bra and ket are both genuine two-center pairs, so
+    both sides use the two-center E tables; otherwise the same structure as
+    the 3-center class kernel."""
+    from dftax.integrals.eri3c_bucketed import _E_table, _hermite_table
+
+    mt = max(la + lb + lc + ld + 1, 2)
+    conv = np.zeros((mt, mt, mt))
+    for t in range(mt):
+        for tau in range(mt - t):
+            conv[t, tau, t + tau] = 1.0
+    sign = np.asarray([(-1.0) ** t for t in range(mt)])
+    anga, angb = np.asarray(anga), np.asarray(angb)
+    angc, angd = np.asarray(angc), np.asarray(angd)
+    ia = (anga[:, 0], anga[:, 1], anga[:, 2])
+    jb = (angb[:, 0], angb[:, 1], angb[:, 2])
+    kc = (angc[:, 0], angc[:, 1], angc[:, 2])
+    ld_ = (angd[:, 0], angd[:, 1], angd[:, 2])
+
+    def one_quartet(A, B, C, D, ea, eb, ec, ed, ca, cb, cc, cd):
+        AB = A - B
+        CD = C - D
+
+        def per_ab(al, be):
+            gab = al + be
+            safeb = jnp.where(gab == 0.0, 1.0, gab)
+            P = (al * A + be * B) / safeb
+            K_ab = jnp.exp(-al * be / safeb * jnp.sum(AB ** 2))
+            Eab = [_E_table(la, lb, al, be, AB[x], mt) for x in range(3)]
+
+            def per_cd(ga, de):
+                gcd = ga + de
+                safek = jnp.where(gcd == 0.0, 1.0, gcd)
+                Q = (ga * C + de * D) / safek
+                K_cd = jnp.exp(-ga * de / safek * jnp.sum(CD ** 2))
+                Ecd = [_E_table(lc, ld, ga, de, CD[x], mt) for x in range(3)]
+                rho = safeb * safek / (safeb + safek)
+                pref = (K_ab * K_cd * 2.0 * jnp.pi ** 2.5
+                        / (safeb * safek * jnp.sqrt(safeb + safek)))
+                R = _hermite_table(rho, P - Q, mt, omega)
+                G = [jnp.einsum("ijt,klu,tus->ijkls", Eab[x], Ecd[x] * sign,
+                                conv) for x in range(3)]
+                GX = G[0][ia[0][:, None, None, None], jb[0][None, :, None, None],
+                          kc[0][None, None, :, None], ld_[0][None, None, None, :], :]
+                GY = G[1][ia[1][:, None, None, None], jb[1][None, :, None, None],
+                          kc[1][None, None, :, None], ld_[1][None, None, None, :], :]
+                GZ = G[2][ia[2][:, None, None, None], jb[2][None, :, None, None],
+                          kc[2][None, None, :, None], ld_[2][None, None, None, :], :]
+                return pref * jnp.einsum("abcds,abcdr,abcdq,srq->abcd",
+                                         GX, GY, GZ, R)
+
+            return jax.vmap(jax.vmap(per_cd, (None, 0)), (0, None))(ec, ed)
+
+        vals = jax.vmap(jax.vmap(per_ab, (None, 0)), (0, None))(ea, eb)
+        return jnp.einsum("ijklabcd,ai,bj,ck,dl->abcd", vals, ca, cb, cc, cd)
+
+    return one_quartet
+
+
+def _eri4c_class_chunk(la, lb, lc, ld, nprims):
+    """Quartet batch size keeping one class chunk's fused intermediates near
+    the shared bra budget (Hermite cube + the three component-gathered
+    tables, times the vmapped primitive quartet)."""
+    mt = max(la + lb + lc + ld + 1, 2)
+    ncomp = 1
+    for l in (la, lb, lc, ld):
+        ncomp *= (l + 1) * (l + 2) // 2
+    npa, npb, npc, npd = nprims
+    per = npa * npb * npc * npd * (mt ** 3 + 3 * ncomp * mt)
+    return max(1, int(2.5e8 // per))
+
+
+@lru_cache(maxsize=4096)
+def _compiled_eri4c_kernel(la, lb, lc, ld, anga, angb, angc, angd, omega,
+                           chunk_size):
+    """Jitted, cached batch kernel for one quartet class (numpy closure
+    constants, hashable static metadata; see the eri3c cache note)."""
+    kern = _make_eri4c_kernel(la, lb, lc, ld, anga, angb, angc, angd, omega)
+    return jax.jit(chunked_vmap(kern, in_axes=(0,) * 12,
+                                chunk_size=chunk_size))
+
+
+def eri4c_matrix_bucketed(
+    basis: BasisData,
+    omega: float | None = None,
+    plan: tuple | None = None,
+) -> Float[Array, "nao nao nao nao"]:
+    """(nao, nao, nao, nao) ERI tensor via shell-quartet classes.
+
+    Drop-in for the flat unscreened build (same value to machine precision,
+    Coulomb and erf kernels), differentiable w.r.t. ``basis.centers``. The
+    8-fold symmetry is realized by index-permuted block scatters of each
+    class's quartet blocks (block values transposed to match each permuted
+    corner; overlapping writes on degenerate orbits agree by permutational
+    symmetry, and blocks within one scatter are disjoint because canonical
+    quartets are distinct).
+    """
+    from dftax.integrals.eri3c_bucketed import _IDX, _gather_rows, _scatter_blocks
+
+    if plan is None:
+        plan = plan_eri4c(basis)
+    nao, classes = plan
+    cen = basis.centers
+    out = jnp.zeros((nao, nao, nao, nao), dtype=cen.dtype)
+    for (la, lb, lc, ldl, anga, angb, angc, angd,
+         ra, rb, rc, rd, nprims) in classes:
+        npa, npb, npc, npd = nprims
+        ra = np.asarray(ra).astype(_IDX); rb = np.asarray(rb).astype(_IDX)
+        rc = np.asarray(rc).astype(_IDX); rd = np.asarray(rd).astype(_IDX)
+        nca, ncb, ncc, ncd = (
+            (l + 1) * (l + 2) // 2 for l in (la, lb, lc, ldl)
+        )
+        ca = _gather_rows(basis.coefficients, ra, nca)[:, :, :npa]
+        cb = _gather_rows(basis.coefficients, rb, ncb)[:, :, :npb]
+        cc = _gather_rows(basis.coefficients, rc, ncc)[:, :, :npc]
+        cd = _gather_rows(basis.coefficients, rd, ncd)[:, :, :npd]
+        fn = _compiled_eri4c_kernel(
+            la, lb, lc, ldl, anga, angb, angc, angd, omega,
+            min(_eri4c_class_chunk(la, lb, lc, ldl, nprims), ra.shape[0]),
+        )
+        vals = fn(
+            cen[ra], cen[rb], cen[rc], cen[rd],
+            basis.exponents[ra][:, :npa], basis.exponents[rb][:, :npb],
+            basis.exponents[rc][:, :npc], basis.exponents[rd][:, :npd],
+            ca, cb, cc, cd,
+        )                                # (nquart, nca, ncb, ncc, ncd)
+        rows = (ra, rb, rc, rd)
+        for perm in (
+            (0, 1, 2, 3), (1, 0, 2, 3), (0, 1, 3, 2), (1, 0, 3, 2),
+            (2, 3, 0, 1), (3, 2, 0, 1), (2, 3, 1, 0), (3, 2, 1, 0),
+        ):
+            starts = np.stack([rows[p] for p in perm], axis=1).astype(_IDX)
+            out = _scatter_blocks(
+                out, starts, vals.transpose((0,) + tuple(p + 1 for p in perm))
+            )
+    if basis.cart2sph is not None:
+        Cs = basis.cart2sph
+        out = jnp.einsum("ai,abcd->ibcd", Cs, out)
+        out = jnp.einsum("bj,ibcd->ijcd", Cs, out)
+        out = jnp.einsum("ck,ijcd->ijkd", Cs, out)
+        out = jnp.einsum("dl,ijkd->ijkl", Cs, out)
+    return out
 
 
 # ---------------------------------------------------------------------------

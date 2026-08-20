@@ -649,17 +649,24 @@ class PW92Correlation(DensityFunctional):
         den = 2.0 * A * (b1 * srs + b2 * rs + b3 * rs * srs + b4 * rs * rs)
         return -2.0 * A * (1.0 + a1 * rs) * jnp.log1p(1.0 / jnp.clip(den, 1e-30))
 
+    # The published PW92 A constants, and libxc's "modified" set carrying one
+    # more digit (lda_c_pw_modified_params); the B97M-V family is defined on
+    # the modified backbone, the B97 GGA family on the original.
+    A_ORIG: ClassVar[tuple] = (0.031091, 0.015545, 0.016887)
+    A_MOD: ClassVar[tuple] = (0.0310907, 0.01554535, 0.0168869)
+
     @staticmethod
-    def eps(rho_a: Scalar, rho_b: Scalar) -> Scalar:
+    def eps(rho_a: Scalar, rho_b: Scalar, a: tuple | None = None) -> Scalar:
         """ε_c per electron for one (ρ_α, ρ_β) point."""
+        A0, A1, A2 = PW92Correlation.A_ORIG if a is None else a
         ra = jnp.clip(rho_a, 0.0)
         rb = jnp.clip(rho_b, 0.0)
         rho = jnp.clip(ra + rb, 1e-20)
         zeta = jnp.clip((ra - rb) / rho, -1.0, 1.0)
         rs = (3.0 / (4.0 * jnp.pi * rho)) ** (1.0 / 3.0)
-        ec0 = PW92Correlation._G(rs, 0.031091, 0.21370, 7.5957, 3.5876, 1.6382, 0.49294)
-        ec1 = PW92Correlation._G(rs, 0.015545, 0.20548, 14.1189, 6.1977, 3.3662, 0.62517)
-        mac = PW92Correlation._G(rs, 0.016887, 0.11125, 10.357, 3.6231, 0.88026, 0.49671)
+        ec0 = PW92Correlation._G(rs, A0, 0.21370, 7.5957, 3.5876, 1.6382, 0.49294)
+        ec1 = PW92Correlation._G(rs, A1, 0.20548, 14.1189, 6.1977, 3.3662, 0.62517)
+        mac = PW92Correlation._G(rs, A2, 0.11125, 10.357, 3.6231, 0.88026, 0.49671)
         fz = ((1.0 + zeta) ** (4.0 / 3.0) + (1.0 - zeta) ** (4.0 / 3.0) - 2.0) / (
             2.0 ** (4.0 / 3.0) - 2.0
         )
@@ -868,6 +875,111 @@ class WB97XV(WB97X):
     CX: ClassVar[tuple] = (0.833, 0.603, 1.194, 0.0, 0.0)
     CSS: ClassVar[tuple] = (0.556, -0.257, 0.0, 0.0, 0.0)
     CAB: ClassVar[tuple] = (1.219, -1.850, 0.0, 0.0, 0.0)
+
+
+class WB97MV(XCFunctional):
+    """ωB97M-V (Mardirossian-Head-Gordon 2016): 12-parameter RSH mGGA + VV10.
+
+    The B97 double power series ``g = Σ c_ij·w^i·u^j`` over the same bases as
+    ωB97X (SR-LDA exchange at ω = 0.3, Stoll-partitioned PW92 correlation),
+    with the meta ingredient entering through ``w = (τ^unif − τ)/(τ^unif + τ)``
+    per spin (``τ^unif_σ = (3/10)(6π²)^{2/3} ρ_σ^{5/3}``); the opposite-spin
+    channel uses the ``p``-weighted average of the two channels' ``w``
+    (``p = τ/(τ^unif + τ)``) and the mean-square gradient variable, exactly
+    the libxc ``b97mv`` scheme. Exact exchange ``0.15·K + 0.85·K_lr(ω=0.3)``
+    (libxc CAM ``alpha=1, beta=−0.85`` re-expressed as full-range +
+    long-range); VV10 with ``b = 6.0``, ``C = 0.01``. Coefficients and term
+    selection verbatim from libxc ``HYB_MGGA_XC_WB97M_V`` / the published
+    parameters; validated pointwise against libxc.
+    """
+
+    name: ClassVar[str] = "wB97M-V"
+    xc_type: ClassVar[str] = "MGGA"
+    hf_coeff: ClassVar[float] = 0.15
+    hf_coeff_lr: ClassVar[float] = 0.85
+    omega: ClassVar[float] = 0.3
+    nlc_b: ClassVar[float] = 6.0
+    nlc_c: ClassVar[float] = 0.01
+
+    # (coefficient, w power, u power); libxc par_wb97m_v order.
+    CX: ClassVar[tuple] = ((0.85, 0, 0), (1.007, 0, 1), (0.259, 1, 0))
+    CSS: ClassVar[tuple] = ((0.443, 0, 0), (-1.437, 0, 4), (-4.535, 1, 0),
+                            (-3.39, 2, 0), (4.278, 4, 3))
+    COS: ClassVar[tuple] = ((1.0, 0, 0), (1.358, 1, 0), (2.924, 2, 0),
+                            (-8.812, 2, 1), (-1.39, 6, 0), (9.142, 6, 1))
+
+    # Interface stubs (assembly happens in the weighted __call__ below).
+    exchange: ClassVar[DensityFunctional] = LDAExchange()
+    correlation: ClassVar[DensityFunctional] = PW92Correlation()
+
+    @staticmethod
+    def _wg(ts):
+        """``w = (τ^unif − τ)/(τ^unif + τ)`` from the reduced ``t = τ_σ/ρ_σ^{5/3}``."""
+        return (_K_FACTOR_C - ts) / (_K_FACTOR_C + ts)
+
+    @staticmethod
+    def _series2(w, u, terms):
+        acc = jnp.zeros_like(w)
+        for c, i, j in terms:
+            acc = acc + c * w**i * u**j
+        return acc
+
+    @classmethod
+    def _energy_density(cls, rho_a, rho_b, gn_a, gn_b, tau_a, tau_b):
+        """Total XC energy density from per-spin (ρ, |∇ρ|, τ)."""
+        P = _B97Pieces
+        rho_a = jnp.clip(rho_a, 1e-20)
+        rho_b = jnp.clip(rho_b, 1e-20)
+        s2a = (gn_a / rho_a ** (4.0 / 3.0)) ** 2
+        s2b = (gn_b / rho_b ** (4.0 / 3.0)) ** 2
+        ts_a = jnp.clip(tau_a, 0.0) / rho_a ** (5.0 / 3.0)
+        ts_b = jnp.clip(tau_b, 0.0) / rho_b ** (5.0 / 3.0)
+        w_a, w_b = cls._wg(ts_a), cls._wg(ts_b)
+
+        ex = P.ex_sr_lda_density(rho_a, cls.omega) * cls._series2(
+            w_a, P.u(s2a, P.GAMMA_X), cls.CX
+        ) + P.ex_sr_lda_density(rho_b, cls.omega) * cls._series2(
+            w_b, P.u(s2b, P.GAMMA_X), cls.CX
+        )
+
+        # Stoll partition of PW92 (energy densities ρ·ε) on the *modified*
+        # constants: libxc's b97mv defines the B97M-V family on
+        # lda_c_pw_modified_params (the GGA B97s use the original set).
+        AM = PW92Correlation.A_MOD
+        ec_aa = rho_a * PW92Correlation.eps(rho_a, jnp.zeros_like(rho_a), AM)
+        ec_bb = rho_b * PW92Correlation.eps(rho_b, jnp.zeros_like(rho_b), AM)
+        ec_tot = (rho_a + rho_b) * PW92Correlation.eps(rho_a, rho_b, AM)
+        ec_ab = ec_tot - ec_aa - ec_bb
+
+        css = ec_aa * cls._series2(
+            w_a, P.u(s2a, P.GAMMA_SS), cls.CSS
+        ) + ec_bb * cls._series2(w_b, P.u(s2b, P.GAMMA_SS), cls.CSS)
+
+        # Opposite spin: p-weighted average of the channels' w, mean-square
+        # gradient variable (libxc b97mv_wx_os / sqrt((x0²+x1²)/2)).
+        p_a = ts_a / (_K_FACTOR_C + ts_a)
+        p_b = ts_b / (_K_FACTOR_C + ts_b)
+        w_os = (p_a * w_b + p_b * w_a) / jnp.clip(p_a + p_b, 1e-30)
+        cos = ec_ab * cls._series2(
+            w_os, P.u(0.5 * (s2a + s2b), P.GAMMA_AB), cls.COS
+        )
+        return ex + css + cos
+
+    def __call__(self, density, grad_density, tau) -> Scalar:
+        if _has_spin(density):
+            n_up, n_dn = jnp.unstack(density, axis=-1)
+            grad_up, grad_dn = jnp.unstack(grad_density, axis=-1)
+            t_up, t_dn = jnp.unstack(tau, axis=-1)
+            gn_up = jnp.linalg.norm(grad_up + 1e-30, axis=-1)
+            gn_dn = jnp.linalg.norm(grad_dn + 1e-30, axis=-1)
+            e_dens = self._energy_density(n_up, n_dn, gn_up, gn_dn, t_up, t_dn)
+            return e_dens / jnp.clip(n_up + n_dn, 1e-20)
+        gn = jnp.linalg.norm(grad_density + 1e-30, axis=-1)
+        e_dens = self._energy_density(
+            density / 2.0, density / 2.0, gn / 2.0, gn / 2.0,
+            tau / 2.0, tau / 2.0,
+        )
+        return e_dens / jnp.clip(density, 1e-20)
 
 
 # ---------------------------------------------------------------------------
@@ -1095,3 +1207,45 @@ class R2SCAN(XCFunctional):
         return self.exchange(density, grad_density, tau) + self.correlation(
             density, grad_density, tau
         )
+
+
+# ---------------------------------------------------------------------------
+# String registry: functional("wb97x-v") instead of importing the class
+# ---------------------------------------------------------------------------
+
+_FUNCTIONALS: dict[str, type[XCFunctional]] = {
+    "lda": LDA, "svwn": LDA, "svwn5": LDA,
+    "pbe": PBE,
+    "b3lyp": B3LYP,
+    "pbe0": PBE0, "pbeh": PBE0,
+    "camb3lyp": CAMB3LYP,
+    "wb97x": WB97X,
+    "wb97xv": WB97XV,
+    "wb97mv": WB97MV,
+    "r2scan": R2SCAN,
+}
+
+
+def functional(name: str) -> XCFunctional:
+    """The XC functional named ``name``, ready to pass to :class:`~dftax.KS`.
+
+    Lookup ignores case and punctuation, so ``"wB97X-V"``, ``"wb97xv"`` and
+    ``"WB97X_V"`` all resolve to the same functional. Dispersion stays a
+    separate axis (``KS(..., dispersion=d3bj())``), matching the library's
+    choices-as-values style: a functional is a functional, not a functional
+    plus a correction.
+
+    Example:
+        ```python
+        KS(mol, functional("r2scan"))
+        KS(mol, functional("b3lyp"), dispersion=d3bj())
+        ```
+    """
+    key = "".join(ch for ch in name.lower() if ch.isalnum())
+    try:
+        return _FUNCTIONALS[key]()
+    except KeyError:
+        known = ", ".join(sorted({cls().name for cls in _FUNCTIONALS.values()}))
+        raise ValueError(
+            f"unknown functional {name!r}; available: {known}"
+        ) from None

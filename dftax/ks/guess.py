@@ -67,7 +67,7 @@ from dftax.integrals import (
     nuclear_attraction_matrix,
     overlap_matrix,
 )
-from dftax.integrals.eri4c import eri4c_matrix
+from dftax.integrals.eri4c import eri4c_matrix, plan_eri4c
 from dftax.integrals.shell_pairs import N_CART
 from dftax.system.molecule import symbol_to_Z
 
@@ -413,7 +413,9 @@ def _atomic_hf_density(
 
     # Jit the builder: eager eri4c dispatches each op unfused (~2x slower,
     # worse for d shells; see the note on ks.energy._build_integrals).
-    eri = np.asarray(eqx.filter_jit(eri4c_matrix)(sub_basis))
+    eri = np.asarray(
+        eqx.filter_jit(eri4c_matrix)(sub_basis, plan=plan_eri4c(sub_basis))
+    )
     ao_l = _final_ao_l(sub_basis)
 
     F = h

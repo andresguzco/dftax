@@ -32,6 +32,7 @@ directly for the full surface.
 from dftax.energy.d3 import d3bj
 from dftax.energy.d4 import d4
 from dftax.energy.gto import BasisData, extract_basis_data, eval_gto
+from dftax.energy.xc import functional
 from dftax.grid import becke, points
 from dftax.integrals import (
     overlap_matrix,
@@ -67,6 +68,8 @@ __all__ = [
     "distributed", "is_coordinator", "barrier",
     # initial guesses (the guess= argument of the solvers)
     "core", "sad", "minao", "sap",
+    # XC functionals by name
+    "functional",
     # dispersion (the dispersion= argument of KS)
     "d3bj",
     "d4",

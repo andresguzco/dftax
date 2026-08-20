@@ -154,7 +154,10 @@ def scf_batched(
         if coulomb.screen is not None:
             raise ValueError(
                 "scf_batched cannot use df(screen=...): Schwarz pair "
-                "selection is value-based but the per-geometry build is traced."
+                "selection is value-based but the per-geometry build is "
+                "traced, and one frozen mask across a geometry batch is "
+                "unsound (a pair negligible at one geometry need not be at "
+                "another). Drop screen=, or loop unbatched over geometries."
             )
         if not isinstance(coulomb.auxbasis, str):
             raise TypeError(

@@ -184,3 +184,18 @@ def test_raw_system_defaults_to_exact():
     gc, gw = becke_grid(mol.symbols, mol.atom_coords(), 20, 50)
     ks = KS(sys, LDA(), grid=(gc, gw))
     assert isinstance(ks.coulomb, ExactCoulomb)
+
+
+def test_functional_registry_resolves_names_and_aliases():
+    """functional(name) ignores case and punctuation and returns a ready
+    instance; unknown names raise listing what exists."""
+    from dftax import functional
+    from dftax.energy.xc import CAMB3LYP, LDA as LDACls, WB97XV
+
+    assert isinstance(functional("lda"), LDACls)
+    assert isinstance(functional("SVWN"), LDACls)          # alias
+    assert isinstance(functional("cam-b3lyp"), CAMB3LYP)
+    assert isinstance(functional("wB97X_V"), WB97XV)
+    assert functional("r2scan").name == "r2SCAN"
+    with pytest.raises(ValueError, match="available"):
+        functional("m06-2x")

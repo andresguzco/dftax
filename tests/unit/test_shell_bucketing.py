@@ -217,3 +217,82 @@ def test_finer_eri3c_buckets_leave_the_integrals_alone():
     three = plan_eri3c(basis, basis)
     _agrees(lambda p: eri3c_matrix_bucketed(basis, basis, plan=p),
             three, _coarsen_eri3c(three))
+
+
+COORDS3 = np.array([[0.0, 0.0, 0.0], [1.5, 0.1, 0.0], [-0.4, 1.4, 0.2]])
+
+
+@pytest.mark.float64
+class TestAuxSlabs:
+    def test_slab_concat_matches_full_tensor(self):
+        from dftax.integrals.eri3c_bucketed import plan_aux_slabs, slice_aux
+
+        basis = build_basis_data(["O", "H", "H"], COORDS3, "sto-3g",
+                                 spherical=True)
+        aux = build_basis_data(["O", "H", "H"], COORDS3, "def2-svp",
+                               spherical=True)
+        full = np.asarray(eri3c_matrix_bucketed(basis, aux))
+        slabs = plan_aux_slabs(basis, aux, 6)
+        assert len(slabs) > 1
+        cat = np.concatenate([
+            np.asarray(eri3c_matrix_bucketed(
+                basis, slice_aux(aux, lo, hi, slo, shi), plan=plan))
+            for (lo, hi, slo, shi, plan) in slabs
+        ], axis=2)
+        assert cat.shape == full.shape
+        assert np.abs(cat - full).max() < 1e-13
+
+    def test_slabs_are_shell_aligned_and_contiguous(self):
+        from dftax.integrals.eri3c_bucketed import plan_aux_slabs
+
+        aux = build_basis_data(["O", "H", "H"], COORDS3, "def2-svp",
+                               spherical=True)
+        basis = build_basis_data(["O", "H", "H"], COORDS3, "sto-3g",
+                                 spherical=True)
+        shells, _ = _shells(aux.angular, aux.exponents)
+        starts = {r0 for (_, r0, _, _) in shells}
+        slabs = plan_aux_slabs(basis, aux, 5)
+        prev_c = prev_s = 0
+        for (lo, hi, slo, shi, _plan) in slabs:
+            assert lo == prev_c and slo == prev_s      # contiguous cover
+            assert lo in starts                        # never cuts a shell
+            assert hi > lo and shi > slo
+            prev_c, prev_s = hi, shi
+        assert prev_c == aux.centers.shape[0]
+        assert prev_s == aux.cart2sph.shape[1]
+
+
+@pytest.mark.float64
+class TestBucketedEri4c:
+    def test_matches_flat_cartesian(self):
+        import jax.numpy as jnp
+
+        from dftax.integrals.eri4c import (
+            _eri4c_matrix_flat, _unique_quartets, eri4c_matrix,
+        )
+
+        b = build_basis_data(["O", "H", "H"], COORDS3, "sto-3g")
+        qi, qj, qk, ql, qof = _unique_quartets(b.centers.shape[0])
+        quart = jnp.stack([jnp.asarray(x) for x in (qi, qj, qk, ql)], axis=1)
+        ref = np.asarray(_eri4c_matrix_flat(b, quartets=quart, qof=qof))
+        new = np.asarray(eri4c_matrix(b))
+        assert np.abs(new - ref).max() < 1e-12
+
+    @pytest.mark.slow  # the flat REFERENCE engine is the slow side of the A/B
+    def test_matches_flat_spherical_d_shells_lr(self):
+        import jax.numpy as jnp
+
+        from dftax.integrals.eri4c import (
+            _eri4c_matrix_flat, _unique_quartets, eri4c_matrix,
+        )
+
+        b = build_basis_data(["O", "H"], COORDS3[:2], "def2-svp",
+                             spherical=True)
+        qi, qj, qk, ql, qof = _unique_quartets(b.centers.shape[0])
+        quart = jnp.stack([jnp.asarray(x) for x in (qi, qj, qk, ql)], axis=1)
+        for omega in (None, 0.33):
+            ref = np.asarray(
+                _eri4c_matrix_flat(b, quartets=quart, qof=qof, omega=omega)
+            )
+            new = np.asarray(eri4c_matrix(b, omega=omega))
+            assert np.abs(new - ref).max() < 1e-12

@@ -4,6 +4,79 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-08-20
+
+### Added
+- **wB97M-V** (`functional("wb97m-v")`): the 12-parameter range-separated
+  hybrid meta-GGA with VV10 (ω=0.3, 0.15 SR + 0.85 LR exact exchange,
+  b=6.0/C=0.01), on the B97 double power series with the τ variable
+  `w = (τ_unif − τ)/(τ_unif + τ)` and libxc's p-weighted opposite-spin
+  form. Coefficients verbatim from libxc; note the B97M-V family is defined
+  on the *modified* PW92 constants (the GGA B97s use the original set),
+  which this port matches. Pointwise parity vs libxc at machine precision
+  (9e-16, closed and spin-polarized); full RKS solve vs PySCF at 1e-10 Ha.
+- **A functional registry**: `functional("cam-b3lyp")` resolves names case-
+  and punctuation-insensitively with the standard aliases; unknown names
+  raise listing what exists.
+- **Streamed DF forces.** `forces` no longer requires the materialized
+  3-center tensor: `df()` (`chunk="auto"`) streams the geometry gradient over
+  shell-aligned auxiliary slabs once the tensor exceeds the memory budget (an
+  int `chunk` forces streaming). RI-J streams by plain autodiff through the
+  bucketed class kernels; hybrid exchange evaluates a frozen-orbital RI-K
+  (occupied-pair blocks `D_X = Zᵀ(μν|X)Z`, no `custom_vjp`), so autodiff
+  carries both the Pulay term and the integral geometry derivatives.
+  Range-separated hybrids stream both exchange channels against their own
+  metrics; `df(screen=...)` streams too (the Schwarz shell-pair keep-set is
+  baked into the slab plans at the reference geometry); smeared pure-DF
+  results stream as well (hybrids keep the materialized requirement, since
+  the frozen exchange assumes an integer projector). Streamed-vs-materialized
+  parity in a shared fit space: machine precision with a well-conditioned
+  auxiliary metric, ~1e-8 with jkfit (the pseudo-inverse's kept band
+  amplifies contraction-order rounding; documented in `_metric_pinv`).
+- **Analytic nuclear Hessian**, `hessian(method="analytic")`: the exact
+  orbital-rotation Schur complement `H = E_RR − E_Rκ (E_κκ)⁻¹ E_κR` at one
+  tightly converged reference (Newton-polished), one CG response solve per
+  column; 3N response solves replace the FD path's 6N SCF solves. RKS and
+  UKS (per-channel rotation generators; a stationarity guard rejects
+  non-stationary references, e.g. ROKS, and smeared results are rejected
+  outright). An explicit `df(chunk=<int>)` streams the response through the
+  forces backend's frozen exchange with the *traced* rotated occupieds, so
+  the 3-center tensor is never materialized; `chunk="auto"` stays
+  materialized (the response's memory profile is not the forces budget).
+  Validated against FD-of-forces on the exact backend (H2 8.5e-7, water
+  3.0e-6, H3 doublet 2e-5, translational sum rules); on DF paths
+  finite-difference references are noise-limited (per-leg energy
+  reproducibility ~2e-10 Ha amplifies as 1/h²), so the DF Hessian is pinned
+  by a large-step energy-FD scan (1.3e-7 at h=1e-2) and the streamed one by
+  materialized parity (machine precision on a well-conditioned aux, 5.8e-8
+  on jkfit).
+- **Bucketed 4-center ERI build.** The unscreened exact backend now runs
+  through shell-quartet class kernels (contraction lengths in the bucket key,
+  merged back under the padded-work budget; 8-fold symmetry by index-permuted
+  block scatters), replacing the per-element build. The flat path remains for
+  Schwarz-screened quartet lists and as the A/B oracle.
+- `alchemical_deriv` accepts `df(...)`: the auxiliary basis is resolved
+  eagerly against the molecule, so the raw-`System` charge closure and the
+  outer solve share the fitted backend (FD parity 1e-5 on water/PBE).
+
+### Fixed
+- `minimize` reported `e_elec` without subtracting the dispersion energy
+  (`scf` and `newton` already did); the three solvers now agree.
+- The property drivers (`dipole`, `polarizability`, FD `hessian`,
+  `alchemical_deriv`) build their reference grids honoring the spec's
+  `prune`/`r_max`; previously they silently used the unpruned full-range
+  grid regardless of the `becke(...)` passed.
+
+### Removed
+- The legacy pre-engine modules `energy/{hartree,hybrid,orbitals,
+  jax_df_integrals}`, `utils/energy_aux` and `integrals/coulomb_potential`,
+  which no live path imported (kept alive only by their own tests).
+- The shell-pair *batched* one-electron/eri2c builders
+  (`overlap_matrix_batched`, `kinetic_matrix_batched`,
+  `nuclear_attraction_matrix_batched`, `eri2c_matrix_batched`) and the
+  `ShellData` machinery: superseded by the shell-class bucketed engine,
+  which is faster and sizes its recursions per molecule.
+
 ## [0.6.0] - 2026-08-12
 
 ### Changed (behavior)

@@ -4,7 +4,7 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.7.0] - 2026-08-20
 
 ### Added
 - **wB97M-V** (`functional("wb97m-v")`): the 12-parameter range-separated

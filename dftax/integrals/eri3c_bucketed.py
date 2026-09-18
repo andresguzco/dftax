@@ -340,7 +340,11 @@ class Plan:
     def __eq__(self, other):
         if other is self:
             return True
-        return isinstance(other, Plan) and self.value == other.value
+        if isinstance(other, Plan):
+            return self.value == other.value
+        # Transparent to the tuple it wraps, and hash-consistent with it,
+        # because __hash__ is the tuple's own.
+        return self.value == other
 
     def __repr__(self):
         return f"Plan(<{len(self.value)} fields>)"

@@ -229,8 +229,34 @@ def terms(ks, P, grid_coords, aux):
         eqx.filter_jit(lambda b: overlap_kinetic_bucketed(b, plan=pair_plan)),
         (ks.basis,))
 
+    # Three AO variants, priced side by side in one process, because which
+    # one wins on a GPU is not predictable from the FLOP count: the per-AO
+    # layout does 4-6x redundant exponentials but does them in one wide
+    # elementwise kernel, and the evaluation is bandwidth-bound.
+    #   ao_flat    the original: per-AO values, gradient by jacfwd
+    #   ao_flatg   per-AO values, analytic gradient (drops 3 tangent passes)
+    #   ao_grid    shell-blocked values, analytic gradient (drops the
+    #              redundant exponentials too, at the cost of a permutation)
+    import dataclasses
+
+    from dftax.energy.gto import (
+        _eval_gto_flat, _eval_gto_flat_grad, eval_gto_and_grad,
+    )
+
+    flat_basis = dataclasses.replace(ks.basis, shells=None)
+    out["ao_flat"] = (
+        eqx.filter_jit(lambda b, c: (
+            jax.vmap(lambda r: _eval_gto_flat(b, r))(c),
+            jax.vmap(lambda r: jax.jacfwd(_eval_gto_flat, argnums=1)(b, r))(c),
+        )),
+        (flat_basis, grid_coords))
+    out["ao_flatg"] = (
+        eqx.filter_jit(
+            lambda b, c: jax.vmap(lambda r: _eval_gto_flat_grad(b, r))(c)),
+        (flat_basis, grid_coords))
     out["ao_grid"] = (
-        eqx.filter_jit(lambda b, c: ao_on_grid(b, c)),
+        eqx.filter_jit(
+            lambda b, c: jax.vmap(lambda r: eval_gto_and_grad(b, r))(c)),
         (ks.basis, grid_coords))
 
     if aux is not None:
@@ -262,7 +288,7 @@ def terms(ks, P, grid_coords, aux):
     return out
 
 
-ALL_TERMS = ["hcore", "ao_grid", "int3c", "xc_e", "xc_g", "jk_e", "jk_g",
+ALL_TERMS = ["hcore", "ao_flat", "ao_flatg", "ao_grid", "int3c", "xc_e", "xc_g", "jk_e", "jk_g",
              "total", "fock", "vandg"]
 
 

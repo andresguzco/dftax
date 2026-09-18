@@ -1270,7 +1270,17 @@ def _screened_sub_basis(basis, cart, cmask, sph):
     if basis.cart2sph is not None:
         sub = eqx.tree_at(lambda t: t.cart2sph, sub,
                           basis.cart2sph[cart][:, sph])
-    return sub
+    # Drop the parent's static shell records. They are row offsets into the
+    # *unscreened* basis, and `cart` is a dynamic gather (deliberately a
+    # pytree leaf, see ScreenBucket), so the sub-basis's own shell layout is
+    # not knowable at trace time and the inherited records would be silently
+    # wrong. eval_gto falls back to its per-AO path here, which is correct but
+    # forfeits the shell-blocked saving on exactly the term that dominates at
+    # scale; giving the screen plan a per-bucket (l, nprim) group signature so
+    # this path can be shell-blocked too is the follow-up.
+    import dataclasses
+
+    return dataclasses.replace(sub, shells=None)
 
 
 def _screened_rho_block(basis, P, cart, sph, cmask, smask, pts, need_grad):

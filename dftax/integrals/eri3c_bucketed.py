@@ -237,22 +237,14 @@ def _check_orbital_l(basis):
 def _shells(angular, exponents):
     """Shell records from static metadata: (l, row0, ncomp, nprim).
 
-    A shell starts wherever the canonical component sequence restarts at
-    ``(l, 0, 0)`` (every l=0 row is its own shell); no center reads, so two
-    same-l shells on one atom split correctly by row order alone.
+    One rule, one implementation: :func:`~dftax.energy.gto.shell_records`
+    owns it, because ``BasisData`` now carries the same records as a static
+    field for ``eval_gto`` and two copies of "where does a shell start" would
+    be two things to keep in step.
     """
-    ang = np.asarray(angular)
-    ex = np.asarray(exponents)
-    ltot = ang.sum(1)
-    n = ang.shape[0]
-    starts = [i for i in range(n)
-              if ang[i, 0] == ltot[i] and ang[i, 1] == 0 and ang[i, 2] == 0]
-    if not starts or starts[0] != 0:
-        raise ValueError("basis rows do not start shells at (l,0,0); the "
-                         "bucketed eri3c build assumes gto.py row order")
-    bounds = starts + [n]
-    return [(int(ltot[s]), s, e - s, max(1, int((ex[s] != 0).sum())))
-            for s, e in zip(bounds[:-1], bounds[1:])], ang
+    from dftax.energy.gto import shell_records
+
+    return list(shell_records(angular, exponents)), np.asarray(angular)
 
 
 def _shell_pair_keep(basis, thresh):
@@ -420,6 +412,20 @@ def slice_aux(aux_basis, lo, hi, slo, shi):
         (aux_basis.centers[lo:hi], aux_basis.exponents[lo:hi],
          aux_basis.coefficients[lo:hi], aux_basis.angular[lo:hi]),
     )
+    if aux_basis.shells is not None:
+        # The static shell records are row offsets into the *unsliced* basis,
+        # so a slice that kept them would hand every consumer stale indices.
+        # The slice is shell-aligned by construction, so rebasing is exact.
+        # dataclasses.replace, not tree_at: `shells` is static metadata, which
+        # lives in the treedef rather than among the leaves tree_at walks.
+        import dataclasses
+
+        out = dataclasses.replace(
+            out,
+            shells=tuple((l, r0 - lo, nc, npr)
+                         for (l, r0, nc, npr) in aux_basis.shells
+                         if lo <= r0 < hi),
+        )
     if aux_basis.cart2sph is not None:
         out = eqx.tree_at(
             lambda b: b.cart2sph, out, aux_basis.cart2sph[lo:hi, slo:shi]

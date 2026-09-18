@@ -305,6 +305,47 @@ def _check_uniform_cart2sph(cart2sph, shells, sph_starts, what):
         seen.setdefault(l, blk)
 
 
+class Plan:
+    """A bucket plan, opaque to JAX's pytree walk.
+
+    A plan is a nested tuple of python ints, and a tuple is a pytree node, so
+    passed bare into an ``eqx.filter_jit`` function every one of those ints is
+    a leaf that ``partition`` asks ``is_array`` about on every call. Measured
+    on cubane/def2-svp: 4.25M ``isinstance`` calls and ~1.5 s per KS build,
+    against 0.3 s for the whole SCF loop.
+
+    Unregistered types are pytree leaves, so wrapping makes a plan exactly one
+    leaf. The hash is taken once here rather than per jit cache lookup.
+    Iteration and indexing delegate, so consumers keep unpacking as before.
+    """
+
+    __slots__ = ("value", "_hash")
+
+    def __init__(self, value: tuple):
+        self.value = value
+        self._hash = hash(value)
+
+    def __iter__(self):
+        return iter(self.value)
+
+    def __len__(self):
+        return len(self.value)
+
+    def __getitem__(self, i):
+        return self.value[i]
+
+    def __hash__(self):
+        return self._hash
+
+    def __eq__(self, other):
+        if other is self:
+            return True
+        return isinstance(other, Plan) and self.value == other.value
+
+    def __repr__(self):
+        return f"Plan(<{len(self.value)} fields>)"
+
+
 # Bucket plans depend only on a basis's angular/exponent/coefficient
 # structure, never on the nuclear coordinates (see static_fingerprint), so a
 # trajectory, a conformer batch or a repeated solve rebuilds the same plan
@@ -403,7 +444,7 @@ def _plan_eri3c_uncached(basis, aux_basis, keep_pairs=None):
         ))
     nao = int(np.asarray(basis.angular).shape[0])
     naux = int(np.asarray(aux_basis.angular).shape[0])
-    return (nao, naux, nao_sph, naux_sph, tuple(classes))
+    return Plan((nao, naux, nao_sph, naux_sph, tuple(classes)))
 
 
 def plan_eri3c(basis, aux_basis, keep_pairs=None):
@@ -464,11 +505,11 @@ def _plan_aux_slabs_uncached(basis, aux_basis, max_fns, keep_pairs=None):
         end_s += nf
         fns += nf
     bounds.append((lo_c, end_c, lo_s, end_s))
-    return tuple(
+    return Plan(tuple(
         (lc, hc, ls, hs,
          plan_eri3c(basis, slice_aux(aux_basis, lc, hc, ls, hs), keep_pairs))
         for (lc, hc, ls, hs) in bounds
-    )
+    ))
 
 
 def plan_aux_slabs(basis, aux_basis, max_fns, keep_pairs=None):
@@ -711,7 +752,7 @@ def _plan_pairs_uncached(basis):
             ang_tup(rows_a[0], la, nca), ang_tup(rows_b[0], lb, ncb),
             tuple(rows_a), tuple(rows_b), npr,
         ))
-    return (int(np.asarray(basis.angular).shape[0]), tuple(classes))
+    return Plan((int(np.asarray(basis.angular).shape[0]), tuple(classes)))
 
 
 def plan_pairs(basis):

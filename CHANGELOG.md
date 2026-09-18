@@ -4,6 +4,84 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-09-18
+
+### Added
+- **`KS.energy_and_fock(P)`**: the energy and the Fock from one pass, which is
+  what the SCF loop now calls. Asking for them separately walks the quadrature
+  twice, because the streaming XC backends checkpoint each grid block to hold
+  memory at O(block·nsub), so `grad` rematerializes the block while the
+  standalone energy call computes it again; `value_and_grad` does not help,
+  since the checkpoint recomputes regardless. Each term grew an
+  `energy_and_potential` that takes the VJP per block, where the residuals are
+  still alive. `total` and `electronic` are untouched, so forces, the Hessian,
+  Newton and direct minimization keep the plain autodiff path.
+- **`eval_gto_and_grad(basis, r)`**: AO values and their spatial gradients from
+  one pass, with the gradient in closed form. The pattern it replaces,
+  `eval_gto` beside `jacfwd(eval_gto)`, evaluates the basis five times over.
+- **A performance harness**, `scripts/perf/`: `profile_terms.py` (per-term cold
+  wall, warm wall and device peak for one Fock build), `probe_memory.py` (host
+  RSS against device bytes, phase by phase), `ao_bench.py`, `pad_tol_sweep.py`,
+  and `parity_gate.py`, a regression gate that compares at a *fixed* density so
+  the SCF trajectory and its convergence slack stay out of the measurement.
+  `RESULTS.md` records what was measured, what changed and what was rejected.
+
+### Changed
+- **Grid screening is on by default above a size gate.** `becke(screen=)` now
+  defaults to `"auto"`, which turns per-block screening on from
+  `SCREEN_AUTO_MIN_ATOMS` (50) atoms up. Measured end to end on a `grad` of the
+  XC energy: 0.89x at 23 atoms (a loss), 1.53x at 53, 3.11x at 153. Pass a
+  float or `None` to override.
+- **The streamed RI-K runs on the bucketed slab engine.** It had been looking
+  its 3-center elements up one at a time through the flat per-element engine,
+  rebuilding the whole `nao²·naux` tensor once per occupied orbital. Water /
+  def2-svp / PBE0 / `df(chunk=64)`: `jk_e` 70,087 ms → 22.90 ms, device peak
+  20.58 → 0.20 GiB. One slab pass now yields both the energy and the exchange
+  kernel, so the `custom_vjp` backward does no integral work.
+- **Materialized RI-K goes through the occupied orbitals.** The density
+  contraction opens with a naux²·nao² step that does not depend on `P`, which
+  the SCF recomputed every iteration; routing through `Cocc` replaces `nao`
+  with `nocc` throughout. `jk_e` + `jk_g` → `jk_ev`: 1.76x on cubane, 2.59x on
+  bicyclo[2.2.2]octane.
+- **`exchange_k_4c` folds the ket-swap symmetry**, halving the per-quartet
+  kernel calls: 1.87x on water/6-31g.
+- **`eri3c_bucketed._PAD_TOL` raised to 0.5**, the measured knee. Device memory
+  is not what binds on an A100: a cold build is ~91% XLA compilation, and host
+  RSS during compilation is what caps molecule size. Water `int3c` XLA −18%
+  and warm execution −22%; cubane XLA −13%, device peak +6%.
+- **Per-iteration cost**, `fock` + `total` against the single `energy_and_fock`
+  call that replaced them, def2-svp on an A100: cubane 65.87 → 31.43 ms
+  (2.10x), bicyclo[2.2.2]octane 94.17 → 49.09 ms (1.92x). Run-to-run spread on
+  a shared node is around 10%, so read these as roughly 2x.
+- `BENCHMARKS.md` corrected: a cold build is 10:1 XLA against Python tracing,
+  not the even split it claimed, so a persistent `JAX_COMPILATION_CACHE_DIR`
+  removes about 83% of it rather than half.
+
+### Fixed
+- **`boys()` was inaccurate at high order past the large-t cutoff.** Beyond
+  `_TMAX` the asymptotic drops the incomplete-gamma tail, whose size grows with
+  the order: negligible for `F_0` at t=40, but ~1e-7 at `F_12` and ~3e-3 at
+  `F_24`. The module's documented ~1e-11 held only for the low orders it had
+  been measured on. `_TMAX` is now 90.0, set by the highest tabulated order,
+  which restores ~1e-11 at every one of them.
+- **Smearing with a hybrid on the streamed DF backend now raises.** That path
+  recovers occupied orbitals from `P` and treats the top `nocc` as fully
+  occupied, which is exact at an idempotent density and wrong at a smeared one.
+  Measured on water/sto-3g/PBE0 against the materialized backend, it was 1.4
+  mHa off while reporting `converged=True`. `forces` had always rejected the
+  combination; `scf` now does too. Use `df(chunk=None)` for smeared hybrids.
+- **RI-J's closed-form derivative needed the symmetrized metric.** `d/dγ` of
+  `½γᵀV⁻¹γ` is `½(V⁻¹ + V⁻¹ᵀ)γ`, and `_metric_pinv` is symmetric only to
+  rounding. The energy's quadratic form cancels the antisymmetric part and the
+  gradient does not, which put the Fock 2e-10 from the reverse-mode reference
+  on CH3/PBE.
+
+### Removed
+- The shell-blocked AO evaluator and the `BasisData.shells` static field it
+  needed. It does 4-6x fewer exponentials and measures slower, because the
+  evaluation is bandwidth-bound; the per-AO layout ships.
+  `gto.shell_records()` stays, since the bucketed planners derive their own.
+
 ## [0.7.0] - 2026-08-20
 
 ### Added

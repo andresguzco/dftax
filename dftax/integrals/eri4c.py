@@ -669,10 +669,21 @@ def exchange_k_4c(
     rematerialized in the backward pass. The per-quartet kernel ``_element`` is the
     same PySCF-validated primitive as the J path; P is in the spherical AO basis.
 
-    NB: unlike ``coulomb_j_4c`` this baseline does not yet fold the 8-fold
-    permutational symmetry (the exchange index pattern does not align with the
-    bra/ket pair grouping): correct, but ~Nᴬ compute. Screening / symmetry folding
-    is the next optimization.
+    Folds the ket-swap symmetry only. Within the block for a fixed ``(μ, λ)``,
+    ``(μλ|νσ) = (μλ|σν)``, so the block is symmetric in ``(ν, σ)`` and only its
+    lower triangle is evaluated: ``n(n+1)/2`` elements instead of ``n²``, a
+    2x cut in ``_element`` calls, which is where all the time goes.
+
+    The other two generators of the 8-fold group are deliberately *not* folded.
+    ``(μλ|νσ) = (λμ|νσ)`` relates the block for ``(μ, λ)`` to the one for
+    ``(λ, μ)``, and ``(μλ|νσ) = (νσ|μλ)`` relates it to a block in a different
+    row of ``K`` entirely; exploiting either means abandoning the ``vmap`` over
+    ``μ`` for a scan that accumulates into ``K`` across rows. That is precisely
+    the trade that lost 4.3x when the bra primitives were serialized (see
+    ``scripts/perf/RESULTS.md``): it converts one wide fused kernel into many
+    narrow ones, and on this device that has cost more than the arithmetic it
+    saved every time it has been tried. A further 4x is available there for
+    someone willing to measure it rather than assume it.
     """
     if basis.cart2sph is not None:
         C = basis.cart2sph                                   # (n_cart, n_sph)
@@ -686,13 +697,23 @@ def exchange_k_4c(
     idx = jnp.arange(n)
     i_chunk = _safe_eri_chunk(L, requested=i_chunk)          # shrink for high angular momentum
 
+    # Lower triangle of the (ν, σ) block, which the ket-swap symmetry makes
+    # sufficient. Host-side and static: n is a shape, not a value.
+    tj, tl = np.tril_indices(n)
+    tj_j, tl_j = jnp.asarray(tj), jnp.asarray(tl)
+    pidx = jnp.arange(tj.shape[0])
+
     def k_row(i):                                            # K_cart[i, :]
         def contrib(k):                                      # contribution of index λ=k
-            Mjl = jax.vmap(                                  # (n_ν, n_σ) = (i k | j l)
-                lambda j: jax.vmap(
-                    lambda l: _element(basis, i, k, j, l, ml, mt, mm)
-                )(idx)
-            )(idx)
+            vals = jax.vmap(                                 # (npair,), ν >= σ
+                lambda p: _element(basis, i, k, tj_j[p], tl_j[p], ml, mt, mm)
+            )(pidx)
+            # mirror into the full block: (ik|νσ) = (ik|σν). The diagonal is
+            # written twice with the same value, so `set` is safe and needs no
+            # separate masking.
+            Mjl = (jnp.zeros((n, n), dtype=vals.dtype)
+                   .at[tj_j, tl_j].set(vals)
+                   .at[tl_j, tj_j].set(vals))
             return Mjl @ Pc[k]                               # Σ_σ (ik|jσ) P[k,σ] -> (n_ν,)
 
         # Σ_λ streamed in k-chunks (peak (k_chunk, n²)).

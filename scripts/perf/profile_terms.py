@@ -109,16 +109,24 @@ def measure(fn, args, repeat: int, split_compile: bool = True) -> dict:
     rec: dict = {}
     if split_compile:
         try:
+            # eqx.filter_jit exposes .lower() but NOT .trace(); jax.jit has
+            # both. Asking only for .trace() made this raise on every term in
+            # this harness and record nan, so the whole campaign ran with an
+            # empty trace/compile split. For the filter_jit path `trace_s`
+            # therefore covers tracing *and* lowering to StableHLO; `compile_s`
+            # is XLA either way, which is the split that matters (graph size is
+            # the first, backend work the second).
             t0 = time.perf_counter()
-            lowered = fn.trace(*args).lower()
+            lowered = (fn.trace(*args).lower() if hasattr(fn, "trace")
+                       else fn.lower(*args))
             t1 = time.perf_counter()
             compiled = lowered.compile()
             t2 = time.perf_counter()
             rec["trace_s"] = t1 - t0
             rec["compile_s"] = t2 - t1
             del compiled, lowered
-        except Exception:                       # not a jitted callable
-            pass
+        except Exception as exc:                # genuinely not lowerable
+            rec["lower_error"] = f"{type(exc).__name__}: {exc}"[:120]
 
     t0 = time.perf_counter()
     out = fn(*args)

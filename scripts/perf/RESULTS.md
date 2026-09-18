@@ -174,10 +174,62 @@ range(3)]` built three identical copies with the loop variable unused. In
 `eri2c` both sides are single-centre, so the entire contraction is
 axis-independent: one `G`, indexed three ways.
 
-**Not started: 3b (triangular Hermite table), 3e (axis-factorized
-contraction), 3f (`exchange_k_4c` 8-fold symmetry).** 3b and 3e both reshape
-the contraction rather than only narrowing it, which is 3a's risk profile
-exactly, so they want a measurement budget rather than the end of a session.
+**Retired on analysis, no GPU time needed: 3b (triangular Hermite table).**
+`_hermite_table` carries a fixed `(mt,mt,mt)` array through a `fori_loop`
+precisely so the body traces once, and its docstring records that the unrolled
+alternative was measured at **2.3x worse compile with no change in execute
+time**. Triangularity needs per-level shapes, which forces exactly that
+unrolling, so it would trade the binding constraint (compile) for arithmetic
+that was never the bottleneck. A packed triangular carry keeps the loop rolled
+but replaces contiguous slice updates with gathers and then has to unpack for
+the final contraction, giving the saving back.
+
+**Retired on analysis: 3e (axis-factorized contraction), and the plan's
+estimate for it was simply wrong.** The plan compared `(la+1)(lb+1)(lc+1) = 27`
+against `nca·ncb·ncc = 216` as though they were the same object. They are not:
+the factored form builds the **product over the three axes** of those index
+spaces. For a (d,d,d) class at mt = 7, multiplies per primitive triple:
+
+| | mults |
+|---|---:|
+| current, `Σ_{srq} GX·GY·GZ·R` | 216 × 343 = **74,088** |
+| factored: contract v, then u, then t | 9,261 + 35,721 + 137,781 = **182,763** |
+
+The factored result has `27³ = 19,683` entries of which only 216 correspond to
+real Cartesian components, because `ax + ay + az = la` constrains them. Axis
+factorization over-computes by 2.5x here; it pays only when the E tables are
+far more compressible than the component count, which they are not.
+
+**Landed, partially: 3f (`exchange_k_4c` symmetry).** Only the ket-swap
+generator is folded: within the block for a fixed `(μ, λ)`,
+`(μλ|νσ) = (μλ|σν)`, so the block is symmetric in `(ν, σ)` and only its lower
+triangle is evaluated. That halves the `_element` calls, which is where all of
+this function's time goes. The other two generators relate *different* blocks
+of `K`, so folding them means abandoning the `vmap` over `μ` for a scan that
+accumulates across rows — the same trade that lost 4.3x in 3a. A further 4x is
+there for someone willing to measure it rather than assume it.
+
+Measured, same node, library swap, water:
+
+| basis | before | after | |
+|---|---:|---:|---:|
+| sto-3g (nao 7) | 21.61 ms | 13.57 ms | 1.59x |
+| 6-31g (nao 13) | 3871.52 ms | **2074.20 ms** | **1.87x** |
+
+Approaching the theoretical 2x as `n(n+1)/2 → n²/2`, and cold compile falls
+9.80 s → 6.48 s with it.
+
+### Phase 3 scorecard
+
+Six items: two landed with measured value (3d dead work, 3f 1.87x), one landed
+as a correctness fix whose *speed* contribution is unproven (3c, which is what
+found the `boys()` bug), one implemented and reverted (3a), two retired on
+analysis without spending GPU time (3b, 3e). Net speed contribution to the
+production path: approximately zero.
+
+That is worth stating plainly rather than dressing up. The phase's value was
+the `boys()` accuracy bug and the two items it closed off permanently with
+written reasoning, not throughput.
 
 ## A correctness bug in boys(), found by testing 3c
 

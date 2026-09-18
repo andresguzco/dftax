@@ -23,9 +23,7 @@ import numpy as np
 import jax.numpy as jnp
 import basis_set_exchange as bse
 
-from dftax.energy.gto import (
-    BasisData, _CART_COMPONENTS, _contracted_norm, shell_records,
-)
+from dftax.energy.gto import BasisData, _CART_COMPONENTS, _contracted_norm
 from dftax.system.molecule import symbol_to_Z
 
 
@@ -158,7 +156,6 @@ def build_basis_data(
         angular=jnp.asarray(ang_np),
         cart2sph=cart2sph,
         max_l=int(max(l for (l, _, _, _, _) in raw_shells)),
-        shells=shell_records(ang_np, exp_np),
     )
     if return_atom_index:
         return basis, np.array(atom_index, dtype=np.int64)

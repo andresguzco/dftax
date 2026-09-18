@@ -1,40 +1,28 @@
 """The regression gate every optimization phase has to clear.
 
 An optimization is only an optimization if the answer does not move. The sharp
-instrument here is a **fixed-density** comparison: the energy, the Fock matrix
-and the forces are functions of a density, so evaluating them at a density
-that is pinned by construction removes the SCF from the measurement entirely.
+instrument is a fixed-density comparison: the energy, the Fock matrix and the
+forces are functions of a density, so evaluating them at a density pinned by
+construction removes the SCF from the measurement entirely.
 
     python scripts/perf/parity_gate.py --write     # record a new baseline
     python scripts/perf/parity_gate.py             # check against it
     python scripts/perf/parity_gate.py --converged # + the slow SCF cases
 
-Why not compare converged energies. The first version of this gate did, and it
-reported two regressions for a change that was provably clean: ``r2scan_df``
-drifted 1.8e-9 having converged in 27 iterations instead of 40, which is two
-solves stopping at different points inside the same 1e-7 gradient tolerance,
-not a change in the functional. A converged energy carries the solver's
-trajectory and its convergence slack, and both move when the last bits of the
-integrals move. That makes it a poor instrument for exactly the changes this
-plan consists of.
+Converged energies are the wrong instrument here: they carry the solver's
+trajectory and its convergence slack, both of which move when the last bits of
+the integrals move, so a clean change reports as a regression.
 
-The fixed density is generated from the overlap matrix and a fixed seed, not
-from the initial guess and not from a stored array. From the guess would
-couple every reference to ``dftax.ks.guess`` (changing minao would move all of
-them for no reason); from a stored array would put ~100 KB of float64 per case
-in the repository. ``C`` is an S-orthonormalized fixed normal draw, so
-``P = w C Cᵀ`` is positive semidefinite with the right electron count, which
-is all the XC functionals need to stay on their physical branches.
+The fixed density comes from the overlap matrix and a fixed seed, not from the
+initial guess (which would couple every reference to ``dftax.ks.guess``) and
+not from a stored array (~100 KB of float64 per case). ``C`` is an
+S-orthonormalized fixed normal draw, so ``P = w C Cᵀ`` is positive
+semidefinite with the right electron count.
 
-``--converged`` still runs the SCF cases, because "does it still converge, and
-to the same place" is a real question, just a separate one. Those tolerances
-are loose by design: ``terms._metric_pinv`` records that density-fitted
-quantities compared across contraction orders agree only to ~1e-8 with a jkfit
-metric, because the pseudo-inverse's kept band amplifies reordered rounding by
-~1e7. Iteration counts are recorded and never fatal (BENCHMARKS.md documents
-the same solve drawing 10, 12 and 18 iterations as XLA picks GEMM algorithms
-by measured timing).
-"""
+``--converged`` runs the SCF cases on deliberately loose tolerances:
+``terms._metric_pinv`` records that density-fitted quantities compared across
+contraction orders agree only to ~1e-8 with a jkfit metric. Iteration counts
+are recorded and never fatal."""
 
 from __future__ import annotations
 
@@ -62,13 +50,9 @@ CH3 = "C 0 0 0; H 1.079 0 0; H -0.5395 0.9345 0; H -0.5395 -0.9345 0"
 # documented ~1e7 amplification of last-bit changes.
 #
 # The DF ``e`` tolerances are 1e-9, not 1e-11, because a density-fitted energy
-# does not reproduce to 1e-11 across *machines*. Moving from cn-g006 to
-# cn-g020 (same A100 model) shifted every DF case by ~3e-10 with the library
-# untouched, while both exact-ERI cases stayed bit-identical: XLA picks GEMM
-# algorithms by measured timing, so the last bits follow the node, and the
-# metric's kept band turns a 1e-17 relative change into 1e-10 in the energy.
-# A gate that fails on which machine it ran is not measuring the code. The
-# exact cases stay at 1e-11 and are the sharp instrument; 1e-9 still catches
+# does not reproduce to 1e-11 across machines: two A100 nodes shift every DF
+# case by ~3e-10 with the library untouched, while the exact-ERI cases stay
+# bit-identical. The exact cases are the sharp instrument; 1e-9 still catches
 # anything meaningful, since the changes this gate guards move DF energies by
 # 1e-12 or not at all.
 CASES = {
@@ -83,14 +67,8 @@ CASES = {
     "uks_pbe_df": (dict(atom=CH3, basis="def2-svp", xc="PBE", backend="df",
                         spin=1),
                    dict(e=1e-9, f=None, conv=1e-8)),
-    # def2-svp, and the basis matters: sto-3g is l<=1, so cart2sph is None and
-    # the case cannot tell the cartesian and spherical AO spans apart. It ran
-    # at sto-3g while the streamed RI-K rebuilt the whole 3-center tensor once
-    # per occupied orbital (52 minutes on three atoms), and in that weakened
-    # form it passed clean over a slab RI-K that was contracting a 25-row
-    # tensor against a 24-row one; the def2-svp profiling run found it in one
-    # call. The slab engine removed the reason for the downgrade, so the
-    # coverage comes back with it.
+    # def2-svp, and the basis matters: sto-3g is l<=1, so cart2sph is None
+    # and the case cannot tell the cartesian and spherical AO spans apart.
     "rik_stream": (dict(atom=WATER, basis="def2-svp", xc="PBE0", backend="df",
                         df_chunk=64),
                    dict(e=1e-9, f=None, conv=1e-8)),
@@ -98,17 +76,10 @@ CASES = {
                        backend="df"),
                   dict(e=1e-9, f=None, conv=1e-8)),
     # One density-fitted forces case, at the smallest basis that exercises
-    # the path. The def2-svp ones cost 444 s each and say the same thing.
-    # The force tolerance is 1e-6, not 1e-8, and that is the codebase's own
-    # number rather than a widening. terms._metric_pinv records that a
-    # matched-density comparison ACROSS CONTRACTION ORDERS agrees to "machine
-    # precision with a well-conditioned auxiliary metric, ~2e-9 (H2) to ~5e-7
-    # (water) with the overcomplete jkfit metric", because the pseudo-inverse's
-    # kept band amplifies reordered rounding by ~1e7. This case is water with
-    # jkfit, so 5e-7 is the documented expectation and 1e-8 was never
-    # achievable for any change that reorders a contraction: raising _PAD_TOL
-    # moved it 2.63e-07 and correcting boys() moved it 2.87e-07, both of which
-    # are inside the band and neither of which is a regression.
+    # the path; the def2-svp ones cost 444 s each and say the same thing.
+    # The force tolerance is 1e-6 because terms._metric_pinv documents ~5e-7
+    # for water with the overcomplete jkfit metric, so any change that
+    # reorders a contraction moves this by a few 1e-7 without regressing.
     "forces_df": (dict(atom=WATER, basis="sto-3g", xc="PBE", backend="df"),
                   dict(e=1e-9, f=1e-6, conv=None)),
     # VV10's pair quadrature is O(ng^2), so this case gets its own coarse
@@ -192,12 +163,10 @@ def run_case(name: str, converged: bool) -> dict:
     )
 
     # Self-consistency, not a baseline comparison: KS.energy_and_fock is the
-    # single-traversal route the SCF takes, and it has to agree with the
-    # ordinary total() / grad(electronic()) pair above, which is what
-    # everything else (forces, the Hessian, Newton, minimize) still uses.
-    # This is an invariant of the code rather than of a recorded run, so it is
-    # checked here and now instead of against the baseline, and it catches a
-    # broken fast path even on the very first --write.
+    # single-traversal route the SCF takes and must agree with the ordinary
+    # total() / grad(electronic()) pair above. An invariant of the code, so it
+    # is checked here rather than against the baseline, and it catches a broken
+    # fast path even on the first --write.
     e_fast, F_fast = ks.energy_and_fock(P0)
     rec["fast_de"] = abs(float(e_fast) - e_fixed)
     rec["fast_dF"] = float(jnp.abs(F_fast - F).max())

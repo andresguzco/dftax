@@ -1,18 +1,13 @@
 """The Boys ladder against one ``boys`` call per order.
 
-``_hermite_table`` needs every order 0..mt-1 at the same argument. Asking
-``boys`` for each is ``mt`` table gathers (7 column reads apiece) and ``mt``
-copies of the interpolation table in the graph; one call for the top order
-plus the downward recursion
+``_hermite_table`` needs every order 0..mt-1 at the same argument, and gets
+them from one call for the top order plus the downward recursion
 
     F_{m-1}(T) = (2T F_m(T) + e^{-T}) / (2m - 1)
 
-gives the rest in fused multiply-adds. Downward is the stable direction and is
-what ``boys._build_table`` already uses, but "stable" deserves a measurement
-rather than an appeal: the recursion carries the top order's error all the way
-down, so this pins every order against the direct evaluation across the
-regimes that behave differently (the small-T series, the table interior, and
-the large-T asymptotic past ``_TMAX``).
+which carries the top order's error all the way down. Every order is pinned
+against the direct evaluation across the three regimes that behave differently:
+the small-T series, the table interior, and the large-T asymptotic.
 """
 
 import jax
@@ -24,8 +19,7 @@ from dftax.energy.boys import _TMAX, _boys_ref, boys
 from dftax.integrals.eri3c_bucketed import _boys_ladder
 
 
-# Spans the three regimes: T -> 0 (series), the table interior, and past
-# _TMAX = 40 where boys() switches to the large-T asymptotic.
+# T -> 0 (series), the table interior, and past the asymptotic switch.
 TS = [0.0, 1e-12, 1e-6, 0.05, 0.5, 1.0, 3.7, 12.0, 25.0, 39.9, 40.1, 60.0,
       120.0]
 
@@ -45,8 +39,8 @@ def test_ladder_matches_direct_boys(mt):
 
 @pytest.mark.parametrize("mt", [5, 13])
 def test_ladder_matches_the_exact_reference(mt):
-    """Against ``_boys_ref`` (incomplete gamma), not just against the table,
-    so a shared error in the table cannot hide here."""
+    """Against ``_boys_ref`` (incomplete gamma), so a shared error in the
+    interpolation table cannot hide here."""
     for T in TS:
         t = jnp.asarray(T)
         got = np.asarray(_boys_ladder(mt, t))

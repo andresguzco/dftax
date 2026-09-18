@@ -1,31 +1,20 @@
-"""The AO evaluation alone, three layouts, interleaved and repeated.
+"""The AO evaluation alone, interleaved and repeated.
 
-Splitting this out of ``profile_terms.py`` was not tidiness. Pricing the AO
-variants there meant paying a 2-6 minute ``KS`` build first, running all three
-in one process behind a cumulative multi-GiB allocator pool, and measuring
-them in a fixed order; the result flipped between two molecules by 8x, which
-is not a scaling law, it is a broken measurement. This builds nothing but the
-basis and the grid, runs the variants **interleaved** over several rounds, and
-reports the median and the spread of each, so ordering, pool state and a noisy
-shared node show up as spread instead of as a conclusion.
+Builds only the basis and the grid, runs the variants interleaved over several
+rounds, and reports each one's median and spread, so ordering, allocator state
+and a noisy shared node show up as spread rather than as a conclusion.
 
     python scripts/perf/ao_bench.py --mol cubane bicyclo222octane
 
 Variants:
 
     flat     per-AO values, gradient by jacfwd (the original)
-    flatg    per-AO values, analytic gradient
-    shells   shell-blocked values, analytic gradient
-
-`shells` does 4-6x fewer exponentials on paper. Whether that is worth having
-depends on whether the evaluation is FLOP-bound or bandwidth-bound on the
-device, which is exactly what this measures rather than assumes.
+    flatg    per-AO values, analytic gradient (what eval_gto_and_grad runs)
 """
 
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import os
 import statistics
 import sys
@@ -61,11 +50,7 @@ def variants(basis):
     import equinox as eqx
     import jax
 
-    from dftax.energy.gto import (
-        _eval_gto_flat, _eval_gto_flat_grad, _eval_gto_shells,
-    )
-
-    flat_basis = dataclasses.replace(basis, shells=None)
+    from dftax.energy.gto import _eval_gto_flat, _eval_gto_flat_grad
 
     def flat(b, c):
         return (jax.vmap(lambda r: _eval_gto_flat(b, r))(c),
@@ -74,13 +59,9 @@ def variants(basis):
     def flatg(b, c):
         return jax.vmap(lambda r: _eval_gto_flat_grad(b, r))(c)
 
-    def shells(b, c):
-        return jax.vmap(lambda r: _eval_gto_shells(b, r, grad=True))(c)
-
     return {
-        "flat": (eqx.filter_jit(flat), flat_basis),
-        "flatg": (eqx.filter_jit(flatg), flat_basis),
-        "shells": (eqx.filter_jit(shells), basis),
+        "flat": (eqx.filter_jit(flat), basis),
+        "flatg": (eqx.filter_jit(flatg), basis),
     }
 
 

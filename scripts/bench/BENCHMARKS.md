@@ -228,16 +228,9 @@ have different fixes:
 - **Compilation.** The cold column is dftax tracing and compiling the whole
   build, which is a one-off per shape: irrelevant when the shape is reused
   (geometry optimization, conformer batches, anything differentiated), and the
-  entire cost when it is not.
-
-  **Corrected 2026-09-18.** This paragraph used to say the cold cost "splits
-  about evenly between Python tracing of the 45 shell-class kernels and XLA
-  compiling the result, so a persistent `JAX_COMPILATION_CACHE_DIR` removes
-  roughly the second half". Both halves of that are wrong, and the split had
-  never actually been measured: the harness that would have measured it was
-  asking a jitted callable for a `.trace()` method that `eqx.filter_jit` does
-  not have, swallowing the exception, and recording `nan`. Measured on an
-  A100 with the cold-cache dir forced (`scripts/perf/profile_terms.py`):
+  entire cost when it is not. It is roughly **10:1 XLA against Python
+  tracing**, measured on an A100 with the cache dir forced cold
+  (`scripts/perf/profile_terms.py`):
 
   | | trace(+lower) | XLA | XLA share |
   |---|---:|---:|---:|
@@ -245,19 +238,14 @@ have different fixes:
   | cubane/def2-svp `int3c` | 11.0 s | 125.1 s | 92% |
   | cubane/def2-svp `xc_g` | 0.7 s | 10.1 s | 94% |
 
-  It is roughly **10:1 XLA**, not even. So a persistent
-  `JAX_COMPILATION_CACHE_DIR`, which stores XLA output, removes about **83%**
-  of a cold build rather than half: cubane's 3-center build is 132.7 s with a
-  cold cache against 23.3 s with a warm one. Setting that variable is the
-  single most effective thing a user can do about first-call cost, and it is
-  worth more than this document previously implied.
+  A persistent `JAX_COMPILATION_CACHE_DIR` stores the XLA output, so it
+  removes about **83%** of a cold build: cubane's 3-center build is 132.7 s
+  cold against 23.3 s warm. Setting it is the single most effective thing a
+  user can do about first-call cost.
 
-  The direction it implies for the engine is also the opposite of what the old
-  text suggested: the lever is fewer and simpler *compiled programs*, not
-  smaller Python graphs. The class count turns out to be set by the basis
-  rather than the molecule (water/def2-svp has 177 3-center classes, cubane
-  202), so compile cost is roughly constant in system size while runtime
-  grows.
+  The class count is set by the basis rather than the molecule (water/def2-svp
+  has 177 3-center classes, cubane 202), so compile cost is roughly constant
+  in system size while runtime grows.
 
 **On the wall-clock columns.** This is a shared cluster node, and the cold
 column is host-CPU-bound (it is XLA compiling), so it carries the node's load

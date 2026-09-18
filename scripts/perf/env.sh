@@ -3,23 +3,19 @@
 #   source scripts/perf/env.sh
 #   uv run --frozen --no-sync python scripts/perf/profile_terms.py --ladder
 #
-# Three settings are load-bearing and one is a trap:
+# Three settings are load-bearing:
 #
 #   JAX_COMPILATION_CACHE_DIR must be NODE-LOCAL. XLA writes one autotune file
-#   per fusion and they fail with "Device or resource busy" on /network/scratch
-#   (NFS), which kills a job at its first jit. $SLURM_TMPDIR is node-local; the
-#   fallback keeps a laptop run working. The cache is worth ~90 s of coronene's
-#   286 s cold build, and since compile time is one of the metrics this plan
-#   targets, whether it was warm has to be recorded rather than assumed: set
-#   DFTAX_PERF_CACHE=cold to run against an empty cache.
+#   per fusion and they fail with "Device or resource busy" on NFS, killing the
+#   job at its first jit. Set DFTAX_PERF_CACHE=cold to run against an empty
+#   cache, since a warm one hides most of the compile cost.
 #
-#   XLA_PYTHON_CLIENT_PREALLOCATE=false, or peak_bytes_in_use reports the pool
-#   rather than the data, which is the mistake the 2026-07-25 GPU4PySCF run
-#   made (it reported a column 2.4x the real peak).
+#   XLA_PYTHON_CLIENT_PREALLOCATE=false, or peak_bytes_in_use reports the
+#   allocator pool rather than the data.
 #
-#   The GPU must be an a100l. dftax is float64 throughout, and Mila's generic
-#   --gres=gpu:1 can land on rtx8000/l40s cards with no fast f64 units, which
-#   is ~10x the wall time and silently poisons every row.
+#   The GPU must be an a100l. dftax is float64 throughout, and a generic
+#   --gres=gpu:1 can land on a card with no fast f64 units: ~10x the wall time,
+#   silently.
 
 export PATH="$HOME/.local/bin:$PATH"
 

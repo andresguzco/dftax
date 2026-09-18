@@ -1,10 +1,10 @@
 """Per-term cost of one Kohn-Sham iteration: where the wall clock actually goes.
 
-``scripts/bench/benchmark.py`` and ``gpu4pyscf_bench.py`` both time whole
-solves, which answers "are we slower" but not "slower at what". This splits one
-Fock build into the pieces that can be optimized independently (AO evaluation
-on the grid, the XC contraction, RI-J, RI-K, the integral builds) and reports,
-for each, the cold wall (trace + compile), the warm wall, and the device peak.
+``scripts/bench/benchmark.py`` and ``gpu4pyscf_bench.py`` time whole solves,
+which answers "are we slower" but not "slower at what". This splits one Fock
+build into the pieces that can be optimized independently (AO evaluation on the
+grid, the XC contraction, RI-J, RI-K, the integral builds) and reports, for
+each, the cold wall (trace + compile), the warm wall, and the device peak.
 
     # one row
     python scripts/perf/profile_terms.py --mol water --basis def2-svp --xc PBE
@@ -15,22 +15,16 @@ for each, the cold wall (trace + compile), the warm wall, and the device peak.
     # clean peaks: one term per process (XLA's peak counter never resets)
     python scripts/perf/profile_terms.py --mol coronene --isolate
 
-Two terms exist to price a specific change rather than a component:
+Three terms price the SCF loop body rather than a component:
 
-``fock``      ``grad(electronic)``, the Fock the SCF loop builds each iteration.
-``total``     ``ks.total(P)``, which the loop *also* evaluates each iteration.
-``vandg``     ``value_and_grad(electronic)``, which returns both for the price
-              of the first. ``fock + total`` against ``vandg`` is exactly the
-              overhead of ``_scf_solve``'s current two-call body; on CPU it
-              measured 1.39x (PBE) and 1.57x (PBE0), and the point of this
-              harness is to find out what it is on the A100 before anyone
-              rewrites the loop.
+``fock``      ``grad(electronic)``, the Fock the loop builds each iteration.
+``total``     ``ks.total(P)``, which the loop also evaluates each iteration.
+``vandg``     ``value_and_grad(electronic)``, which returns both at once.
 
-Peaks are a high-water mark that XLA never resets, so within one process they
-are cumulative and only the largest term is meaningful. ``--isolate`` re-runs
-the script once per term so each peak is that term's own; it costs one process
-startup and one compile per term, so it is not the default.
-"""
+Peaks are a high-water mark XLA never resets, so within one process they are
+cumulative and only the largest term is meaningful. ``--isolate`` re-runs the
+script once per term so each peak is that term's own, at the cost of one
+process startup and one compile per term."""
 
 from __future__ import annotations
 
@@ -110,12 +104,9 @@ def measure(fn, args, repeat: int, split_compile: bool = True) -> dict:
     if split_compile:
         try:
             # eqx.filter_jit exposes .lower() but NOT .trace(); jax.jit has
-            # both. Asking only for .trace() made this raise on every term in
-            # this harness and record nan, so the whole campaign ran with an
-            # empty trace/compile split. For the filter_jit path `trace_s`
-            # therefore covers tracing *and* lowering to StableHLO; `compile_s`
-            # is XLA either way, which is the split that matters (graph size is
-            # the first, backend work the second).
+            # both. On the filter_jit path `trace_s` therefore covers tracing
+            # and lowering to StableHLO together. `compile_s` is XLA either
+            # way, which is the split that matters.
             t0 = time.perf_counter()
             lowered = (fn.trace(*args).lower() if hasattr(fn, "trace")
                        else fn.lower(*args))
@@ -184,13 +175,10 @@ def build(args):
         [ks.S, ks.hcore, ks.coulomb, ks.xc_term]))
     build_s = time.perf_counter() - t0
 
-    # The grid and the auxiliary basis are re-resolved through the same
-    # helpers KS used rather than read off the term, because which of them a
-    # term carries depends on the backend: GridXC keeps ao/dao and no coords
-    # (except under VV10), ScreenedGridXC keeps a *reordered* grid, and
-    # DFCoulomb keeps the built tensor and no aux basis at all. Re-resolving
-    # gives every backend the same points and the same auxiliary span, so the
-    # ao_grid and int3c rows are comparable across them.
+    # Re-resolved through the same helpers KS used rather than read off the
+    # term: what a term carries differs by backend (GridXC keeps ao/dao,
+    # ScreenedGridXC a reordered grid, DFCoulomb no aux basis at all). This
+    # gives every backend the same points and the same auxiliary span.
     coords = jnp.asarray(mol.atom_coords())
     grid_coords, _gw, _chunk = _resolve_grid(grid, list(mol.symbols), coords)
     grid_coords = jnp.asarray(grid_coords)
@@ -237,32 +225,18 @@ def terms(ks, P, grid_coords, aux):
         eqx.filter_jit(lambda b: overlap_kinetic_bucketed(b, plan=pair_plan)),
         (ks.basis,))
 
-    # Three AO variants, priced side by side in one process, because which
-    # one wins on a GPU is not predictable from the FLOP count: the per-AO
-    # layout does 4-6x redundant exponentials but does them in one wide
-    # elementwise kernel, and the evaluation is bandwidth-bound.
-    #   ao_flat    the original: per-AO values, gradient by jacfwd
-    #   ao_flatg   per-AO values, analytic gradient (drops 3 tangent passes)
-    #   ao_grid    shell-blocked values, analytic gradient (drops the
-    #              redundant exponentials too, at the cost of a permutation)
-    import dataclasses
+    # ao_flat is the original (gradient by jacfwd); ao_flatg is the analytic
+    # gradient that replaced it. See scripts/perf/ao_bench.py for the
+    # interleaved version of this comparison.
+    from dftax.energy.gto import _eval_gto_flat, eval_gto_and_grad
 
-    from dftax.energy.gto import (
-        _eval_gto_flat, _eval_gto_flat_grad, eval_gto_and_grad,
-    )
-
-    flat_basis = dataclasses.replace(ks.basis, shells=None)
     out["ao_flat"] = (
         eqx.filter_jit(lambda b, c: (
             jax.vmap(lambda r: _eval_gto_flat(b, r))(c),
             jax.vmap(lambda r: jax.jacfwd(_eval_gto_flat, argnums=1)(b, r))(c),
         )),
-        (flat_basis, grid_coords))
+        (ks.basis, grid_coords))
     out["ao_flatg"] = (
-        eqx.filter_jit(
-            lambda b, c: jax.vmap(lambda r: _eval_gto_flat_grad(b, r))(c)),
-        (flat_basis, grid_coords))
-    out["ao_grid"] = (
         eqx.filter_jit(
             lambda b, c: jax.vmap(lambda r: eval_gto_and_grad(b, r))(c)),
         (ks.basis, grid_coords))
@@ -309,7 +283,7 @@ def terms(ks, P, grid_coords, aux):
     return out
 
 
-ALL_TERMS = ["hcore", "ao_flat", "ao_flatg", "ao_grid", "int3c", "xc_e", "xc_g", "jk_e", "jk_g", "jk_ev",
+ALL_TERMS = ["hcore", "ao_flat", "ao_flatg", "int3c", "xc_e", "xc_g", "jk_e", "jk_g", "jk_ev",
              "total", "fock", "enfock", "vandg"]
 
 

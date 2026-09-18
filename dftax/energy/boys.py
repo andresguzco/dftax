@@ -32,18 +32,9 @@ from jax.scipy.special import gammainc, gammaln
 
 _ORDER = 6          # local Taylor degree (node error ~ (dt/2)^{_ORDER+1}/(_ORDER+1)! ~ 1e-12)
 _DT = 0.1           # table grid spacing in t
-# Beyond this the large-t asymptotic F_n ~ Gamma(n+0.5)/(2 t^{n+0.5}) is used,
-# which drops the incomplete-gamma tail Q(n+0.5, t). That tail grows with the
-# ORDER, so a cutoff tuned on low n is wrong for high n: at t = 40.1,
-# Q(0.5, t) is ~1e-18 but Q(12.5, t) is 8.4e-8 and Q(24.5, t) is larger still.
-# The engine asks for orders up to _TBL_NMAX, so the cutoff has to be where the
-# tail is negligible for the *highest* of them: Q(24.5, 90) ~ 1e-15, against
-# ~1e-7 at 40. Costs 500 more rows of table (~100 KB) and nothing at runtime.
-#
-# Found by pinning a Boys ladder (one evaluation plus the downward recursion)
-# against per-order evaluation: the ladder seeds from the top order, so it
-# inherits exactly this error and reports it uniformly across every order,
-# where per-order calls hide it behind the accurate low orders.
+# Beyond this the large-t asymptotic drops the incomplete-gamma tail, whose
+# size grows with the ORDER: negligible for F_0 at t=40, but ~1e-7 for F_12
+# and ~3e-3 for F_24. Set by the highest tabulated order, not the lowest.
 _TMAX = 90.0
 _TBL_NMAX = 24      # tabulate F_0..F_{_TBL_NMAX}; boys(n) uses the table when n+_ORDER <= _TBL_NMAX
 
@@ -149,10 +140,9 @@ def boys(n: int, t: jax.Array) -> jax.Array:
     Beyond t = _TMAX the large-t asymptotic F_n ~ Gamma(n+0.5) / (2 t^{n+0.5}) is used.
     For n beyond the table it falls back to the exact ``_boys_ref``.
 
-    Accurate to ~1e-11 vs ``_boys_ref`` at every tabulated order (see the
-    ``_TMAX`` note: the cutoff is set by the highest order, not the lowest).
-    Fully differentiable
-    (jax.grad(boys(n, .))(t) == -boys(n+1, t)), and works under jit and vmap.
+    Accurate to ~1e-11 vs ``_boys_ref`` at every tabulated order. Fully
+    differentiable (jax.grad(boys(n, .))(t) == -boys(n+1, t)), and works under
+    jit and vmap.
 
     Args:
         n: Order (Python int, not a traced value).

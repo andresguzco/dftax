@@ -674,16 +674,11 @@ def exchange_k_4c(
     lower triangle is evaluated: ``n(n+1)/2`` elements instead of ``n²``, a
     2x cut in ``_element`` calls, which is where all the time goes.
 
-    The other two generators of the 8-fold group are deliberately *not* folded.
-    ``(μλ|νσ) = (λμ|νσ)`` relates the block for ``(μ, λ)`` to the one for
-    ``(λ, μ)``, and ``(μλ|νσ) = (νσ|μλ)`` relates it to a block in a different
-    row of ``K`` entirely; exploiting either means abandoning the ``vmap`` over
-    ``μ`` for a scan that accumulates into ``K`` across rows. That is precisely
-    the trade that lost 4.3x when the bra primitives were serialized (see
-    ``scripts/perf/RESULTS.md``): it converts one wide fused kernel into many
-    narrow ones, and on this device that has cost more than the arithmetic it
-    saved every time it has been tried. A further 4x is available there for
-    someone willing to measure it rather than assume it.
+    The other two generators of the 8-fold group are not folded: both relate
+    blocks across rows of ``K``, so exploiting either means replacing the
+    ``vmap`` over ``μ`` with a scan that accumulates across rows. A further 4x
+    is available there, at the cost of many narrow kernels instead of one wide
+    fused one.
     """
     if basis.cart2sph is not None:
         C = basis.cart2sph                                   # (n_cart, n_sph)
@@ -709,8 +704,7 @@ def exchange_k_4c(
                 lambda p: _element(basis, i, k, tj_j[p], tl_j[p], ml, mt, mm)
             )(pidx)
             # mirror into the full block: (ik|νσ) = (ik|σν). The diagonal is
-            # written twice with the same value, so `set` is safe and needs no
-            # separate masking.
+            # written twice with the same value, so `set` needs no masking.
             Mjl = (jnp.zeros((n, n), dtype=vals.dtype)
                    .at[tj_j, tl_j].set(vals)
                    .at[tl_j, tj_j].set(vals))

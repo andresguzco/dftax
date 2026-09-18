@@ -1,14 +1,9 @@
 """The streamed exact-exchange build against the materialized reference.
 
-``exchange_k_4c`` now evaluates only the lower triangle of each ``(ν, σ)``
-block and mirrors it, on the strength of ``(μλ|νσ) = (μλ|σν)``. That halves
-the ``_element`` calls, which is where all of its time goes, and it must not
-change the matrix by anything but rounding.
-
-Checked against ``K`` contracted out of the full materialized ERI tensor, which
-is a different code path entirely (bucketed shell-quartet classes with the
-8-fold scatter), so agreement is evidence about the symmetry claim rather than
-about one implementation reproducing itself.
+``exchange_k_4c`` evaluates only the lower triangle of each ``(ν, σ)`` block
+and mirrors it, on the strength of ``(μλ|νσ) = (μλ|σν)``. The reference is
+``K`` contracted out of the full materialized ERI tensor, which reaches the
+integrals through a different engine.
 """
 
 import jax

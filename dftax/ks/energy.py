@@ -238,11 +238,9 @@ def _resolve_screen(screen, n_atom: int) -> float | None:
     nuclear coordinates, and converting a tracer raises. A shape is static
     even when its contents are not.
 
-    ``"auto"`` is a size gate rather than a constant because per-block
-    screening is a measured *loss* on small molecules (0.89x at 23 atoms) and
-    a growing win on large ones (1.53x at 53, 3.11x at 153); see
-    :func:`~dftax.grid.becke`. An explicit float or ``None`` is honored as
-    given.
+    ``"auto"`` is a size gate because per-block screening is a loss on small
+    molecules and a growing win on large ones; see :func:`~dftax.grid.becke`.
+    An explicit float or ``None`` is honored as given.
     """
     from dftax.grid.grid import SCREEN_AUTO_CUTOFF, SCREEN_AUTO_MIN_ATOMS
 
@@ -616,11 +614,8 @@ class KS(eqx.Module):
             plan_eri3c(basis, aux_basis, keep_pairs=screen_keep)
             if aux_basis is not None else None
         )
-        # Shell-aligned auxiliary slabs for the streamed backend. The forces
-        # path has built these since 0.7.0 and the streamed SCF backend never
-        # did: it looked its 3-center elements up one at a time through the
-        # flat per-element engine, which the bucketed build replaced
-        # everywhere else. Same eager-vs-traced split as the plans above.
+        # Shell-aligned auxiliary slabs for the streamed backend, built
+        # eagerly like the plans above.
         slab_plans = None
         if is_df and isinstance(spec.chunk, int):
             from dftax.integrals.eri3c_bucketed import plan_aux_slabs
@@ -789,31 +784,19 @@ class KS(eqx.Module):
     ) -> tuple[Scalar, Float[Array, "nspin nao nao"]]:
         """``(E_total, F)`` for one density, sharing the work between them.
 
-        The SCF needs the energy and the Fock at the same ``P`` every
-        iteration, and computing them separately walks the quadrature twice:
-        ``grad`` rematerializes each grid block in its backward pass (the
-        streaming backends checkpoint to hold memory at O(block·nsub)), and
-        the standalone energy call then walks the grid again. On
-        cubane/def2-svp that is 34.1 ms + 22.4 ms where the gradient alone is
-        33.3 ms.
+        Computing the two separately walks the quadrature twice, because the
+        streaming backends checkpoint their grid blocks and ``grad``
+        rematerializes them. Each term is therefore asked for both at once
+        (:meth:`~dftax.ks.terms.XCTerm.energy_and_potential`,
+        :meth:`~dftax.ks.terms.CoulombTerm.energy_and_potential`).
 
-        So each term is asked for both at once: the XC term takes the VJP per
-        block while the residuals are still alive
-        (:meth:`~dftax.ks.terms.XCTerm.energy_and_potential`), and the
-        Coulomb term gives RI-J's derivative in closed form and routes RI-K
-        through the occupied orbitals
-        (:meth:`~dftax.ks.terms.CoulombTerm.energy_and_potential`). The
-        one-electron trace is linear in ``P`` and costs nothing either way.
+        ``idempotent`` says whether ``P`` is an integer-occupation projector:
+        true of an aufbau density, false under Fermi smearing. The Coulomb
+        term falls back to reverse mode when told otherwise.
 
-        ``idempotent`` says whether ``P`` is an integer-occupation projector.
-        It is, for an aufbau density; it is not under Fermi smearing, and the
-        occupied-orbital exchange route is exact only when it is, so the
-        Coulomb term falls back to reverse mode when told otherwise.
-
-        The result is the same ``(total(P), sym(∂E/∂P))`` the two calls gave,
-        and ``total`` / ``electronic`` are untouched, so every other consumer
-        (forces, the Hessian, Newton, direct minimization) keeps the plain
-        autodiff path.
+        The result is the same ``(total(P), sym(∂E/∂P))`` as the two separate
+        calls, which ``total`` / ``electronic`` still provide for every other
+        consumer (forces, the Hessian, Newton, direct minimization).
         """
         e1, g1 = jax.value_and_grad(
             lambda Q: jnp.sum(jnp.sum(Q, axis=0) * self.hcore))(P)

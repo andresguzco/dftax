@@ -29,8 +29,7 @@ from dftax.grid.becke import becke_radial, becke_partition, bragg_radius
 
 
 # Atom count from which screen="auto" switches per-block screening on. Below
-# the crossover screening is a measured loss (0.89x at 23 atoms); above it the
-# win grows with the molecule (1.53x at 53, 3.11x at 153).
+# the crossover the gather overhead outweighs the saving.
 SCREEN_AUTO_MIN_ATOMS = 50
 SCREEN_AUTO_CUTOFF = 1e-10
 
@@ -100,15 +99,8 @@ def becke(
             XC term costs ``ng·nsub²`` instead of ``ng·nao²``. A float sets
             the threshold, ``None`` evaluates the whole basis everywhere, and
             ``"auto"`` (the default) turns it on from
-            ``SCREEN_AUTO_MIN_ATOMS`` atoms up.
-
-            The size gate is not caution, it is the measurement: end to end
-            on a ``grad`` of the XC energy (what an SCF iteration pays),
-            def2-svp, against the streamed dense path, screening is 0.89x at
-            23 atoms (a loss), 1.53x at 53 and 3.11x at 153, with peak memory
-            equal or lower. It is the large-system knob, so ``"auto"`` pays
-            the small-molecule cost to nobody and hands the growing win to
-            everyone above the crossover.
+            ``SCREEN_AUTO_MIN_ATOMS`` atoms up. It is a large-system knob: a
+            small loss below the crossover, and a growing win above it.
         screen_block: grid points per screening block. Larger blocks amortize
             the gather but reach more shells.
         screen_buckets: how many distinct padded shapes to compile. More

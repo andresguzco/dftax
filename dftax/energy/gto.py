@@ -18,8 +18,6 @@ Usage::
     jac = jax.jacobian(eval_gto, argnums=1)(basis, r)  # (nao, 3)
 """
 
-from collections import defaultdict
-
 import numpy as np
 
 import jax.numpy as jnp
@@ -156,13 +154,6 @@ class BasisData(eqx.Module):
     angular: Int[Array, "nao_cart 3"]
     cart2sph: Float[Array, "nao_cart nao_sph"] | None
     max_l: int = eqx.field(static=True, default=4)
-    # Shell structure as static metadata, so a consumer inside jit can use it:
-    # filter_jit traces every array leaf, so anything derived by reading
-    # `angular`/`exponents` as concrete numpy has to be carried, not
-    # rediscovered (the integral builders solve the same problem by threading
-    # a `plan` argument from the caller; a basis-level static field spares
-    # eval_gto that plumbing, since it is called from a dozen places).
-    shells: tuple = eqx.field(static=True, default=None)
 
 
 def extract_basis_data(mol: "object") -> BasisData:
@@ -249,8 +240,6 @@ def extract_basis_data(mol: "object") -> BasisData:
         angular=jnp.array(np.array(all_angular, dtype=np.int32)),
         cart2sph=c2s,
         max_l=max_l,
-        shells=shell_records(np.array(all_angular, dtype=np.int32),
-                             np.array(all_exps, dtype=np.float64)),
     )
 
 
@@ -352,15 +341,8 @@ def shell_records(angular, exponents) -> tuple:
 
     A shell starts wherever the canonical Cartesian component sequence
     restarts at ``(l, 0, 0)``, so two same-l shells on one atom split by row
-    order alone and no center reads are needed. This is the rule the bucketed
-    integral engine already runs on (``eri3c_bucketed._shells`` delegates
-    here); it lives in this module so ``BasisData`` can carry the result as a
-    static field rather than every consumer rediscovering it.
-
-    ``nprim`` is the shell's true contraction length, which is what lets the
-    evaluator skip the zero padding: ``BasisData`` pads every row to the
-    molecule's longest contraction, and on cc-pVTZ that padding alone is a
-    6.2x on the exponentials an AO evaluation performs.
+    order alone. ``nprim`` is the shell's true contraction length, not the
+    padded row width.
     """
     ang = np.asarray(angular)
     ex = np.asarray(exponents)
@@ -378,126 +360,16 @@ def shell_records(angular, exponents) -> tuple:
     )
 
 
-def _pow_int(x, n: int):
-    """``x**n`` for a Python int ``n``, by repeated multiplication.
-
-    The per-AO path needs :func:`safe_int_pow`, whose exponent is a traced
-    array, and pays a six-deep ``where`` chain plus a hard ``l <= 6`` cap for
-    it. Here the exponent is static (it comes out of ``_CART_COMPONENTS`` at
-    trace time), so the same NaN-safety at ``x = 0`` is had from plain
-    products, with no chain and no cap.
-    """
-    if n <= 0:
-        return jnp.ones_like(x)
-    out = x
-    for _ in range(n - 1):
-        out = out * x
-    return out
-
-
-def _shell_groups(shells) -> dict:
-    """Shells bucketed by ``(l, nprim)``: one rectangular batch per group."""
-    groups = defaultdict(list)
-    for (l, row0, _ncomp, npr) in shells:
-        groups[(l, npr)].append(row0)
-    return groups
-
-
-def _group_layout(shells):
-    """``(groups, perm)``: the rectangular batches and the row permutation.
-
-    Each group's rows are emitted contiguously and the concatenation is put
-    back into canonical AO order by one static gather at the end. The first
-    version of this scattered each group into place with ``.at[rows].set``,
-    once per Cartesian component, and measured *slower* than the per-AO path
-    it replaced (33.1 ms against 20.3 ms on cubane's grid): the arithmetic
-    saving is real but it was spent on scatter traffic and on a few hundred
-    small kernels. One concatenate plus one permutation is a shuffle.
-    """
-    groups = sorted(_shell_groups(shells).items())
-    order = []
-    for (l, _npr), rows in groups:
-        ncomp = (l + 1) * (l + 2) // 2
-        for r0 in rows:
-            order.extend(range(r0, r0 + ncomp))
-    perm = np.argsort(np.asarray(order, dtype=np.int64)).astype(np.int32)
-    return groups, perm
-
-
 def _axis_powers(x, l: int):
-    """``(ns, l+1)`` with column ``i`` equal to ``x**i``, by multiplication."""
+    """``(n, l+1)`` with column ``i`` equal to ``x**i``, by multiplication.
+
+    Products rather than ``lax.pow``, whose float power rule gives NaN second
+    derivatives at ``x = 0`` (the same reason :func:`safe_int_pow` exists).
+    """
     cols = [jnp.ones_like(x)]
     for _ in range(l):
         cols.append(cols[-1] * x)
     return jnp.stack(cols, axis=-1)
-
-
-def _eval_gto_shells(basis: BasisData, r, grad: bool = False):
-    """Shell-blocked AO evaluation (and, optionally, the analytic gradient).
-
-    The per-AO path recomputes a shell's radial contraction once per Cartesian
-    component and evaluates every primitive slot including the zero padding,
-    so it performs ``nao_cart x max_prim`` exponentials where ``sum_shell
-    nprim`` are distinct: measured 4.0x (cc-pVDZ), 5.9x (def2-svp) and 6.2x
-    (cc-pVTZ) more ``exp`` than necessary. The coefficients are identical
-    across a shell's components by construction (for ``l <= 1`` the
-    per-component contracted norm coincides by symmetry, and for ``l >= 2``
-    the builders store ``c_prim`` verbatim), so the whole radial factor is a
-    shell quantity and is computed once here.
-
-    The gradient is analytic rather than a ``jacfwd``. With
-    ``phi = A(dr) R(r^2)``,
-
-        dphi/dx_j = (dA/dx_j) R - 2 dr_j A R',   R' = sum_p c_p alpha_p E_p
-
-    so it reuses the same exponentials and costs one extra contraction over
-    ``E`` instead of three extra tangent passes through the whole evaluation
-    (measured: ``jacfwd`` made ``ao_on_grid`` 2.66x the cost of ``ao`` alone).
-    """
-    groups, perm = _group_layout(basis.shells)
-    blocks, dblocks = [], []
-
-    for (l, npr), rows in groups:
-        idx = np.asarray(rows, dtype=np.int32)
-        dr = r[None, :] - basis.centers[idx]              # (ns, 3)
-        r2 = jnp.sum(dr * dr, axis=-1)                    # (ns,)
-        al = basis.exponents[idx][:, :npr]                # (ns, npr)
-        co = basis.coefficients[idx][:, :npr]
-        E = jnp.exp(-al * r2[:, None])                    # the minimal exp set
-        R = jnp.sum(co * E, axis=-1)                      # (ns,)
-
-        # Components are indexed out of the per-axis power tables rather than
-        # looped over in Python: for a d shell that is three (ns, l+1) tables
-        # and three gathers instead of eighteen separate products.
-        e = np.asarray(_CART_COMPONENTS[l], dtype=np.int32)      # (ncomp, 3)
-        pw = [_axis_powers(dr[:, k], l) for k in range(3)]       # (ns, l+1)
-        P = [pw[k][:, e[:, k]] for k in range(3)]                # (ns, ncomp)
-        A = P[0] * P[1] * P[2]
-        blocks.append((A * R[:, None]).reshape(-1))
-
-        if grad:
-            Rp = jnp.sum(co * al * E, axis=-1)                   # (ns,)
-            d = []
-            for k in range(3):
-                # dA/dx_k = e_k * dr_k^{e_k - 1} * prod_{m != k}; the e_k
-                # factor is a static 0 where the exponent is, so the clamped
-                # index never contributes.
-                lower = pw[k][:, np.maximum(e[:, k] - 1, 0)]
-                dA = e[:, k][None, :] * lower * P[(k + 1) % 3] * P[(k + 2) % 3]
-                d.append(dA * R[:, None]
-                         - 2.0 * dr[:, k][:, None] * A * Rp[:, None])
-            dblocks.append(jnp.stack(d, axis=-1).reshape(-1, 3))
-
-    ao = jnp.concatenate(blocks)[perm]
-    if grad:
-        dao = jnp.concatenate(dblocks)[perm]
-
-    if basis.cart2sph is not None:
-        ao_out = ao @ basis.cart2sph
-        if grad:
-            return ao_out, jnp.einsum("cx,cs->sx", dao, basis.cart2sph)
-        return ao_out
-    return (ao, dao) if grad else ao
 
 
 def _eval_gto_flat_grad(basis: BasisData, r: Float[Array, "3"]):
@@ -598,28 +470,14 @@ def eval_gto(basis: BasisData, r: Float[Array, "3"]) -> Float[Array, "nao"]:
 def eval_gto_and_grad(basis: BasisData, r: Float[Array, "3"]):
     """AO values and their spatial gradients ``(nao,), (nao, 3)`` at ``r``.
 
-    One pass for both. Every caller used to spell this ``eval_gto(basis, r)``
-    next to ``jacfwd(eval_gto)(basis, r)``, which evaluates the basis five
-    times over: once for the value, then once more for the Jacobian's own
-    primal plus one pass per Cartesian tangent.
+    One pass for both, with the gradient in closed form. Prefer this to
+    ``eval_gto`` beside ``jacfwd(eval_gto)``, which evaluates the basis five
+    times over.
 
-    The analytic gradient is written in the *per-AO* layout rather than the
-    shell-blocked one, which is the opposite of what the FLOP count suggests
-    and was settled by measurement (``scripts/perf/ao_bench.py``, A100,
-    def2-svp, interleaved rounds, ao values + gradient):
-
-        molecule            jacfwd   per-AO analytic   shell-blocked
-        cubane (ng 315k)    20.2 ms   13.4 ms (1.51x)   27.6 ms (0.73x)
-        bicyclo (ng 428k)   56.8 ms   26.5 ms (2.14x)   47.9 ms (1.19x)
-
-    Shell-blocking does 4-6x fewer exponentials (measured on the basis: 4.0x
-    cc-pVDZ, 5.9x def2-svp, 6.2x cc-pVTZ) and is still slower, because the
-    evaluation is bandwidth-bound: the per-AO form does its redundant work
-    inside one wide elementwise kernel, while grouping by ``(l, nprim)`` pays
-    gathers, a permutation, and a handful of kernels per group. The
-    shell-blocked evaluator is kept, tested and benchmarked as the measured
-    alternative rather than deleted, since the balance would tip on a device
-    where transcendentals are the scarce resource.
+    The gradient is written in the per-AO layout rather than the shell-blocked
+    one, which is the opposite of what the FLOP count suggests: shell-blocking
+    does 4-6x fewer exponentials and still measures slower, because the
+    evaluation is bandwidth-bound. See ``scripts/perf/ao_bench.py``.
     """
     return _eval_gto_flat_grad(basis, r)
 

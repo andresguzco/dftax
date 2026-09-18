@@ -1,17 +1,11 @@
 """Where the memory actually goes: host RSS against device bytes, phase by phase.
 
-A jitted engine has two memory budgets and they are easy to confuse. The
-device budget holds the tensors the calculation works on, and it is the one
-``BENCHMARKS.md`` reports. The *host* budget holds the traced jaxpr, the MLIR
-module and XLA's compiler working set, and it is paid once per shape, on the
-CPU, before any kernel runs. dftax builds one large differentiable program
-rather than dispatching precompiled kernels, so its host budget is unusually
-large: BENCHMARKS.md already records a 2.46 GiB MLIR module for coronene's
-3-center build alone.
-
-This samples both while a ``KS`` is built and then exercised, so the question
-"was that the GPU or the host, and was it compiling or running" is answered by
-a number instead of an inference.
+A jitted engine has two memory budgets. The device budget holds the tensors the
+calculation works on, and is the one ``BENCHMARKS.md`` reports. The host budget
+holds the traced jaxpr, the MLIR module and XLA's compiler working set, and is
+paid once per shape before any kernel runs. dftax builds one large
+differentiable program rather than dispatching precompiled kernels, so its host
+budget is unusually large.
 
     python scripts/perf/probe_memory.py --mol cubane                  # warm cache
     DFTAX_PERF_CACHE=cold python scripts/perf/probe_memory.py --mol cubane
@@ -21,11 +15,10 @@ Phases reported:
     build    KS(...) : the integral builds, i.e. trace + compile + execute
     fock     a few grad(electronic) calls on the built KS
 
-Reading it: if peak host RSS is large in ``build`` and small in ``fock``, the
+Reading it: peak host RSS large in ``build`` and small in ``fock`` means the
 cost is compilation, and the fix is graph size (fewer, smaller compiled
-programs), not tensor blocking. If the device peak is what moves, the fix is
-the opposite.
-"""
+programs) rather than tensor blocking. If the device peak is what moves, the
+fix is the opposite."""
 
 from __future__ import annotations
 

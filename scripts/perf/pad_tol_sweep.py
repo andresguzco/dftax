@@ -1,35 +1,17 @@
-"""Re-derive ``_PAD_TOL`` against the constraint that actually binds.
+"""Sweep ``eri3c_bucketed._PAD_TOL`` against every axis it trades.
 
-``eri3c_bucketed._PAD_TOL`` trades padded primitive work for the number of
-compiled shell classes. Its recorded table chose 0.25 because *device scratch*
-was the constraint it was weighed against: "0.5 buys 60 s of compile and gives
-back 5.3 GiB, which is the wrong trade when peak memory is what caps the
-molecules this engine can reach."
-
-That premise no longer holds. This campaign measured, on an A100:
-
-- XLA compilation is ~91% of a cold build (water `int3c`: 7.6 s tracing,
-  79.4 s XLA), not the "about evenly split" that BENCHMARKS.md assumed, and it
-  scales with the *number* of compiled programs.
-- The ceiling that actually stops a molecule is **host** RSS during
-  compilation, not device memory: coronene dies at 31.6 GB of host RSS while
-  its device peak never exceeds 1.45 GiB.
-- Device memory is abundant. Cubane's 3-center build peaks at 1.6 GiB of 80.
-
-So the trade the constant was tuned on -- device scratch against compile -- is
-now weighted the other way, and both of the things that bind (XLA time, host
-RSS) fall with the class count.
-
-This sweeps the constant and reports every axis at once, one fresh process per
-value so compile caches cannot leak between them:
+The constant trades padded primitive work for the number of compiled shell
+classes. The three costs move in opposite directions, so the sweep runs one
+fresh process per value (compile caches cannot leak between them) and reports
+them side by side:
 
     python scripts/perf/pad_tol_sweep.py --mol cubane
     python scripts/perf/pad_tol_sweep.py --mol water --tols 0.25 1.0 inf
 
-Read the output as a trade, not a winner: `classes` and `xla_s` and `host_gb`
-should fall together, `warm_ms` and `dev_gb` should rise, and the question is
-where the knee is.
-"""
+``classes``, ``xla_s`` and ``host_gb`` fall together as the budget rises;
+``warm_ms`` and ``dev_gb`` rise. The question is where the knee is. On an A100
+the binding constraints are XLA time and host RSS during compilation, not
+device memory, which has ~78 GiB of headroom on the molecules this reaches."""
 
 from __future__ import annotations
 

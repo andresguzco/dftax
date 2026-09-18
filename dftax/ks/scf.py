@@ -319,11 +319,9 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
             P = jnp.einsum("smi,si,sni->smn", Co, f, Co)  # aufbau fill
         return P, C, eps
 
-    # No energy at P0: the loop now evaluates the energy at the same density
-    # that produces the Fock, so the first iteration's `de` must compare
-    # against something that cannot look converged. An actual E(P0) here would
-    # make de exactly zero on iteration 0 and hand convergence to any guess
-    # whose commutator happened to be small.
+    # Infinity, not E(P0): the loop evaluates the energy at the density that
+    # produces the Fock, so an actual E(P0) would make `de` zero on iteration 0
+    # and hand convergence to any guess with a small commutator.
     e0 = jnp.array(jnp.inf, dtype=P0.dtype)
     # C/eps placeholders: the body always runs at least one iteration
     # (``converged`` starts False), which overwrites them.
@@ -349,9 +347,6 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
         it, P, C, eps, e_prev, _, _, dF, dErr = st[:9]
         # One call, not `grad(electronic)` beside `total`: on the streaming
         # backends those walk the quadrature twice (see KS.energy_and_fock).
-        # `e_here` is the energy at the density that produced this Fock, so
-        # the convergence test below compares consecutive *consistent* pairs
-        # rather than straddling an update.
         e_here, F = ks.energy_and_fock(P, idempotent=smear_sigma is None)
         err = X.T @ (F @ P @ S - S @ P @ F) @ X          # (nspin, nmo, nmo)
         derr = jnp.linalg.norm(err)
@@ -375,10 +370,8 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
             F_ext = jnp.where(derr > adiis_switch, F_adiis, F_ext)
 
         de = e_here - e_prev
-        # Both halves of the test now describe the same density: `derr` is the
-        # commutator at P and `de` the step in E(P) since the previous
-        # iteration's density. The old body tested `derr` at P against an
-        # energy difference that straddled the update.
+        # Both halves describe the same density: `derr` is the commutator at
+        # P, `de` the step in E(P) since the previous iteration's density.
         converged = (jnp.abs(de) < e_tol) & (derr < d_tol)
         F_ls = F_ext + level_shift * (S - inv_w * (S @ P @ S))   # raise virtuals
         P, C, eps = make_density(F_ls)
@@ -394,9 +387,7 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
     final = lax.while_loop(cond, body, state0)
     it, P, C, eps, _e_at_prev, _, converged = final[:7]
     # The loop's energy belongs to the density that produced the last Fock,
-    # while `P` is the one built from it, so the reported energy is taken at
-    # the returned density. One extra evaluation per solve, against one saved
-    # per iteration.
+    # while `P` is the one built from it, so report the energy at `P`.
     e_prev = ks.total(P)
     # Mermin free energy under smearing: subtract the electronic entropy term
     # from the converged KS energy so the reported energy is the variational
@@ -413,21 +404,10 @@ def _reject_smeared_frozen_exchange(ks, smearing):
     """Refuse fractional occupations on a backend whose exchange assumes none.
 
     The streamed RI-K recovers occupied orbitals from ``P`` and treats the top
-    ``nocc`` of them as fully occupied (see
+    ``nocc`` as fully occupied (see
     :func:`~dftax.ks.terms._streamed_df_rik`), which is exact at an idempotent
-    density and silently wrong at a smeared one: the exchange energy and the
-    Fock it hands back describe an integer-occupied density instead.
-
-    Measured on water/sto-3g/PBE0 against the materialized backend, which does
-    not make the assumption: 7.1e-6 Ha apart without smearing (the expected
-    cartesian-vs-spherical auxiliary span difference) and **1.4e-3 Ha** apart
-    with ``fermi(sigma=0.05)``, with the solve reporting ``converged=True``
-    both times. A wrong answer that converges is the failure worth refusing
-    over.
-
-    ``dftax.ks.forces`` already rejects this combination for the same reason;
-    the SCF simply never enforced it. Use ``df(chunk=None)`` (materialized) for
-    smeared hybrids, which is what ``forces`` tells callers too.
+    density and silently wrong at a smeared one. Use ``df(chunk=None)``
+    (materialized) for smeared hybrids, as ``dftax.ks.forces`` also requires.
     """
     if smearing is None:
         return

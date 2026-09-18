@@ -226,8 +226,6 @@ def _streamed_e_xc(xc, basis, coords, weights, P, chunk,
     mgga = xc.xc_type == "MGGA"
 
     def point(r, w):
-        # one pass for value and gradient; the pair of calls this replaces
-        # evaluated the basis five times over (see eval_gto_and_grad)
         if gga or mgga:
             ao_g, dao_g = eval_gto_and_grad(basis, r)   # (nao,), (nao, 3)
         else:
@@ -247,9 +245,8 @@ def _streamed_e_xc(xc, basis, coords, weights, P, chunk,
             eps = xc(safe_rho)
         return jnp.where(mask, w * eps * rho, 0.0)
 
-    # checkpoint=False when the caller is taking the VJP of this whole call
-    # (see _streamed_e_and_v): rematerializing inside it would reintroduce
-    # exactly the second traversal the VJP was moved out here to avoid.
+    # checkpoint=False when the caller takes the VJP of this whole call
+    # (_streamed_e_and_v): rematerializing inside it would undo the saving.
     contribs = _chunked_vmap(
         point, in_axes=(0, 0), chunk_size=chunk, checkpoint=checkpoint
     )(coords, weights)
@@ -272,7 +269,7 @@ def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk,
 
     def point(r, w):
         if gga or mgga:
-            ao, dao = eval_gto_and_grad(basis, r)               # one pass
+            ao, dao = eval_gto_and_grad(basis, r)
         else:
             ao = eval_gto(basis, r)                             # (nao,)
         rho_a = ao @ Pa @ ao
@@ -611,16 +608,9 @@ def _rik_kmatrix_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
 def _rik_gmat_slabs(basis, aux_basis, slabs, C, omega=None):
     """Half-transformed 3-center ``G_{X,m,i} = Σ_l (ml|X) C_li``, by aux slab.
 
-    The slab's ``(nao, nao, k)`` block is built once through the bucketed
-    kernels and contracted against *every* occupied orbital before being
-    dropped. :func:`_rik_bmj`, which this replaces, rebuilt the whole
-    ``nao²·naux`` tensor **once per occupied orbital** through the flat
-    per-element engine, so the streamed RI-K did O(nocc) times the integral
-    work it needed, with the slow kernel.
-
-    Memory is O(naux·nao·nocc) for the result plus O(slab·nao²) in flight,
-    against O(nao²·naux) for the materialized tensor: smaller by nao/nocc,
-    which is the point of the streamed backend.
+    Each slab's ``(nao, nao, k)`` block is built once, contracted against every
+    occupied orbital, and dropped. Memory is O(naux·nao·nocc) for the result
+    plus O(slab·nao²) in flight.
     """
     return jnp.concatenate([
         jnp.einsum("mnk,ni->kmi", _aux_slab_tensor(basis, aux_basis, sl,
@@ -632,31 +622,19 @@ def _rik_gmat_slabs(basis, aux_basis, slabs, C, omega=None):
 def _rik_slabs(basis, aux_basis, int2c_inv, Cocc, slabs, omega=None):
     """``(raw exchange energy, raw exchange kernel KK)`` from one slab pass.
 
-    One quantity yields both. With ``G_X = T_X C`` and ``D_X = Cᵀ G_X``,
+    With ``G_X = T_X C``,
 
-        KK_mn = Σ_XY V⁻¹_XY (G_X G_Yᵀ)_mn
-        E_raw = Σ_XY V⁻¹_XY Tr(D_X D_Y) = Tr(Cᵀ KK C),
+        KK_mn = Σ_XY V⁻¹_XY (G_X G_Yᵀ)_mn,   E_raw = Tr(Cᵀ KK C),
 
     so the energy is a contraction of the kernel and needs no second pass over
-    the integrals. That matters twice over here: the ``custom_vjp`` in
-    :func:`_streamed_df_rik` used to build every slab in its forward for the
-    energy and then build them all again in its backward for the kernel, which
-    is double the integral work *and* double the compiled graphs, on a path
-    whose compile already dwarfs its runtime (22 minutes of compilation for a
-    three-atom case that then evaluates in 23 ms).
+    the integrals.
 
-    No cart2sph, unlike the flat :func:`_rik_energy`. That one contracts
-    cartesian elements from ``_eri3c_elem`` and has to lift ``Cocc`` into the
-    cartesian span; the bucketed slab builder already transforms each class to
-    spherical harmonics, so its tensor is in the basis ``Cocc`` is in (which
-    is why :func:`_streamed_df_rik_frozen` passes ``Zs`` straight through).
+    No cart2sph, unlike the flat :func:`_rik_energy`: the bucketed slab builder
+    already returns each class in the spherical basis ``Cocc`` is in.
     """
     G = _rik_gmat_slabs(basis, aux_basis, slabs, Cocc, omega)  # (naux,n,nocc)
     naux, n, nocc = G.shape
-    # H_X = Σ_Y V⁻¹_XY G_Y, then KK = Σ_X G_X H_Xᵀ. Applying the metric once
-    # to the half-transformed tensor is the naux² term; doing it per orbital
-    # (as _rik_bmj did) costs the same arithmetic on top of nocc times the
-    # integrals.
+    # H_X = Σ_Y V⁻¹_XY G_Y, then KK = Σ_X G_X H_Xᵀ.
     H = (int2c_inv @ G.reshape(naux, -1)).reshape(naux, n, nocc)
     KK = jnp.einsum("xmi,xni->mn", G, H)
     return jnp.vdot(Cocc, KK @ Cocc), KK
@@ -715,11 +693,9 @@ def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
         return energy_pref * _energy(Cocc)
 
     def fwd(P):
-        # The residual is the exchange kernel, not the orbitals: on the slab
-        # path one pass yields both (see _rik_slabs), so stashing KK here
-        # leaves the backward with no integral work at all. The flat and
-        # sharded paths keep their two-pass shape, so they stash the orbitals
-        # and rebuild, exactly as before.
+        # On the slab path one pass yields energy and kernel together, so
+        # stashing KK leaves the backward with no integral work. The flat and
+        # sharded paths stash the orbitals and rebuild.
         Cocc = _rik_occ_orbitals(P, S, nocc, dscale)
         if slabs is not None and devices is None:
             e_raw, KK = _rik_slabs(basis, aux_basis, int2c_inv, Cocc, slabs,
@@ -810,21 +786,10 @@ def _exchange_quadratic(kfun, P, ax):
 def _rik_materialized(int3c, int2c_inv, Cocc):
     """``(raw exchange energy, kernel KK)`` from a materialized 3-center tensor.
 
-    The occupied-orbital form of the same quantity ``DFCoulomb.energy``
-    contracts out of the density. With ``G_X = T_X C`` and ``D_X = Cᵀ G_X``,
-
-        KK_mn = Σ_XY V⁻¹_XY (G_X G_Yᵀ)_mn,   E_raw = Tr(Cᵀ KK C),
-
-    which is the identity :func:`_rik_slabs` uses on the streamed path.
-
-    Why it is cheaper than ``einsum("mlP,PQ,nsQ,ls->mn")``. That contraction's
-    optimal path opens with ``PQ,mlP->Qml`` at naux²·nao², which is 69% of its
-    flops *and* is independent of the density, so the SCF recomputes it every
-    iteration; the remaining two steps are nao³·naux each. Routing through the
-    occupied orbitals replaces nao by nocc in every one of those: naux²·nao·nocc
-    plus two nao²·nocc·naux. On cubane/def2-svp (nao 152, naux 744, nocc 28)
-    that is 1.8e10 flops against 3.3e9, a factor of 5.4, and it grows with the
-    virtual space.
+    The occupied-orbital form of what ``DFCoulomb.energy`` contracts out of the
+    density, using the same identity as :func:`_rik_slabs`. Routing through the
+    orbitals replaces nao by nocc in every contraction step, so it scales with
+    the occupied space rather than the full basis.
     """
     G = jnp.einsum("mlX,li->Xmi", int3c, Cocc)              # (naux, nao, nocc)
     naux, n, no = G.shape
@@ -853,18 +818,14 @@ class CoulombTerm(eqx.Module):
     def energy_and_potential(self, P, S, nocc, idempotent: bool = True):
         """``(E, ∂E/∂P)``, sharing work between them where the backend can.
 
-        The SCF wants both at the same density every iteration. The default is
-        plain reverse mode, which is what every consumer outside the SCF
-        (forces, the Hessian, Newton, minimize) keeps using; backends override
-        it where they can do better.
+        The default is plain reverse mode; backends override it where they can
+        do better. Only the SCF calls this, and every other consumer (forces,
+        the Hessian, Newton, minimize) keeps using ``energy`` directly.
 
-        ``idempotent`` states that ``P`` is an integer-occupation projector,
-        which is true of an aufbau density and false under Fermi smearing.
-        Overrides that route exchange through recovered occupied orbitals are
-        exact only under that assumption and must fall back here when it does
-        not hold. It is an argument rather than something sniffed from ``P``
-        because the caller knows it for certain and a numerical idempotency
-        test would be a threshold nobody could defend.
+        ``idempotent`` states that ``P`` is an integer-occupation projector:
+        true of an aufbau density, false under Fermi smearing. Overrides that
+        route exchange through recovered occupied orbitals are exact only under
+        that assumption and fall back here when it does not hold.
         """
         return jax.value_and_grad(lambda Q: self.energy(Q, S, nocc))(P)
 
@@ -958,33 +919,23 @@ class DFCoulomb(CoulombTerm):
         """``(E, ∂E/∂P)`` with RI-J in closed form and RI-K through the
         occupied orbitals.
 
-        Neither half needs reverse mode. RI-J's derivative is exactly the
-        Coulomb matrix ``J = Σ_P (μν|P)(V⁻¹γ)_P`` it already builds γ for, and
-        RI-K goes through :func:`_rik_materialized`, whose analytic Fock is
-        ``grad_pref · KK`` (the same prefactor algebra
-        :func:`_streamed_df_rik` documents: for a closed shell ``P = 2CCᵀ``
-        gives ``K(P) = 2·KK`` so ``∂/∂P`` of ``-¼a_x Tr(P K(P))`` is
-        ``-a_x·KK``; per spin channel ``P_σ = C_σC_σᵀ`` gives ``-a_x·KK_σ``).
+        Neither half needs reverse mode. RI-J's derivative is the Coulomb
+        matrix ``J = Σ_P (μν|P)(V⁻¹γ)_P`` it already builds γ for, and RI-K
+        goes through :func:`_rik_materialized`, whose Fock is ``-a_x·KK`` per
+        spin channel (the prefactor algebra :func:`_streamed_df_rik` sets out).
 
-        Falls back to the base class whenever the occupied-orbital route would
-        be a lie: at fractional occupations ``P`` is not a projector, the
-        orbitals recovered from it are not the whole density, and the exchange
-        would describe an integer-occupied system (measured at 1.4e-3 Ha on
-        the streamed backend, which is why ``scf`` now refuses that
-        combination outright).
+        Falls back to the base class at fractional occupations, where ``P`` is
+        not a projector and the recovered orbitals are not the whole density.
         """
         if not idempotent:
             return super().energy_and_potential(P, S, nocc, idempotent)
 
         Ptot = jnp.sum(P, axis=0)
         gamma = jnp.einsum("mnP,mn->P", self.int3c, Ptot)
-        # Symmetrized on purpose. d/dγ of ½γᵀV⁻¹γ is ½(V⁻¹ + V⁻¹ᵀ)γ, and
-        # _metric_pinv builds (U·w⁻¹)Uᵀ, which is symmetric only to rounding.
-        # The quadratic form hides that in the *energy* (the antisymmetric
-        # part cancels), so ½γ·Vg below is unchanged, but the gradient sees it
-        # and the metric's kept band amplifies it: taking V⁻¹γ here put the
-        # Fock 2e-10 away from the reverse-mode reference on CH3/PBE, over
-        # the gate's 1e-10 invariant. One extra matvec on a naux-vector.
+        # Symmetrized on purpose: d/dγ of ½γᵀV⁻¹γ is ½(V⁻¹ + V⁻¹ᵀ)γ, and
+        # _metric_pinv builds (U·w⁻¹)Uᵀ, symmetric only to rounding. The
+        # energy's quadratic form cancels the antisymmetric part; the gradient
+        # does not, and the metric amplifies it. One extra naux matvec.
         Vg = 0.5 * (self.int2c_inv @ gamma + gamma @ self.int2c_inv)
         e = 0.5 * jnp.dot(gamma, Vg)
         J = jnp.einsum("mnP,P->mn", self.int3c, Vg)      # ∂E_J/∂P_σ, every σ
@@ -1004,10 +955,7 @@ class DFCoulomb(CoulombTerm):
                 # stop_gradient for the same reason _streamed_df_rik keeps
                 # its orbital extraction inside a custom_vjp: the eigh behind
                 # it has 1/(w_i - w_j) in its backward and the occupied
-                # eigenvalues are degenerate by construction. Nothing
-                # differentiates this method today (only the SCF loop calls
-                # it), and this makes that a property of the code rather than
-                # of who happens to call it.
+                # eigenvalues are degenerate by construction.
                 C = jax.lax.stop_gradient(
                     _rik_occ_orbitals(P[sigma], S, n, dscale))
                 raw, KK = _rik_materialized(t3, vinv, C)
@@ -1137,8 +1085,7 @@ class StreamedDFCoulomb(CoulombTerm):
     hf_coeff_lr: float = eqx.field(static=True, default=0.0)
     omega: float = eqx.field(static=True, default=0.0)
     # Shell-aligned auxiliary slab plans. None falls back to the per-element
-    # streaming below, which is the engine the bucketed build replaced
-    # everywhere else and is kept only for a term constructed without plans.
+    # streaming below.
     slab_plans: tuple | None = eqx.field(static=True, default=None)
 
     def _rik_sum(self, e, P, S, nocc, metric_inv, ax, omega):
@@ -1159,9 +1106,7 @@ class StreamedDFCoulomb(CoulombTerm):
     def energy(self, P, S, nocc):
         Ptot = jnp.sum(P, axis=0)
         if self.slab_plans is not None:
-            # One bucketed build per shell-aligned aux slab, contracted and
-            # dropped, instead of one flat per-element lookup per auxiliary
-            # function. Same value, same O(slab·nao²) memory.
+            # One bucketed build per aux slab, contracted and dropped.
             e = _streamed_df_rij_slabs(
                 self.basis, self.aux_basis, self.int2c_inv, Ptot,
                 self.slab_plans,
@@ -1340,29 +1285,17 @@ class XCTerm(eqx.Module):
     ) -> tuple[Scalar, Float[Array, "nspin nao nao"]]:
         """``(E_xc, ∂E_xc/∂P)`` in as few grid traversals as the backend allows.
 
-        The SCF needs both every iteration, and asking for them separately
-        costs two traversals of the quadrature on the streaming backends. The
-        cause is not ``grad`` being wasteful, it is ``jax.checkpoint``: the
-        streamed and screened kernels rematerialize each block in the backward
-        pass to keep memory at O(block·nsub), so ``grad`` computes the grid
-        once for the rematerialization while the separate energy call computes
-        it again. Measured on cubane/def2-svp on an A100, ``fock`` 34.1 ms
-        plus ``total`` 22.4 ms, against 33.3 ms for the gradient alone.
+        On the streaming backends, asking for the energy and the potential
+        separately costs two traversals: their kernels are checkpointed to hold
+        memory at O(block·nsub), so the backward rematerializes the grid and
+        the energy call walks it again. ``value_and_grad`` does not help, since
+        the checkpoint recomputes regardless. Taking the VJP per block does,
+        and those backends override this default. ``GridXC`` holds the AO
+        values already, so reverse mode is one traversal here by construction.
 
-        ``value_and_grad`` does not fix this (measured: it costs exactly the
-        sum, because the checkpoint recomputes regardless). What fixes it is
-        taking the VJP *per block*, where the residuals are small enough to
-        keep, so one traversal yields both. Backends that stream override this
-        default; for the materialized ``GridXC`` there is nothing to fix,
-        since it holds the AO values already and ``value_and_grad`` is one
-        traversal by construction.
-
-        Deliberately *not* a ``custom_vjp`` on ``energy``. A custom VJP in
-        ``P`` reports a zero cotangent for the basis and the grid, which is
-        silently wrong for :func:`dftax.ks.forces.forces` (it differentiates
-        the same term with respect to the nuclear coordinates). Keeping this
-        as a separate entry point that only the SCF calls leaves the
-        autodiff path everything else uses exactly as it was.
+        Deliberately *not* a ``custom_vjp`` on ``energy``: a custom VJP in
+        ``P`` reports a zero cotangent for the basis and the grid, which would
+        be silently wrong for :func:`dftax.ks.forces.forces`.
         """
         return jax.value_and_grad(self.energy)(P)
 
@@ -1513,17 +1446,7 @@ def _screened_sub_basis(basis, cart, cmask, sph):
     if basis.cart2sph is not None:
         sub = eqx.tree_at(lambda t: t.cart2sph, sub,
                           basis.cart2sph[cart][:, sph])
-    # Drop the parent's static shell records. They are row offsets into the
-    # *unscreened* basis, and `cart` is a dynamic gather (deliberately a
-    # pytree leaf, see ScreenBucket), so the sub-basis's own shell layout is
-    # not knowable at trace time and the inherited records would be silently
-    # wrong. Nothing on the hot path reads them (eval_gto and
-    # eval_gto_and_grad are both per-AO; see the measurement recorded in
-    # eval_gto_and_grad), but _eval_gto_shells does, and a stale plan there
-    # would be a wrong answer rather than an error.
-    import dataclasses
-
-    return dataclasses.replace(sub, shells=None)
+    return sub
 
 
 def _screened_rho_block(basis, P, cart, sph, cmask, smask, pts, need_grad):
@@ -1585,9 +1508,7 @@ def _screened_block_e(xc, basis, P, cart, sph, cm, sm, pts, w, gga, mgga,
                       need):
     """Closed-shell XC energy of one screened grid block.
 
-    Extracted so the energy-only path (:func:`_screened_e_xc`) and the
-    energy-plus-potential path (:func:`_screened_e_and_v`) integrate the same
-    expression rather than two copies of it that can drift apart.
+    Shared by :func:`_screened_e_xc` and :func:`_screened_e_and_v`.
     """
     rho, grad, tau = _screened_rho_block(basis, P, cart, sph, cm, sm, pts,
                                          need)
@@ -1649,15 +1570,10 @@ def _screened_block_e_spin(xc, basis, Pa, Pb, cart, sph, cm, sm, pts, w, gga,
 def _sum_e_and_v(piece, P, xs, init_v=None):
     """``(Σ_i e(P, x_i), Σ_i ∂e/∂P)`` in one traversal.
 
-    The pattern every streaming XC backend needs. ``jax.vjp`` on one piece
-    keeps that piece's residuals alive only while its backward consumes them,
-    which is the same O(piece) working set ``jax.checkpoint`` was buying, but
-    without the second forward pass: the checkpointed energy throws the
-    residuals away and recomputes them, so asking for the energy and the
-    potential separately walks the grid twice.
-
-    The potential accumulates in the ``scan`` carry rather than coming back
-    stacked: one (nspin, nao, nao) accumulator against one per piece.
+    ``jax.vjp`` on one piece keeps that piece's residuals alive only while its
+    backward consumes them: the same O(piece) working set ``jax.checkpoint``
+    buys, without the second forward pass. The potential accumulates in the
+    ``scan`` carry rather than coming back stacked.
     """
     v0 = jnp.zeros_like(P) if init_v is None else init_v
 
@@ -1674,9 +1590,8 @@ def _sum_e_and_v(piece, P, xs, init_v=None):
 def _streamed_e_and_v(xc, basis, coords, weights, P, chunk):
     """``(E_xc, ∂E_xc/∂P)`` from one pass over the streamed grid chunks.
 
-    The closed-shell sibling of :func:`_screened_e_and_v` for the unscreened
-    streaming backend. Same chunking as :func:`_streamed_e_xc`, with the
-    chunk's VJP taken where its residuals still exist.
+    Same chunking as :func:`_streamed_e_xc`, with each chunk's VJP taken where
+    its residuals still exist.
     """
     ng = coords.shape[0]
     nchunk = max(1, min(int(chunk), ng))
@@ -1700,10 +1615,9 @@ def _streamed_e_and_v(xc, basis, coords, weights, P, chunk):
              weights[:n_full * nchunk].reshape(n_full, nchunk)),
         )
     if tail:
-        # The remainder is its own single piece rather than padded: a padded
-        # point carries a real basis value at a fake position, and only its
-        # zero weight keeps it out of the sum, which is a fragile thing to
-        # rely on inside a VJP.
+        # The remainder is its own piece rather than padded: a padded point
+        # carries a real basis value at a fake position, kept out of the sum
+        # only by its zero weight, which is fragile inside a VJP.
         ct, wt = coords[n_full * nchunk:], weights[n_full * nchunk:]
         e_t, pull = jax.vjp(
             lambda Q: (_streamed_e_xc(xc, basis, ct, wt, Q[0], tail,
@@ -1720,17 +1634,9 @@ def _streamed_e_and_v(xc, basis, coords, weights, P, chunk):
 def _screened_e_and_v(xc, basis, coords, weights, P, buckets, block, n_block):
     """``(E_xc, ∂E_xc/∂P)`` from one traversal of the screened grid.
 
-    Same quadrature as :func:`_screened_e_xc`, and the same per-block memory,
-    but the block's VJP is taken where its residuals still exist instead of
-    being thrown away and rematerialized. ``jax.vjp`` on the block keeps
-    O(block·nsub) alive inside that block only, which is what the
-    ``jax.checkpoint`` in the energy-only path was buying; the difference is
-    that here the backward consumes the residuals immediately rather than
-    recomputing them, so the grid is walked once instead of twice.
-
-    The potential accumulates in a ``scan`` carry rather than coming back
-    stacked from ``lax.map``: one (nao, nao) accumulator against one per
-    block.
+    Same quadrature and same per-block memory as :func:`_screened_e_xc`, with
+    each block's VJP taken where its residuals still exist. The potential
+    accumulates in a ``scan`` carry rather than coming back stacked.
     """
     gga = xc.xc_type == "GGA"
     mgga = xc.xc_type == "MGGA"
@@ -1743,10 +1649,8 @@ def _screened_e_and_v(xc, basis, coords, weights, P, buckets, block, n_block):
     for bucket in buckets:
         def body(Q, args):
             cart, sph, cm, sm, i = args
-            # Q is the spin-stacked density: the VJP is taken against the
-            # whole (1, nao, nao) so its transpose scatters the block's
-            # contribution straight into the potential, with no per-block
-            # index bookkeeping here.
+            # Q is the spin-stacked density, so the VJP's transpose scatters
+            # each block's contribution back with no index bookkeeping.
             if Q.shape[0] == 1:
                 return _screened_block_e(xc, basis, Q[0], cart, sph, cm, sm,
                                          cg[i], wg[i], gga, mgga, need)
@@ -1830,9 +1734,6 @@ class ScreenedGridXC(XCTerm):
                                    self.block, self.n_block)
 
     def energy_and_potential(self, P):
-        # The VJP is taken against the whole spin-stacked density, so the
-        # per-block gather's transpose scatters each block's contribution
-        # back with no index bookkeeping, for either shell structure.
         return _screened_e_and_v(
             self.xc, self.basis, self.grid_coords, self.weights, P,
             self.buckets, self.block, self.n_block,

@@ -1,23 +1,12 @@
-"""The native (BSE) basis loader against PySCF's, for a *generally contracted*
+"""The native (BSE) basis loader against PySCF's, for a generally contracted
 basis.
 
-``test_native_pipeline`` validates the loader on sto-3g only, where BSE and
-PySCF ship the same segmented contraction and every matrix matches elementwise.
-That leaves the interesting case untested: for cc-pVDZ the two ship genuinely
-different contractions of the same space. BSE gives carbon's s block as the
-canonical general contraction (nine primitives, three coefficient columns);
-PySCF's shipped file splits the diffuse primitive out (eight primitives, two
-columns, plus a one-primitive shell).
+For cc-pVDZ the two ship different contractions of the same space: BSE gives
+carbon's s block as the canonical general contraction, PySCF's file splits the
+diffuse primitive out. The invariant is therefore span equivalence, not matrix
+equality; the overlaps differ, the variational energy does not.
 
-The invariant is therefore **span equivalence, not matrix equality**. The
-overlap matrices differ, and their eigenvalues differ, because the individual
-basis functions differ; the space they span is the same, so a variational
-energy in it is the same. Asserting elementwise agreement here would be
-asserting something false, and asserting nothing would leave the flagship
-"PySCF-free" path unchecked on every cc-pVXZ-family basis.
-
-Measured when this was first characterized: water/cc-pVDZ/LDA on a matched
-grid, |dE| = 2.6e-11 Ha between the two loaders, while max|dS| = 0.30.
+``test_native_pipeline`` covers the segmented case (sto-3g) elementwise.
 """
 
 import jax.numpy as jnp
@@ -47,21 +36,12 @@ def _pair(basis_name):
 
 @pytest.mark.pyscf
 def test_segmented_basis_matches_to_the_data_precision():
-    """sto-3g is segmented in both, so this one *is* elementwise -- but only
-    to the precision at which each side publishes the basis, not to machine
-    precision.
+    """sto-3g is segmented in both, so this one is elementwise -- but only to
+    the precision at which each side publishes the basis. PySCF ships sto-3g
+    to 8 significant figures and BSE to 10, which puts ~1e-8 in the overlap.
 
-    PySCF ships sto-3g to 8 significant figures and BSE to 10:
-
-        exponent    BSE 130.7093214    PySCF 130.70932
-        coefficient BSE 0.1543289673   PySCF 0.15432897
-
-    A ~1e-8 relative difference in the parameters gives ~1e-8 in the overlap,
-    and 1.7e-8 is what this measures. Asserting 1e-12 here (as this test first
-    did) asserts agreement tighter than the data itself, which no loader could
-    deliver. The bound is worth pinning because it caps what *any*
-    cross-loader comparison can show: an energy difference below ~1e-8 Ha
-    between the two is data precision, not physics.
+    That bound caps what any cross-loader comparison can show: an energy
+    difference below ~1e-8 Ha between the two is data precision, not physics.
     """
     _pmol, native, pyscf_side = _pair("sto-3g")
     dS = float(jnp.max(jnp.abs(overlap_matrix(native)
@@ -73,8 +53,8 @@ def test_segmented_basis_matches_to_the_data_precision():
 
 @pytest.mark.pyscf
 def test_general_contraction_differs_elementwise():
-    """cc-pVDZ does not, and pinning that keeps the next reader from
-    'fixing' the loader to match PySCF row for row."""
+    """cc-pVDZ does not, and pinning that keeps the next reader from 'fixing'
+    the loader to match PySCF row for row."""
     _pmol, native, pyscf_side = _pair("cc-pvdz")
     Sn = np.asarray(overlap_matrix(native))
     Sp = np.asarray(overlap_matrix(pyscf_side))
@@ -89,11 +69,9 @@ def test_general_contraction_differs_elementwise():
 @pytest.mark.float64
 @pytest.mark.slow
 def test_general_contraction_spans_the_same_space():
-    """The invariant that actually matters: same span, same variational energy.
-
-    Both sides run through dftax, on one shared grid and the exact 4-center
-    backend, so the only difference is which contraction of cc-pVDZ was used.
-    """
+    """Same span, same variational energy. Both sides run through dftax on one
+    shared grid and the exact 4-center backend, so the only difference is which
+    contraction of cc-pVDZ was used."""
     from pyscf import dft
 
     pmol = gto.M(atom=H2O, basis="cc-pvdz").build()
@@ -109,7 +87,6 @@ def test_general_contraction_spans_the_same_space():
     e_pyscf = scf(KS(pmol, LDA(), grid=grid, coulomb=exact()),
                   guess=minao()).e_tot
 
-    # Two different bases spanning one space: the variational minimum in that
-    # space is the same number. 1e-8 is loose against the 2.6e-11 measured,
-    # because both sides stop at their own SCF tolerance.
+    # Loose against the 2.6e-11 measured, because both sides stop at their
+    # own SCF tolerance.
     assert abs(float(e_native) - float(e_pyscf)) < 1e-8

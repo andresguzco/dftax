@@ -1,13 +1,8 @@
 """Fractional occupations must not silently meet a frozen-orbital exchange.
 
 The streamed RI-K recovers occupied orbitals from ``P`` and treats the top
-``nocc`` as fully occupied. That is exact at an idempotent density and wrong
-at a smeared one, and it was wrong *quietly*: measured on water/sto-3g/PBE0
-against the materialized backend, 7.1e-6 Ha apart without smearing (the
-expected cartesian-vs-spherical auxiliary span difference) and 1.4e-3 Ha apart
-with ``fermi(sigma=0.05)``, with ``converged=True`` reported both times.
-
-``forces`` has always rejected the combination; the SCF did not.
+``nocc`` as fully occupied, which is exact at an idempotent density and wrong
+at a smeared one. ``scf`` refuses the combination, as ``forces`` already did.
 """
 
 import pytest
@@ -27,9 +22,8 @@ def _ks(xc, chunk):
 
 
 def test_smeared_streamed_hybrid_is_refused():
-    """Deliberately NOT marked slow: it raises before any solve, costs
-    milliseconds, and guards a wrong answer that reported convergence. That is
-    exactly what belongs in the default gate."""
+    """Not marked slow: it raises before any solve, so it costs milliseconds
+    and belongs in the default gate."""
     with pytest.raises(NotImplementedError, match="streamed RI-K"):
         scf(_ks(PBE0(), 32), guess=minao(), smearing=fermi(sigma=0.05),
             max_iter=1)
@@ -45,8 +39,8 @@ def test_smeared_streamed_pure_dft_is_allowed():
 
 @pytest.mark.slow
 def test_smeared_materialized_hybrid_is_allowed():
-    """The materialized backend contracts the density directly and makes no
-    idempotency assumption, so it is the route the error message points at."""
+    """The materialized backend contracts the density directly, which is the
+    route the error message points at."""
     res = scf(_ks(PBE0(), None), guess=minao(), smearing=fermi(sigma=0.05),
               max_iter=40)
     assert res.e_tot < 0.0

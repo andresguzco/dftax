@@ -27,11 +27,15 @@ def _ks(xc, chunk):
 
 
 def test_smeared_streamed_hybrid_is_refused():
+    """Deliberately NOT marked slow: it raises before any solve, costs
+    milliseconds, and guards a wrong answer that reported convergence. That is
+    exactly what belongs in the default gate."""
     with pytest.raises(NotImplementedError, match="streamed RI-K"):
         scf(_ks(PBE0(), 32), guess=minao(), smearing=fermi(sigma=0.05),
             max_iter=1)
 
 
+@pytest.mark.slow
 def test_smeared_streamed_pure_dft_is_allowed():
     """No exact exchange means no frozen orbitals, so nothing to refuse."""
     res = scf(_ks(PBE(), 32), guess=minao(), smearing=fermi(sigma=0.05),
@@ -39,6 +43,7 @@ def test_smeared_streamed_pure_dft_is_allowed():
     assert res.e_tot < 0.0
 
 
+@pytest.mark.slow
 def test_smeared_materialized_hybrid_is_allowed():
     """The materialized backend contracts the density directly and makes no
     idempotency assumption, so it is the route the error message points at."""
@@ -47,6 +52,7 @@ def test_smeared_materialized_hybrid_is_allowed():
     assert res.e_tot < 0.0
 
 
+@pytest.mark.slow
 def test_unsmeared_streamed_hybrid_still_runs():
     res = scf(_ks(PBE0(), 32), guess=minao(), max_iter=40)
     assert res.e_tot < 0.0

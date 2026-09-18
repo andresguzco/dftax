@@ -104,17 +104,24 @@ def _shell_bound(cen, ls, exps, coefs, lo, hi):
 
     Summing the per-primitive maxima bounds the maximum of the sum, so the test
     is conservative: a shell is never dropped while it still contributes.
+
+    One call per block was a python loop over every block in the grid; ``lo``
+    and ``hi`` carry a leading block axis so every block is bounded at once.
     """
+    lo = np.atleast_2d(lo)[:, None, :]          # (nblk, 1, 3)
+    hi = np.atleast_2d(hi)[:, None, :]
+    cen = cen[None, :, :]                       # (1, nshell, 3)
     near = np.maximum(np.maximum(lo - cen, cen - hi), 0.0)
-    dmin = np.sqrt((near * near).sum(1))[:, None]
+    dmin = np.sqrt((near * near).sum(2))[..., None]     # (nblk, nshell, 1)
     far = np.maximum(np.abs(lo - cen), np.abs(hi - cen))
-    dmax = np.sqrt((far * far).sum(1))[:, None]
-    live = exps > 0
+    dmax = np.sqrt((far * far).sum(2))[..., None]
+    live = exps > 0                             # (nshell, nprim)
     safe = np.where(live, exps, 1.0)
-    rstar = np.sqrt(ls[:, None] / (2.0 * safe))
+    rstar = np.sqrt(ls[:, None] / (2.0 * safe))[None]  # (1, nshell, nprim)
     rr = np.clip(rstar, dmin, dmax)
-    per = np.abs(coefs) * rr ** ls[:, None] * np.exp(-exps * rr * rr)
-    return np.where(live, per, 0.0).sum(1)
+    per = (np.abs(coefs)[None] * rr ** ls[None, :, None]
+           * np.exp(-exps[None] * rr * rr))
+    return np.where(live[None], per, 0.0).sum(2)       # (nblk, nshell)
 
 
 def plan_grid_screen(basis, coords, atom_coords, block=2048, cutoff=1e-10,
@@ -165,11 +172,11 @@ def plan_grid_screen(basis, coords, atom_coords, block=2048, cutoff=1e-10,
     width = (2 * ls + 1) if spherical else ncomp
     sph0 = np.concatenate([[0], np.cumsum(width)[:-1]])
 
-    keep = []
-    for b in range(n_block):
-        blk = pts[b * block:(b + 1) * block]
-        bound = _shell_bound(cen, ls, exps, coefs, blk.min(0), blk.max(0))
-        keep.append(np.nonzero(bound > cutoff)[0])
+    # All blocks bounded in one shot: the per-block python loop this replaces
+    # was ~0.1 s on cubane, against ~0.18 s for the integral builds themselves.
+    blk = pts.reshape(n_block, block, 3)
+    bounds = _shell_bound(cen, ls, exps, coefs, blk.min(1), blk.max(1))
+    keep = [np.nonzero(row > cutoff)[0] for row in bounds]
 
     counts = np.array([width[k].sum() for k in keep])
     # Group blocks of similar size, then pad each group to its own maximum.

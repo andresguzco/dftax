@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy as np
+import equinox as eqx
 import jax.numpy as jnp
 
 from dftax.system.molecule import symbol_to_Z
@@ -229,6 +230,7 @@ def becke_grid_size(
     )
 
 
+@eqx.filter_jit
 def becke_grid(
     symbols: list[str],
     coords_bohr,
@@ -247,6 +249,11 @@ def becke_grid(
     ``(n_grid,)``, differentiable w.r.t. ``coords_bohr``. Shapes depend only
     on ``symbols`` and the spec constants, so this can run under ``jit`` /
     ``vmap`` with traced coordinates.
+
+    Jitted: eagerly this dispatches one chunked partition per atom plus the
+    per-shell assembly, which measured ~0.26 s on cubane against ~0.18 s for
+    the integral builds. One compiled program per (symbols, spec) shape serves
+    every geometry, so a trajectory pays the compile once.
     """
     coords = jnp.asarray(coords_bohr).reshape(-1, 3)
     Zs = [symbol_to_Z(s) for s in symbols]

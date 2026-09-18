@@ -44,7 +44,6 @@ def _rss_gb() -> float:
 def run_one(tol: float, mol: str, basis: str, aux: str, repeat: int) -> dict:
     """One tolerance, in this process. The caller gives each its own."""
     import jax
-    import jax.numpy as jnp
     import equinox as eqx
 
     jax.config.update("jax_enable_x64", True)

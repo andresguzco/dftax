@@ -51,9 +51,7 @@ import equinox as eqx
 from jaxtyping import Array, Float, Scalar
 
 from dftax.energy.d3 import D3BJSpec, _resolve_dispersion
-from dftax.energy.gto import (
-    BasisData, extract_basis_data, eval_gto, eval_gto_and_grad,
-)
+from dftax.energy.gto import BasisData, extract_basis_data, eval_gto_and_grad
 from dftax.energy.xc import XCFunctional
 from dftax.grid import Becke, Points, becke, becke_grid
 from dftax.integrals import (
@@ -384,10 +382,7 @@ def ao_on_grid(
 ) -> tuple[Float[Array, "ng nao"], Float[Array, "ng nao 3"]]:
     """Atomic-orbital values and spatial gradients at grid points (pure JAX).
 
-    One pass, not two: ``eval_gto_and_grad`` shares the shell's exponentials
-    between the value and the gradient, where the previous ``eval_gto`` plus
-    ``jacfwd(eval_gto)`` pair evaluated the basis four times over (the primal
-    and three tangents) and measured 2.66x the cost of the value alone.
+    One pass, not two: see :func:`~dftax.energy.gto.eval_gto_and_grad`.
     """
     return jax.vmap(lambda r: eval_gto_and_grad(basis, r))(coords)
 

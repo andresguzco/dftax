@@ -36,7 +36,6 @@ import subprocess
 import sys
 import time
 
-import numpy as np
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -212,7 +211,6 @@ def terms(ks, P, grid_coords, aux):
     import equinox as eqx
     import jax
 
-    from dftax.ks.energy import ao_on_grid
     from dftax.integrals import eri3c_matrix
     from dftax.integrals.eri3c_bucketed import (
         overlap_kinetic_bucketed, plan_eri3c, plan_pairs,

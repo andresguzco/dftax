@@ -27,6 +27,8 @@ is the observable contract.
 from collections import defaultdict
 from functools import lru_cache
 
+from dftax.energy.gto import static_fingerprint
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -303,7 +305,37 @@ def _check_uniform_cart2sph(cart2sph, shells, sph_starts, what):
         seen.setdefault(l, blk)
 
 
-def plan_eri3c(basis, aux_basis, keep_pairs=None):
+# Bucket plans depend only on a basis's angular/exponent/coefficient
+# structure, never on the nuclear coordinates (see static_fingerprint), so a
+# trajectory, a conformer batch or a repeated solve rebuilds the same plan
+# every time. Planning is O(n^3) python and measured at ~1 s for cubane, so
+# the plans are memoized on that structure. Bounded, because a long-running
+# process may see many distinct bases.
+_PLAN_CACHE: dict = {}
+_PLAN_CACHE_MAX = 64
+
+
+def _plan_cached(key, build):
+    hit = _PLAN_CACHE.get(key)
+    if hit is not None:
+        return hit
+    val = build()
+    if len(_PLAN_CACHE) >= _PLAN_CACHE_MAX:
+        _PLAN_CACHE.clear()
+    _PLAN_CACHE[key] = val
+    return val
+
+
+def _keep_key(keep_pairs):
+    return None if keep_pairs is None else frozenset(keep_pairs)
+
+
+def clear_plan_cache() -> None:
+    """Drop every memoized bucket plan (tests that count planner calls)."""
+    _PLAN_CACHE.clear()
+
+
+def _plan_eri3c_uncached(basis, aux_basis, keep_pairs=None):
     """Static bucket plan for :func:`eri3c_matrix_bucketed`.
 
     Must be called where the basis metadata is concrete (KS.__init__, or a
@@ -374,6 +406,15 @@ def plan_eri3c(basis, aux_basis, keep_pairs=None):
     return (nao, naux, nao_sph, naux_sph, tuple(classes))
 
 
+def plan_eri3c(basis, aux_basis, keep_pairs=None):
+    """Memoized on basis structure; see :func:`_plan_cached`."""
+    key = (("eri3c", static_fingerprint(basis), static_fingerprint(aux_basis),
+            _keep_key(keep_pairs)))
+    return _plan_cached(key, lambda: _plan_eri3c_uncached(basis, aux_basis, keep_pairs))
+
+
+
+
 def slice_aux(aux_basis, lo, hi, slo, shi):
     """The auxiliary functions in cartesian rows ``lo:hi`` as a standalone
     BasisData. Shell-aligned only: a present ``cart2sph`` is block-diagonal
@@ -394,7 +435,7 @@ def slice_aux(aux_basis, lo, hi, slo, shi):
     return out
 
 
-def plan_aux_slabs(basis, aux_basis, max_fns, keep_pairs=None):
+def _plan_aux_slabs_uncached(basis, aux_basis, max_fns, keep_pairs=None):
     """Shell-aligned auxiliary slabs for the streamed DF contractions.
 
     Returns a tuple of ``(lo, hi, slo, shi, plan)`` per slab: cartesian row
@@ -428,6 +469,15 @@ def plan_aux_slabs(basis, aux_basis, max_fns, keep_pairs=None):
          plan_eri3c(basis, slice_aux(aux_basis, lc, hc, ls, hs), keep_pairs))
         for (lc, hc, ls, hs) in bounds
     )
+
+
+def plan_aux_slabs(basis, aux_basis, max_fns, keep_pairs=None):
+    """Memoized on basis structure; see :func:`_plan_cached`."""
+    key = (("slabs", static_fingerprint(basis), static_fingerprint(aux_basis),
+            int(max_fns), _keep_key(keep_pairs)))
+    return _plan_cached(key, lambda: _plan_aux_slabs_uncached(basis, aux_basis, max_fns, keep_pairs))
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +673,7 @@ def _compiled_class_kernel(la, lb, lc, anga, angb, angc, omega, chunk_size):
 # Phase 2: the traced build (jnp gathers only; jit/grad-safe)
 # ---------------------------------------------------------------------------
 
-def plan_pairs(basis):
+def _plan_pairs_uncached(basis):
     """Static bra-pair plan for :func:`nuclear_attraction_bucketed`.
 
     Same contract as :func:`plan_eri3c`: python ints only, computed where the
@@ -662,6 +712,14 @@ def plan_pairs(basis):
             tuple(rows_a), tuple(rows_b), npr,
         ))
     return (int(np.asarray(basis.angular).shape[0]), tuple(classes))
+
+
+def plan_pairs(basis):
+    """Memoized on basis structure; see :func:`_plan_cached`."""
+    key = (("pairs", static_fingerprint(basis)))
+    return _plan_cached(key, lambda: _plan_pairs_uncached(basis))
+
+
 
 
 def _make_pair_kernel(la, lb, anga, angb):

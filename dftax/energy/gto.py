@@ -360,6 +360,26 @@ def shell_records(angular, exponents) -> tuple:
     )
 
 
+def static_fingerprint(basis) -> tuple:
+    """Hashable digest of the metadata that fixes a basis's *structure*.
+
+    Angular momenta, exponents, contraction coefficients and whether a
+    spherical transform is attached. Centers are excluded on purpose: shell
+    layout, bucket plans and same-center overlaps do not depend on where the
+    atoms are, so a fingerprint that ignored geometry lets those results be
+    reused across a trajectory.
+
+    Eager only; the arrays must be concrete.
+    """
+    return (
+        np.ascontiguousarray(np.asarray(basis.angular)).tobytes(),
+        np.ascontiguousarray(np.asarray(basis.exponents)).tobytes(),
+        np.ascontiguousarray(np.asarray(basis.coefficients)).tobytes(),
+        None if basis.cart2sph is None else tuple(basis.cart2sph.shape),
+        int(basis.max_l),
+    )
+
+
 def _axis_powers(x, l: int):
     """``(n, l+1)`` with column ``i`` equal to ``x**i``, by multiplication.
 

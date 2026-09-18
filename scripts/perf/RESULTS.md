@@ -348,6 +348,96 @@ worth it. The measurement points elsewhere: **200 distinct classes for a
 three-atom molecule**, because each slab re-plans independently. The lever is
 the class count (`_PAD_TOL`, and planning slabs jointly), not the keying.
 
+## Phase 4: where compile time actually goes
+
+Measured only after fixing the instrument. `measure()` asked for
+`fn.trace(*args).lower()`; `eqx.filter_jit` has `.lower()` but no `.trace()`,
+so the call raised for every term, a bare `except` swallowed it, and the
+"trace/compile split" column printed `nan` for the whole campaign.
+
+With it working, cold cache, A100:
+
+| | trace(+lower) | XLA | XLA share |
+|---|---:|---:|---:|
+| water `int3c` | 7.6 s | 79.4 s | 91% |
+| cubane `int3c` | 11.0 s | 125.1 s | 92% |
+| cubane `xc_g` | 0.7 s | 10.1 s | 94% |
+| water streamed `jk_ev` | 121.8 s | 406.1 s | 77% |
+
+`BENCHMARKS.md` states the cold build "splits about evenly between Python
+tracing of the 45 shell-class kernels and XLA compiling the result". It does
+not: it is roughly **10:1 XLA**. Two things follow. The fix for compile is
+fewer and simpler *programs*, not smaller Python graphs. And the compilation
+cache, which stores XLA output, removes **~83%** of a cold build (cubane
+`int3c`: 132.7 s cold cache against 23.3 s warm), not "roughly the second
+half".
+
+The class count is set by the basis, not the molecule: water/def2-svp
+(3 atoms, nao 24) has **177** 3-center classes and cubane (16 atoms, nao 152)
+has **202**. So compile cost is roughly constant in system size while runtime
+grows, which is why it dominates so badly at small and medium sizes.
+
+### `_PAD_TOL` re-derived
+
+The constant trades padded primitive work for class count, and was set to 0.25
+because *device scratch* was the constraint: "0.5 buys 60 s of compile and
+gives back 5.3 GiB, which is the wrong trade when peak memory is what caps the
+molecules this engine can reach." This campaign measured that premise false in
+both directions -- what caps a molecule is **host** RSS during compilation
+(coronene dies at 31.6 GB host, 1.45 GiB device) and device memory is
+abundant. Swept on cubane/def2-svp, fresh process per value
+(`scripts/perf/pad_tol_sweep.py`):
+
+| tol | classes | padded | trace s | XLA s | warm ms | dev GiB | host GiB |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0 | 297 | 3.10e6 | 68.9 | 189.3 | 63.70 | 1.26 | 7.75 |
+| 0.25 | 202 | 3.66e6 | 53.0 | 134.7 | 65.24 | 1.30 | 6.54 |
+| **0.5** | 161 | 4.37e6 | 45.4 | **113.1** | **63.64** | 1.41 | **5.85** |
+| 1.0 | 128 | 5.51e6 | 36.4 | 91.9 | 78.52 | 1.53 | 5.13 |
+| 2.0 | 94 | 7.77e6 | 28.8 | 73.9 | 95.51 | 1.93 | 4.40 |
+| inf | 45 | 3.41e7 | 15.9 | 44.5 | 209.36 | 2.50 | 3.21 |
+
+The knee is at **0.5**, and 0.25 → 0.5 is free on every axis that binds: XLA
+−16%, host RSS −11%, trace −14%, warm runtime unchanged (63.64 against 65.24,
+within noise), for +0.11 GiB of device memory out of 80. Past it runtime
+starts paying: +23% at 1.0, 3.3x at unbounded.
+
+**Landed at 0.5, and the prediction held on the real build** -- the first time
+in this campaign that one did. Measured end to end after the change:
+
+| | before | after | |
+|---|---:|---:|---:|
+| water `int3c` trace | 7.6 s | 6.2 s | −18% |
+| water `int3c` XLA | 79.4 s | **65.2 s** | **−18%** |
+| water `int3c` warm | 13.93 ms | **10.83 ms** | **−22%** |
+| cubane `int3c` trace | 11.0 s | 9.5 s | −14% |
+| cubane `int3c` XLA | 125.1 s | **109.0 s** | **−13%** |
+| cubane `int3c` warm | 65.50 ms | 64.01 ms | −2% |
+| cubane device peak | 1.58 GiB | 1.68 GiB | +6% |
+
+Against the sweep's prediction of XLA −16%, trace −14%, execution unchanged
+and +0.11 GiB device. Execution did not merely hold: water got 22% *faster*,
+which is the campaign's central finding showing up again -- fewer, wider fused
+kernels win on this device, so merging classes pays twice.
+
+Validated with 58 integral tests against the flat oracle and PySCF, and a
+regenerated 9-case baseline with the fast-path invariant clean.
+
+The one thing that moved and needed a decision: `forces_df` came back 2.63e-07
+on forces against a 1e-8 tolerance. That tolerance was never achievable for a
+change that reorders a contraction, and `_metric_pinv` already says so -- a
+matched-density comparison across contraction orders agrees to "~2e-9 (H2) to
+~5e-7 (water) with the overcomplete jkfit metric". This case is water with
+jkfit; correcting `boys()` moved it 2.87e-07 the day before. The tolerance is
+now the codebase's own number (1e-6), which is a correction rather than a
+widening.
+
+**Still unverified: penicillin.** The docstring rejected 0.5 there on a 5.3 GiB
+scratch jump from one sulfur-sized class being re-admitted, and cubane shows
+no such jump (+0.10 GiB). Penicillin needs more host memory to trace than a
+32 GB allocation provides -- which is the problem this change is aimed at --
+so that specific case waits for a larger node.
+
 ## What the gate learned about itself
 
 `scripts/perf/parity_gate.py` compares at a **fixed density**, not at a

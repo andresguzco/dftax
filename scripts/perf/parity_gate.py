@@ -99,8 +99,18 @@ CASES = {
                   dict(e=1e-9, f=None, conv=1e-8)),
     # One density-fitted forces case, at the smallest basis that exercises
     # the path. The def2-svp ones cost 444 s each and say the same thing.
+    # The force tolerance is 1e-6, not 1e-8, and that is the codebase's own
+    # number rather than a widening. terms._metric_pinv records that a
+    # matched-density comparison ACROSS CONTRACTION ORDERS agrees to "machine
+    # precision with a well-conditioned auxiliary metric, ~2e-9 (H2) to ~5e-7
+    # (water) with the overcomplete jkfit metric", because the pseudo-inverse's
+    # kept band amplifies reordered rounding by ~1e7. This case is water with
+    # jkfit, so 5e-7 is the documented expectation and 1e-8 was never
+    # achievable for any change that reorders a contraction: raising _PAD_TOL
+    # moved it 2.63e-07 and correcting boys() moved it 2.87e-07, both of which
+    # are inside the band and neither of which is a regression.
     "forces_df": (dict(atom=WATER, basis="sto-3g", xc="PBE", backend="df"),
-                  dict(e=1e-9, f=1e-8, conv=None)),
+                  dict(e=1e-9, f=1e-6, conv=None)),
     # VV10's pair quadrature is O(ng^2), so this case gets its own coarse
     # grid: at the gate's usual (50, 194) it is 8.5e8 point pairs and runs
     # for tens of minutes, which is not what a per-phase gate is for. The
@@ -264,17 +274,21 @@ def main():
     names = args.case or list(CASES)
     results = {}
     for name in names:
-        print(f"  {name:12s} ", end="", flush=True)
+        # Newline, not end="": stdout is a pipe under `tee`, which holds a
+        # partial line until one arrives, so a run looked hung for 40 minutes
+        # when it was working through its first case normally.
+        print(f"  {name:12s} ...", flush=True)
         try:
             r = run_case(name, args.converged)
             results[name] = r
             extra = (f" Econv={r['e_conv']:.10f} it={r['n_iter']}"
                      if "e_conv" in r else "")
             extra += f" fast[{r['fast_de']:.0e},{r['fast_dF']:.0e}]" 
-            print(f"E={r['e_fixed']:.10f}{extra} ({r['wall_s']:.1f}s)",
-                  flush=True)
+            print(f"  {name:12s} E={r['e_fixed']:.10f}{extra} "
+                  f"({r['wall_s']:.1f}s)", flush=True)
         except Exception as exc:                          # noqa: BLE001
-            print(f"FAILED: {type(exc).__name__}: {exc}", flush=True)
+            print(f"  {name:12s} FAILED: {type(exc).__name__}: {exc}",
+                  flush=True)
             results[name] = dict(case=name, error=repr(exc))
 
     if args.write:

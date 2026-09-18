@@ -64,11 +64,40 @@ _IDX = np.int32
 #
 # Scratch is a max over classes, not a sum, so it does not fall smoothly with
 # the budget: it sits flat until one particular merge re-admits a sulfur-sized
-# class. 0.25 is just below that step -- it keeps the memory of the exact
-# partition to 0.15% while merging back 239 of its 416 kernels. Raising it to
-# 0.5 buys 60 s of compile and gives back 5.3 GiB, which is the wrong trade
-# when peak memory is what caps the molecules this engine can reach.
-_PAD_TOL = 0.25
+# class. 0.25 sits just below that step for penicillin.
+#
+# 2026-09-18: raised to 0.5, because the trade above was weighed against the
+# wrong resource. It reads "the wrong trade when peak memory is what caps the
+# molecules this engine can reach", and peak *device* memory is not what caps
+# them. Measured on an A100: coronene fails to build at 31.6 GB of HOST RSS
+# during compilation while its device peak never exceeds 1.45 GiB, and a cold
+# build is ~91% XLA compilation, which scales with the number of compiled
+# programs. Both binding constraints fall with the class count; device memory,
+# the one this budget was protecting, has ~78 GiB of headroom.
+#
+# Swept on cubane / def2-svp (scripts/perf/pad_tol_sweep.py, fresh process per
+# value so compile caches cannot leak):
+#
+#     budget  classes   XLA s   warm ms   device    host
+#     0           297   189.3     63.70   1.26 GiB  7.75 GiB
+#     0.25        202   134.7     65.24   1.30 GiB  6.54 GiB
+#     0.5         161   113.1     63.64   1.41 GiB  5.85 GiB
+#     1.0         128    91.9     78.52   1.53 GiB  5.13 GiB
+#     2.0          94    73.9     95.51   1.93 GiB  4.40 GiB
+#     inf          45    44.5    209.36   2.50 GiB  3.21 GiB
+#
+# 0.25 -> 0.5 is free on every axis that binds: XLA -16%, host RSS -11%,
+# tracing -14%, and warm execution unchanged (63.64 against 65.24, inside the
+# run-to-run spread of a shared node), for +0.11 GiB of device memory. The knee
+# is exactly there: 1.0 costs 23% of execution and unbounded costs 3.3x.
+#
+# The penicillin row above is NOT re-measured -- it needs more host memory to
+# trace than the 32 GB allocation this was swept on, which is itself the
+# problem this change is aimed at. Cubane shows no scratch step at 0.5
+# (+0.11 GiB, not +5.3), so the step the old note describes is specific to
+# penicillin's sulfur classes. If a large-memory node ever shows 0.5 re-admits
+# a class that matters there, this is the line to revisit.
+_PAD_TOL = 0.5
 
 
 def _merge_padded_buckets(nprims, counts, tol=None):

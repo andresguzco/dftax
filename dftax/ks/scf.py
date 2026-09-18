@@ -319,7 +319,12 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
             P = jnp.einsum("smi,si,sni->smn", Co, f, Co)  # aufbau fill
         return P, C, eps
 
-    e0 = ks.total(P0)
+    # No energy at P0: the loop now evaluates the energy at the same density
+    # that produces the Fock, so the first iteration's `de` must compare
+    # against something that cannot look converged. An actual E(P0) here would
+    # make de exactly zero on iteration 0 and hand convergence to any guess
+    # whose commutator happened to be small.
+    e0 = jnp.array(jnp.inf, dtype=P0.dtype)
     # C/eps placeholders: the body always runs at least one iteration
     # (``converged`` starts False), which overwrites them.
     C0 = jnp.zeros((nspin, nao, nmo))
@@ -342,8 +347,12 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
 
     def body(st):
         it, P, C, eps, e_prev, _, _, dF, dErr = st[:9]
-        g = jax.grad(lambda Q: ks.electronic(Q))(P)
-        F = 0.5 * (g + g.transpose(0, 2, 1))
+        # One call, not `grad(electronic)` beside `total`: on the streaming
+        # backends those walk the quadrature twice (see KS.energy_and_fock).
+        # `e_here` is the energy at the density that produced this Fock, so
+        # the convergence test below compares consecutive *consistent* pairs
+        # rather than straddling an update.
+        e_here, F = ks.energy_and_fock(P)
         err = X.T @ (F @ P @ S - S @ P @ F) @ X          # (nspin, nmo, nmo)
         derr = jnp.linalg.norm(err)
 
@@ -365,11 +374,15 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
             # alternatives were measured worse on the hard-case set.
             F_ext = jnp.where(derr > adiis_switch, F_adiis, F_ext)
 
+        de = e_here - e_prev
+        # Both halves of the test now describe the same density: `derr` is the
+        # commutator at P and `de` the step in E(P) since the previous
+        # iteration's density. The old body tested `derr` at P against an
+        # energy difference that straddled the update.
+        converged = (jnp.abs(de) < e_tol) & (derr < d_tol)
         F_ls = F_ext + level_shift * (S - inv_w * (S @ P @ S))   # raise virtuals
         P, C, eps = make_density(F_ls)
-        e = ks.total(P)
-        de = e - e_prev
-        converged = (jnp.abs(de) < e_tol) & (derr < d_tol)
+        e = e_here
         if verbose:
             jax.debug.print(
                 "  scf {it}: E={e:.10f} dE={de:+.2e} |[F,P]|={derr:.2e}",
@@ -379,7 +392,12 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
         return out + ((dD,) if adiis_switch is not None else ())
 
     final = lax.while_loop(cond, body, state0)
-    it, P, C, eps, e_prev, _, converged = final[:7]
+    it, P, C, eps, _e_at_prev, _, converged = final[:7]
+    # The loop's energy belongs to the density that produced the last Fock,
+    # while `P` is the one built from it, so the reported energy is taken at
+    # the returned density. One extra evaluation per solve, against one saved
+    # per iteration.
+    e_prev = ks.total(P)
     # Mermin free energy under smearing: subtract the electronic entropy term
     # from the converged KS energy so the reported energy is the variational
     # (force-consistent) quantity. ts = 0 without smearing.

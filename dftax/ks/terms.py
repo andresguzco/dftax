@@ -40,7 +40,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Scalar
 
 from dftax.energy.grid import xc_energy
-from dftax.energy.gto import BasisData, eval_gto
+from dftax.energy.gto import BasisData, eval_gto, eval_gto_and_grad
 from dftax.energy.potentials import xc_potential
 from dftax.energy.xc import XCFunctional
 from dftax.integrals.eri3c import _DF_BRA_BUDGET, _contracted_eri3c, _eri3c_sizes
@@ -213,7 +213,8 @@ def _metric_pinv_jvp(primals, tangents):
 # Streamed XC kernels (AO recomputed per grid chunk, O(chunk·nao) memory)
 # ---------------------------------------------------------------------------
 
-def _streamed_e_xc(xc, basis, coords, weights, P, chunk):
+def _streamed_e_xc(xc, basis, coords, weights, P, chunk,
+                   checkpoint=True):
     """XC energy ``∫ ε_xc ρ`` streamed over grid-point chunks (closed shell).
 
     AO values (and gradients for GGA) are recomputed per chunk and rematerialized
@@ -225,12 +226,16 @@ def _streamed_e_xc(xc, basis, coords, weights, P, chunk):
     mgga = xc.xc_type == "MGGA"
 
     def point(r, w):
-        ao_g = eval_gto(basis, r)                       # (nao,)
+        # one pass for value and gradient; the pair of calls this replaces
+        # evaluated the basis five times over (see eval_gto_and_grad)
+        if gga or mgga:
+            ao_g, dao_g = eval_gto_and_grad(basis, r)   # (nao,), (nao, 3)
+        else:
+            ao_g = eval_gto(basis, r)                   # (nao,)
         rho = ao_g @ P @ ao_g
         mask = rho > 1e-10
         safe_rho = jnp.where(mask, rho, 1.0)
         if gga or mgga:
-            dao_g = jax.jacfwd(eval_gto, argnums=1)(basis, r)   # (nao, 3)
             grad = 2.0 * (ao_g @ P) @ dao_g             # (3,)
             if mgga:
                 tau = 0.5 * jnp.einsum("mx,mn,nx->", dao_g, P, dao_g)
@@ -242,13 +247,17 @@ def _streamed_e_xc(xc, basis, coords, weights, P, chunk):
             eps = xc(safe_rho)
         return jnp.where(mask, w * eps * rho, 0.0)
 
+    # checkpoint=False when the caller is taking the VJP of this whole call
+    # (see _streamed_e_and_v): rematerializing inside it would reintroduce
+    # exactly the second traversal the VJP was moved out here to avoid.
     contribs = _chunked_vmap(
-        point, in_axes=(0, 0), chunk_size=chunk, checkpoint=True
+        point, in_axes=(0, 0), chunk_size=chunk, checkpoint=checkpoint
     )(coords, weights)
     return jnp.sum(contribs)
 
 
-def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk):
+def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk,
+                        checkpoint=True):
     """Spin-polarized XC energy ``∫ ε_xc(ρα,ρβ,∇ρα,∇ρβ) ρ_tot`` streamed over grid-point
     chunks, the open-shell analog of :func:`_streamed_e_xc`.
 
@@ -262,7 +271,10 @@ def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk):
     mgga = xc.xc_type == "MGGA"
 
     def point(r, w):
-        ao = eval_gto(basis, r)                                 # (nao,)
+        if gga or mgga:
+            ao, dao = eval_gto_and_grad(basis, r)               # one pass
+        else:
+            ao = eval_gto(basis, r)                             # (nao,)
         rho_a = ao @ Pa @ ao
         rho_b = ao @ Pb @ ao
         rho_tot = rho_a + rho_b
@@ -271,7 +283,6 @@ def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk):
         tb = rho_b > 1e-10
         rho2 = jnp.stack([jnp.where(ta, rho_a, 1e-10), jnp.where(tb, rho_b, 1e-10)])   # (2,)
         if gga or mgga:
-            dao = jax.jacfwd(eval_gto, argnums=1)(basis, r)     # (nao, 3)
             ga = jnp.where(ta, 2.0 * (ao @ Pa) @ dao, 0.0)      # (3,)
             gb = jnp.where(tb, 2.0 * (ao @ Pb) @ dao, 0.0)
             if mgga:
@@ -286,8 +297,11 @@ def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk):
             eps = xc(rho2)
         return jnp.where(mask, w * eps * rho_tot, 0.0)
 
+    # checkpoint=False when the caller is taking the VJP of this whole call
+    # (see _streamed_e_and_v): rematerializing inside it would reintroduce
+    # exactly the second traversal the VJP was moved out here to avoid.
     contribs = _chunked_vmap(
-        point, in_axes=(0, 0), chunk_size=chunk, checkpoint=True
+        point, in_axes=(0, 0), chunk_size=chunk, checkpoint=checkpoint
     )(coords, weights)
     return jnp.sum(contribs)
 
@@ -1128,6 +1142,37 @@ class XCTerm(eqx.Module):
     def energy(self, P: Float[Array, "nspin nao nao"]) -> Scalar:
         raise NotImplementedError
 
+    def energy_and_potential(
+        self, P: Float[Array, "nspin nao nao"]
+    ) -> tuple[Scalar, Float[Array, "nspin nao nao"]]:
+        """``(E_xc, ∂E_xc/∂P)`` in as few grid traversals as the backend allows.
+
+        The SCF needs both every iteration, and asking for them separately
+        costs two traversals of the quadrature on the streaming backends. The
+        cause is not ``grad`` being wasteful, it is ``jax.checkpoint``: the
+        streamed and screened kernels rematerialize each block in the backward
+        pass to keep memory at O(block·nsub), so ``grad`` computes the grid
+        once for the rematerialization while the separate energy call computes
+        it again. Measured on cubane/def2-svp on an A100, ``fock`` 34.1 ms
+        plus ``total`` 22.4 ms, against 33.3 ms for the gradient alone.
+
+        ``value_and_grad`` does not fix this (measured: it costs exactly the
+        sum, because the checkpoint recomputes regardless). What fixes it is
+        taking the VJP *per block*, where the residuals are small enough to
+        keep, so one traversal yields both. Backends that stream override this
+        default; for the materialized ``GridXC`` there is nothing to fix,
+        since it holds the AO values already and ``value_and_grad`` is one
+        traversal by construction.
+
+        Deliberately *not* a ``custom_vjp`` on ``energy``. A custom VJP in
+        ``P`` reports a zero cotangent for the basis and the grid, which is
+        silently wrong for :func:`dftax.ks.forces.forces` (it differentiates
+        the same term with respect to the nuclear coordinates). Keeping this
+        as a separate entry point that only the SCF calls leaves the
+        autodiff path everything else uses exactly as it was.
+        """
+        return jax.value_and_grad(self.energy)(P)
+
 
 class GridXC(XCTerm):
     """XC on precomputed AO grid values (O(ng·nao) memory).
@@ -1249,6 +1294,11 @@ class StreamedGridXC(XCTerm):
             P[0], P[1], self.chunk,
         )
 
+    def energy_and_potential(self, P):
+        return _streamed_e_and_v(
+            self.xc, self.basis, self.grid_coords, self.weights, P, self.chunk
+        )
+
 
 def _screened_sub_basis(basis, cart, cmask, sph):
     """The block's own basis: rows gathered down to the shells that reach it,
@@ -1274,10 +1324,10 @@ def _screened_sub_basis(basis, cart, cmask, sph):
     # *unscreened* basis, and `cart` is a dynamic gather (deliberately a
     # pytree leaf, see ScreenBucket), so the sub-basis's own shell layout is
     # not knowable at trace time and the inherited records would be silently
-    # wrong. eval_gto falls back to its per-AO path here, which is correct but
-    # forfeits the shell-blocked saving on exactly the term that dominates at
-    # scale; giving the screen plan a per-bucket (l, nprim) group signature so
-    # this path can be shell-blocked too is the follow-up.
+    # wrong. Nothing on the hot path reads them (eval_gto and
+    # eval_gto_and_grad are both per-AO; see the measurement recorded in
+    # eval_gto_and_grad), but _eval_gto_shells does, and a stale plan there
+    # would be a wrong answer rather than an error.
     import dataclasses
 
     return dataclasses.replace(sub, shells=None)
@@ -1289,11 +1339,13 @@ def _screened_rho_block(basis, P, cart, sph, cmask, smask, pts, need_grad):
     Psub = P[sph][:, sph]
 
     def one(r):
-        ao = eval_gto(sub, r) * smask
-        rho = ao @ Psub @ ao
         if not need_grad:
-            return rho, jnp.zeros(3), jnp.zeros(())
-        dao = jax.jacfwd(eval_gto, argnums=1)(sub, r) * smask[:, None]
+            ao = eval_gto(sub, r) * smask
+            return ao @ Psub @ ao, jnp.zeros(3), jnp.zeros(())
+        ao, dao = eval_gto_and_grad(sub, r)
+        ao = ao * smask
+        dao = dao * smask[:, None]
+        rho = ao @ Psub @ ao
         grad = 2.0 * (ao @ Psub) @ dao
         tau = 0.5 * jnp.einsum("mx,mn,nx->", dao, Psub, dao)
         return rho, grad, tau
@@ -1321,21 +1373,8 @@ def _screened_e_xc(xc, basis, coords, weights, P, buckets, block, n_block):
 
         def body(args, _ids=ids):
             cart, sph, cm, sm, i = args
-            rho, grad, tau = _screened_rho_block(
-                basis, P, cart, sph, cm, sm, cg[i], need)
-            w = wg[i]
-            mask = rho > 1e-10
-            safe = jnp.where(mask, rho, 1.0)
-            # The functionals take one point at a time (scalar ρ, (3,) ∇ρ), so
-            # the block's points are vmapped over rather than passed as arrays.
-            if mgga:
-                eps = jax.vmap(xc)(safe, jnp.where(mask[:, None], grad, 0.0),
-                                   jnp.where(mask, tau, 1.0))
-            elif gga:
-                eps = jax.vmap(xc)(safe, jnp.where(mask[:, None], grad, 0.0))
-            else:
-                eps = jax.vmap(xc)(safe)
-            return jnp.sum(jnp.where(mask, w * eps * rho, 0.0))
+            return _screened_block_e(xc, basis, P, cart, sph, cm, sm, cg[i],
+                                     wg[i], gga, mgga, need)
 
         # Rematerialize per block in the backward pass, as the streamed path
         # does. Without it lax.map keeps every block's AO values (and their
@@ -1347,6 +1386,188 @@ def _screened_e_xc(xc, basis, coords, weights, P, buckets, block, n_block):
             (bucket.cart, bucket.sph, bucket.cart_mask, bucket.sph_mask, ids),
         ))
     return total
+
+
+def _screened_block_e(xc, basis, P, cart, sph, cm, sm, pts, w, gga, mgga,
+                      need):
+    """Closed-shell XC energy of one screened grid block.
+
+    Extracted so the energy-only path (:func:`_screened_e_xc`) and the
+    energy-plus-potential path (:func:`_screened_e_and_v`) integrate the same
+    expression rather than two copies of it that can drift apart.
+    """
+    rho, grad, tau = _screened_rho_block(basis, P, cart, sph, cm, sm, pts,
+                                         need)
+    mask = rho > 1e-10
+    safe = jnp.where(mask, rho, 1.0)
+    if mgga:
+        eps = jax.vmap(xc)(safe, jnp.where(mask[:, None], grad, 0.0),
+                           jnp.where(mask, tau, 1.0))
+    elif gga:
+        eps = jax.vmap(xc)(safe, jnp.where(mask[:, None], grad, 0.0))
+    else:
+        eps = jax.vmap(xc)(safe)
+    return jnp.sum(jnp.where(mask, w * eps * rho, 0.0))
+
+
+def _screened_block_e_spin(xc, basis, Pa, Pb, cart, sph, cm, sm, pts, w, gga,
+                           mgga, need):
+    """Spin-polarized XC energy of one screened grid block.
+
+    Not a sum of per-channel energies: eps_xc(rho_a, rho_b, ...) couples the
+    channels, so both densities ride through the same gathered sub-basis.
+    """
+    sub = _screened_sub_basis(basis, cart, cm, sph)
+    Pas, Pbs = Pa[sph][:, sph], Pb[sph][:, sph]
+
+    def point(r, wt):
+        if gga or mgga:
+            ao, dao = eval_gto_and_grad(sub, r)
+            ao, dao = ao * sm, dao * sm[:, None]
+        else:
+            ao = eval_gto(sub, r) * sm
+        rho_a = ao @ Pas @ ao
+        rho_b = ao @ Pbs @ ao
+        rho_tot = rho_a + rho_b
+        mask = rho_tot > 1e-10
+        ta, tb = rho_a > 1e-10, rho_b > 1e-10
+        rho2 = jnp.stack([jnp.where(ta, rho_a, 1e-10),
+                          jnp.where(tb, rho_b, 1e-10)])
+        if gga or mgga:
+            ga = jnp.where(ta, 2.0 * (ao @ Pas) @ dao, 0.0)
+            gb = jnp.where(tb, 2.0 * (ao @ Pbs) @ dao, 0.0)
+            if mgga:
+                tau2 = jnp.stack([
+                    jnp.where(ta, 0.5 * jnp.einsum(
+                        "mx,mn,nx->", dao, Pas, dao), 1e-10),
+                    jnp.where(tb, 0.5 * jnp.einsum(
+                        "mx,mn,nx->", dao, Pbs, dao), 1e-10),
+                ])
+                eps = xc(rho2, jnp.stack([ga, gb], axis=-1), tau2)
+            else:
+                eps = xc(rho2, jnp.stack([ga, gb], axis=-1))
+        else:
+            eps = xc(rho2)
+        return jnp.where(mask, wt * eps * rho_tot, 0.0)
+
+    return jnp.sum(jax.vmap(point)(pts, w))
+
+
+def _sum_e_and_v(piece, P, xs, init_v=None):
+    """``(Σ_i e(P, x_i), Σ_i ∂e/∂P)`` in one traversal.
+
+    The pattern every streaming XC backend needs. ``jax.vjp`` on one piece
+    keeps that piece's residuals alive only while its backward consumes them,
+    which is the same O(piece) working set ``jax.checkpoint`` was buying, but
+    without the second forward pass: the checkpointed energy throws the
+    residuals away and recomputes them, so asking for the energy and the
+    potential separately walks the grid twice.
+
+    The potential accumulates in the ``scan`` carry rather than coming back
+    stacked: one (nspin, nao, nao) accumulator against one per piece.
+    """
+    v0 = jnp.zeros_like(P) if init_v is None else init_v
+
+    def step(carry, x):
+        e_acc, v_acc = carry
+        e, pull = jax.vjp(lambda Q: piece(Q, x), P)
+        (v,) = pull(jnp.ones((), dtype=e.dtype))
+        return (e_acc + e, v_acc + v), None
+
+    (E, V), _ = jax.lax.scan(step, (jnp.zeros(()), v0), xs)
+    return E, V
+
+
+def _streamed_e_and_v(xc, basis, coords, weights, P, chunk):
+    """``(E_xc, ∂E_xc/∂P)`` from one pass over the streamed grid chunks.
+
+    The closed-shell sibling of :func:`_screened_e_and_v` for the unscreened
+    streaming backend. Same chunking as :func:`_streamed_e_xc`, with the
+    chunk's VJP taken where its residuals still exist.
+    """
+    ng = coords.shape[0]
+    nchunk = max(1, min(int(chunk), ng))
+    n_full = ng // nchunk
+    tail = ng - n_full * nchunk
+
+    def piece(Q, args):
+        c, w = args
+        if Q.shape[0] == 1:
+            return _streamed_e_xc(xc, basis, c, w, Q[0], nchunk,
+                                  checkpoint=False)
+        return _streamed_e_xc_spin(xc, basis, c, w, Q[0], Q[1], nchunk,
+                                   checkpoint=False)
+
+    E = jnp.zeros(())
+    V = jnp.zeros_like(P)
+    if n_full:
+        E, V = _sum_e_and_v(
+            piece, P,
+            (coords[:n_full * nchunk].reshape(n_full, nchunk, 3),
+             weights[:n_full * nchunk].reshape(n_full, nchunk)),
+        )
+    if tail:
+        # The remainder is its own single piece rather than padded: a padded
+        # point carries a real basis value at a fake position, and only its
+        # zero weight keeps it out of the sum, which is a fragile thing to
+        # rely on inside a VJP.
+        ct, wt = coords[n_full * nchunk:], weights[n_full * nchunk:]
+        e_t, pull = jax.vjp(
+            lambda Q: (_streamed_e_xc(xc, basis, ct, wt, Q[0], tail,
+                                      checkpoint=False)
+                       if Q.shape[0] == 1 else
+                       _streamed_e_xc_spin(xc, basis, ct, wt, Q[0], Q[1],
+                                           tail, checkpoint=False)),
+            P)
+        (v_t,) = pull(jnp.ones((), dtype=e_t.dtype))
+        E, V = E + e_t, V + v_t
+    return E, V
+
+
+def _screened_e_and_v(xc, basis, coords, weights, P, buckets, block, n_block):
+    """``(E_xc, ∂E_xc/∂P)`` from one traversal of the screened grid.
+
+    Same quadrature as :func:`_screened_e_xc`, and the same per-block memory,
+    but the block's VJP is taken where its residuals still exist instead of
+    being thrown away and rematerialized. ``jax.vjp`` on the block keeps
+    O(block·nsub) alive inside that block only, which is what the
+    ``jax.checkpoint`` in the energy-only path was buying; the difference is
+    that here the backward consumes the residuals immediately rather than
+    recomputing them, so the grid is walked once instead of twice.
+
+    The potential accumulates in a ``scan`` carry rather than coming back
+    stacked from ``lax.map``: one (nao, nao) accumulator against one per
+    block.
+    """
+    gga = xc.xc_type == "GGA"
+    mgga = xc.xc_type == "MGGA"
+    need = gga or mgga
+    cg = coords.reshape(n_block, block, 3)
+    wg = weights.reshape(n_block, block)
+    E = jnp.zeros(())
+    V = jnp.zeros_like(P)
+
+    for bucket in buckets:
+        def body(Q, args):
+            cart, sph, cm, sm, i = args
+            # Q is the spin-stacked density: the VJP is taken against the
+            # whole (1, nao, nao) so its transpose scatters the block's
+            # contribution straight into the potential, with no per-block
+            # index bookkeeping here.
+            if Q.shape[0] == 1:
+                return _screened_block_e(xc, basis, Q[0], cart, sph, cm, sm,
+                                         cg[i], wg[i], gga, mgga, need)
+            return _screened_block_e_spin(xc, basis, Q[0], Q[1], cart, sph,
+                                          cm, sm, cg[i], wg[i], gga, mgga,
+                                          need)
+
+        e_b, v_b = _sum_e_and_v(
+            body, P,
+            (bucket.cart, bucket.sph, bucket.cart_mask, bucket.sph_mask,
+             bucket.block_ids),
+        )
+        E, V = E + e_b, V + v_b
+    return E, V
 
 
 def _screened_e_xc_spin(xc, basis, coords, weights, Pa, Pb, buckets, block,
@@ -1372,37 +1593,9 @@ def _screened_e_xc_spin(xc, basis, coords, weights, Pa, Pb, buckets, block,
     for bucket in buckets:
         def body(args):
             cart, sph, cm, sm, i = args
-            sub = _screened_sub_basis(basis, cart, cm, sph)
-            Pas, Pbs = Pa[sph][:, sph], Pb[sph][:, sph]
-
-            def point(r, w):
-                ao = eval_gto(sub, r) * sm
-                rho_a = ao @ Pas @ ao
-                rho_b = ao @ Pbs @ ao
-                rho_tot = rho_a + rho_b
-                mask = rho_tot > 1e-10
-                ta, tb = rho_a > 1e-10, rho_b > 1e-10
-                rho2 = jnp.stack([jnp.where(ta, rho_a, 1e-10),
-                                  jnp.where(tb, rho_b, 1e-10)])
-                if gga or mgga:
-                    dao = jax.jacfwd(eval_gto, argnums=1)(sub, r) * sm[:, None]
-                    ga = jnp.where(ta, 2.0 * (ao @ Pas) @ dao, 0.0)
-                    gb = jnp.where(tb, 2.0 * (ao @ Pbs) @ dao, 0.0)
-                    if mgga:
-                        tau2 = jnp.stack([
-                            jnp.where(ta, 0.5 * jnp.einsum(
-                                "mx,mn,nx->", dao, Pas, dao), 1e-10),
-                            jnp.where(tb, 0.5 * jnp.einsum(
-                                "mx,mn,nx->", dao, Pbs, dao), 1e-10),
-                        ])
-                        eps = xc(rho2, jnp.stack([ga, gb], axis=-1), tau2)
-                    else:
-                        eps = xc(rho2, jnp.stack([ga, gb], axis=-1))
-                else:
-                    eps = xc(rho2)
-                return jnp.where(mask, w * eps * rho_tot, 0.0)
-
-            return jnp.sum(jax.vmap(point)(cg[i], wg[i]))
+            return _screened_block_e_spin(xc, basis, Pa, Pb, cart, sph, cm,
+                                          sm, cg[i], wg[i], gga, mgga,
+                                          gga or mgga)
 
         total = total + jnp.sum(jax.lax.map(
             jax.checkpoint(body),
@@ -1442,6 +1635,15 @@ class ScreenedGridXC(XCTerm):
         return _screened_e_xc_spin(self.xc, self.basis, self.grid_coords,
                                    self.weights, P[0], P[1], self.buckets,
                                    self.block, self.n_block)
+
+    def energy_and_potential(self, P):
+        # The VJP is taken against the whole spin-stacked density, so the
+        # per-block gather's transpose scatters each block's contribution
+        # back with no index bookkeeping, for either shell structure.
+        return _screened_e_and_v(
+            self.xc, self.basis, self.grid_coords, self.weights, P,
+            self.buckets, self.block, self.n_block,
+        )
 
 
 class ShardedGridXC(XCTerm):

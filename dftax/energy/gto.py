@@ -585,11 +585,6 @@ def eval_gto(basis: BasisData, r: Float[Array, "3"]) -> Float[Array, "nao"]:
     Pure JAX, no PySCF calls, no pure_callback.  Fully differentiable via
     JAX autodiff and compatible with jit and vmap.
 
-    Runs the shell-blocked evaluator when the basis carries its shell
-    structure (every basis the loaders build does); the per-AO path below
-    stays as the fallback for a hand-assembled ``BasisData`` and as the A/B
-    oracle the shell path is validated against.
-
     Args:
         basis: Precomputed basis data from extract_basis_data(mol).
         r:     3D coordinate in Bohr, shape (3,).
@@ -597,22 +592,36 @@ def eval_gto(basis: BasisData, r: Float[Array, "3"]) -> Float[Array, "nao"]:
     Returns:
         AO values, shape (nao,), matching dft.numint.eval_ao(mol, r[None])[0].
     """
-    if basis.shells is not None:
-        return _eval_gto_shells(basis, r, grad=False)
     return _eval_gto_flat(basis, r)
 
 
 def eval_gto_and_grad(basis: BasisData, r: Float[Array, "3"]):
     """AO values and their spatial gradients ``(nao,), (nao, 3)`` at ``r``.
 
-    Analytic where the basis carries its shell structure, and a ``jacfwd``
-    fallback otherwise, so the two always agree.
-    """
-    if basis.shells is not None:
-        return _eval_gto_shells(basis, r, grad=True)
-    import jax
+    One pass for both. Every caller used to spell this ``eval_gto(basis, r)``
+    next to ``jacfwd(eval_gto)(basis, r)``, which evaluates the basis five
+    times over: once for the value, then once more for the Jacobian's own
+    primal plus one pass per Cartesian tangent.
 
-    return eval_gto(basis, r), jax.jacfwd(eval_gto, argnums=1)(basis, r)
+    The analytic gradient is written in the *per-AO* layout rather than the
+    shell-blocked one, which is the opposite of what the FLOP count suggests
+    and was settled by measurement (``scripts/perf/ao_bench.py``, A100,
+    def2-svp, interleaved rounds, ao values + gradient):
+
+        molecule            jacfwd   per-AO analytic   shell-blocked
+        cubane (ng 315k)    20.2 ms   13.4 ms (1.51x)   27.6 ms (0.73x)
+        bicyclo (ng 428k)   56.8 ms   26.5 ms (2.14x)   47.9 ms (1.19x)
+
+    Shell-blocking does 4-6x fewer exponentials (measured on the basis: 4.0x
+    cc-pVDZ, 5.9x def2-svp, 6.2x cc-pVTZ) and is still slower, because the
+    evaluation is bandwidth-bound: the per-AO form does its redundant work
+    inside one wide elementwise kernel, while grouping by ``(l, nprim)`` pays
+    gathers, a permutation, and a handful of kernels per group. The
+    shell-blocked evaluator is kept, tested and benchmarked as the measured
+    alternative rather than deleted, since the balance would tip on a device
+    where transcendentals are the scarce resource.
+    """
+    return _eval_gto_flat_grad(basis, r)
 
 
 def _eval_gto_flat(basis: BasisData, r: Float[Array, "3"]) -> Float[Array, "nao"]:

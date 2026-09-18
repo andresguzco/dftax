@@ -281,6 +281,11 @@ def terms(ks, P, grid_coords, aux):
     out["fock"] = (
         eqx.filter_jit(
             lambda k, Q: jax.grad(lambda R: k.electronic(R))(Q)), (ks, P))
+    # What the SCF loop actually costs per iteration now: one call returning
+    # the energy and the Fock from one traversal of the quadrature. Compare
+    # against `fock` + `total`, which is what it replaced.
+    out["enfock"] = (
+        eqx.filter_jit(lambda k, Q: k.energy_and_fock(Q)), (ks, P))
     out["vandg"] = (
         eqx.filter_jit(
             lambda k, Q: jax.value_and_grad(lambda R: k.electronic(R))(Q)),
@@ -289,7 +294,7 @@ def terms(ks, P, grid_coords, aux):
 
 
 ALL_TERMS = ["hcore", "ao_flat", "ao_flatg", "ao_grid", "int3c", "xc_e", "xc_g", "jk_e", "jk_g",
-             "total", "fock", "vandg"]
+             "total", "fock", "enfock", "vandg"]
 
 
 # ---------------------------------------------------------------------------

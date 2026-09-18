@@ -230,6 +230,27 @@ def _resolve_chunk(chunk, ng: int, nao: int):
     return chunk
 
 
+def _resolve_screen(screen, n_atom: int) -> float | None:
+    """Resolve a grid spec's ``screen`` against the molecule's size.
+
+    ``n_atom`` must come from ``coords.shape``, never from
+    ``np.asarray(coords)``: ``forces`` rebuilds the energy with *traced*
+    nuclear coordinates, and converting a tracer raises. A shape is static
+    even when its contents are not.
+
+    ``"auto"`` is a size gate rather than a constant because per-block
+    screening is a measured *loss* on small molecules (0.89x at 23 atoms) and
+    a growing win on large ones (1.53x at 53, 3.11x at 153); see
+    :func:`~dftax.grid.becke`. An explicit float or ``None`` is honored as
+    given.
+    """
+    from dftax.grid.grid import SCREEN_AUTO_CUTOFF, SCREEN_AUTO_MIN_ATOMS
+
+    if screen == "auto":
+        return SCREEN_AUTO_CUTOFF if n_atom >= SCREEN_AUTO_MIN_ATOMS else None
+    return None if screen is None else float(screen)
+
+
 def _resolve_grid(grid, symbols, coords):
     """Resolve a grid input to ``(coords, weights, chunk)``.
 
@@ -680,7 +701,8 @@ class KS(eqx.Module):
                     chunk=grid_chunk, xc=xc,
                 )
             self.xc_term = ShardedGridXC(inner=inner, devices=devices)
-        elif getattr(grid, "screen", None) is not None:
+        elif _resolve_screen(getattr(grid, "screen", None),
+                             int(coords.shape[0])) is not None:
             # Per-block basis screening: reorder the grid into compact blocks
             # and give each only the shells that reach it. The plan is built
             # eagerly (it reads concrete geometry), like the Schwarz screen.
@@ -688,7 +710,8 @@ class KS(eqx.Module):
 
             plan = plan_grid_screen(
                 basis, grid_coords, coords, block=grid.screen_block,
-                cutoff=float(grid.screen), n_bucket=grid.screen_buckets,
+                cutoff=_resolve_screen(grid.screen, int(coords.shape[0])),
+                n_bucket=grid.screen_buckets,
             )
             gc_o = jnp.asarray(np.asarray(grid_coords)[plan.order])
             gw_o = np.asarray(weights)[plan.order]
@@ -744,6 +767,41 @@ class KS(eqx.Module):
     def total(self, P: Float[Array, "nspin nao nao"]) -> Scalar:
         """Total KS energy (electronic + nuclear repulsion + dispersion)."""
         return self.electronic(P) + self.e_nn + self.e_disp
+
+    def energy_and_fock(
+        self, P: Float[Array, "nspin nao nao"]
+    ) -> tuple[Scalar, Float[Array, "nspin nao nao"]]:
+        """``(E_total, F)`` for one density, sharing the work between them.
+
+        The SCF needs the energy and the Fock at the same ``P`` every
+        iteration, and computing them separately walks the quadrature twice:
+        ``grad`` rematerializes each grid block in its backward pass (the
+        streaming backends checkpoint to hold memory at O(block·nsub)), and
+        the standalone energy call then walks the grid again. On
+        cubane/def2-svp that is 34.1 ms + 22.4 ms where the gradient alone is
+        33.3 ms.
+
+        So the XC term is asked for both at once (see
+        :meth:`~dftax.ks.terms.XCTerm.energy_and_potential`, which takes the
+        VJP per block while the residuals are still alive), and everything
+        else -- the one-electron trace and the Coulomb/exchange term -- goes
+        through one ``value_and_grad``, which is already single-pass since
+        nothing there is checkpointed.
+
+        The result is the same ``(total(P), sym(∂E/∂P))`` the two calls gave,
+        and ``total`` / ``electronic`` are untouched, so every other consumer
+        (forces, the Hessian, Newton, direct minimization) keeps the plain
+        autodiff path.
+        """
+        def rest(Q):
+            e1 = jnp.sum(jnp.sum(Q, axis=0) * self.hcore)
+            return e1 + self.coulomb.energy(Q, self.S, self.nocc)
+
+        e_rest, g_rest = jax.value_and_grad(rest)(P)
+        e_xc, v_xc = self.xc_term.energy_and_potential(P)
+        g = g_rest + v_xc
+        F = 0.5 * (g + g.transpose(0, 2, 1))
+        return e_rest + e_xc + self.e_nn + self.e_disp, F
 
     def density(
         self, P: Float[Array, "nspin nao nao"]

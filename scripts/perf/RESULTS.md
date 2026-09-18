@@ -8,9 +8,14 @@ guess, with the XLA compilation cache warm unless stated. Reproduce with
 `source scripts/perf/env.sh`.
 
 The point of writing down the rejected ideas alongside the accepted ones is
-that four of them were rejected by *measurement after implementation*, having
-looked obviously right on paper. The FLOP count was a poor predictor
-throughout.
+that most of them were rejected by *measurement after implementation*, having
+looked obviously right on paper. Six structural arguments lost to the hardware
+in this campaign: shell-blocked AO evaluation, `value_and_grad` in the SCF,
+quantizing the kernel cache key, the RI-K one-pass runtime claim, writing the
+RI-J derivative as `V⁻¹γ`, and accumulating the bra primitives. The FLOP count
+and the transient's shape were both poor predictors throughout; on this device
+the thing that decides is how many fused kernels the work lands in and how
+wide each one is.
 
 ## Per-iteration cost
 
@@ -120,6 +125,90 @@ invisible there; and inferring it from the PBE0-minus-PBE difference put a
 where PBE0 sat 0.70 ms *below* what exchange alone costs. The harness grew a
 `jk_ev` term rather than the number being reported from the flop ratio.
 
+## Phase 3, partially done
+
+Three of six items attempted. The sorting principle that emerged: changes that
+**narrow** what a kernel does are safe here, and changes that **redistribute**
+work across kernels are not.
+
+**Rejected: accumulating the bra primitives (3a).** See below; 4.3x slower on
+the streamed path. It split one fused kernel into many.
+
+**Landed: one Boys evaluation per Hermite table (3c).** `_hermite_table` needs
+every order `0..mt-1` at the same argument and asked `boys` for each, which is
+a table gather plus a degree-6 Taylor apiece (`7·mt` column reads where
+`mt + 6` would do) and one copy of the 80 KB interpolation table per call site
+in the graph. One call for the top order plus the downward recursion
+`F_{m-1} = (2T·F_m + e^{-T})/(2m-1)` gives the rest in fused multiply-adds.
+
+Measured, and the honest answer is that neither shows a runtime benefit.
+Same node, library swap, cubane/def2-svp and water/def2-svp/PBE0:
+
+| | before | after |
+|---|---:|---:|
+| cubane `int3c` warm | 59.55 ms | 60.24 ms |
+| cubane `int3c` peak | 1.60 GiB | 1.58 GiB |
+| water streamed `jk_ev` warm | 57.52 ms | 65.30 ms |
+
+**That A/B is confounded, and the flaw is worth recording.** The "before" arm
+reverted `boys.py` along with `eri3c_bucketed.py`, so it measured *(ladder +
+dead-table removal + `_TMAX` 40→90)* against *nothing*, not the speed change
+on its own. Raising `_TMAX` more than doubles the interpolation table (401 →
+901 rows), which costs memory traffic by itself, so the 13% on `jk_ev` may be
+entirely the accuracy fix. The cold-compile columns are confounded the same
+way: the "before" arm hit cache entries from earlier runs and the "after" arm
+did not. The clean comparison, *with the corrected `boys()` held fixed on both
+sides*, has not been run.
+
+Both are kept anyway, on grounds that do not depend on that measurement. The
+`_TMAX` fix is correctness and is not optional. The ladder mitigates a cost
+that fix introduces: at 901 rows the table constant is ~180 KB per `boys()`
+call site, so calling it `mt` times per Hermite table embeds ~2.3 MB per class
+kernel against ~180 KB, and with ~200 classes that is hundreds of MB of MLIR —
+on the axis (compile and host memory) that this campaign identified as the
+binding constraint. And 3d removes work that was provably dead.
+
+**Landed: stop building the same table three times (3d).** `_Ec_table` is
+single-centre and carries no axis dependence, so `[_Ec_table(...) for _ in
+range(3)]` built three identical copies with the loop variable unused. In
+`eri2c` both sides are single-centre, so the entire contraction is
+axis-independent: one `G`, indexed three ways.
+
+**Not started: 3b (triangular Hermite table), 3e (axis-factorized
+contraction), 3f (`exchange_k_4c` 8-fold symmetry).** 3b and 3e both reshape
+the contraction rather than only narrowing it, which is 3a's risk profile
+exactly, so they want a measurement budget rather than the end of a session.
+
+## A correctness bug in boys(), found by testing 3c
+
+Writing the ladder's test is what found it, and it was always there.
+
+`boys()` switches to the large-t asymptotic `Γ(a)/(2t^a)` past `_TMAX`, which
+drops the incomplete-gamma tail `Q(a, t)`. That tail grows with the **order**,
+so a cutoff tuned on low orders is wrong for high ones. Measured
+`Q(n + 0.5, t)`:
+
+| order n | t = 40.1 | t = 60 | t = 90 |
+|---:|---:|---:|---:|
+| 0 | 3.4e-19 | 6.3e-28 | 4.8e-41 |
+| 12 | 1.1e-07 | 2.2e-14 | 2.0e-25 |
+| 18 | 5.0e-05 | 1.1e-10 | 1.1e-20 |
+| 24 | **3.3e-03** | 6.9e-08 | 7.4e-17 |
+
+At the engine's highest order (24, reached by l=6 four-centre integrals) the
+neglected term was **0.3% relative** just past the old cutoff of 40. The
+module's "~1e-11 vs `_boys_ref`" held for the low orders it was measured on,
+not for the ones the high-l paths use. `_TMAX` is now 90, which puts every
+tabulated order at 1e-15 or better for ~100 KB more table and nothing at
+runtime.
+
+Why a suite that already tested `boys()` against the exact reference missed
+it: per-order calls each carry their own error, and the low orders are fine,
+so a mixed set of orders averages out to something that looks acceptable. The
+ladder seeds from the *top* order and propagates its relative error to all of
+them, which turned a hidden high-order problem into a uniform 1.06e-07 across
+every order — a signature that named the cause immediately.
+
 ## A correctness bug this phase turned up
 
 The occupied-orbital route is exact only at an idempotent density, which
@@ -168,6 +257,35 @@ by hand did, and the metric's kept band amplified it to 2e-10 on the Fock for
 CH3/PBE — over the gate's 1e-10 fast-path invariant, which is how it was
 caught. Symmetrizing costs one matvec on a naux-vector and brings the Fock
 back to 1.8e-15 against reverse mode.
+
+**Accumulating the bra primitives instead of materializing them (Phase 3a).**
+The 3-center class kernel builds the whole primitive-resolved
+`(npa, npb, npc, nca, ncb, ncc)` array and only then contracts the
+coefficients, so the working set is `npa·npb` times the result. Replacing the
+`vmap` over bra pairs with a `scan` that accumulates:
+
+| | before | after |
+|---|---:|---:|
+| cubane `int3c` warm (built once per geometry) | 59.76 ms | 125.07 ms |
+| cubane `int3c` peak | 1.60 GiB | 0.87 GiB |
+| water/PBE0 streamed `jk_ev` warm (rebuilt every Fock) | 67.11 ms | 290.41 ms |
+| water/PBE0 streamed `jk_ev` peak | 0.20 GiB | 0.29 GiB |
+| water/PBE0 streamed `jk_ev` cold | 674 s | 709 s |
+
+Three claims, none survived. It is not free in time: a fused kernel over
+`(npa,npb,npc,ntrip)` becomes up to 81 sequential launches over
+`(npc,ntrip)`, and the parallelism does *not* all come from the triple batch.
+The memory win is 1.84x rather than the ~81x the transient's shape suggests,
+because def2-svp has `max_prim = 5` so the factor is ~25 at most and other
+allocations set the peak. And compile, which was the whole point (collapse the
+max-over-classes scratch, re-derive `_PAD_TOL` looser, compile less), got
+slightly worse.
+
+The case where the shape argument would bite hardest needs a sulfur-bearing
+basis like penicillin/cc-pVDZ (12s8p1d), which cannot be built on a 32 GB
+host, so the premise is not checkable at reachable sizes on this hardware.
+Correctness was never in question: 51 integral tests passed against the flat
+oracle and PySCF. It is simply slower.
 
 **Quantizing the integral kernel cache key.** `_compiled_class_kernel` is keyed
 on the exact shell-triple count, so the same angular class recompiles per aux

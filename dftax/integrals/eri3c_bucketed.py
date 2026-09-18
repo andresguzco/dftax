@@ -509,6 +509,33 @@ def _Ec_table(lc, gamma, mt):
     return jnp.stack(rows)
 
 
+def _boys_ladder(mt: int, T):
+    """``F_0(T) .. F_{mt-1}(T)``, stacked, from a single table evaluation.
+
+    The Hermite table needs every Boys order from 0 to mt-1 at the same
+    argument, and asked for them one at a time: ``boys`` is a table gather
+    plus a degree-6 Taylor, so ``mt`` calls is ``7·mt`` reads of the table
+    where ``mt + 6`` would do, and each call also materializes its own copy of
+    the 80 KB interpolation table into the graph.
+
+    One call for the top order plus the downward recursion
+
+        F_{m-1}(T) = (2T·F_m(T) + e^{-T}) / (2m - 1)
+
+    gives the rest in ``mt`` fused multiply-adds. Downward is the stable
+    direction (the upward form differences two nearly equal numbers as T
+    grows), and it is the same recursion ``boys._build_table`` already uses to
+    build the table in the first place.
+    """
+    cols = [None] * mt
+    cols[mt - 1] = boys(mt - 1, T)
+    if mt > 1:
+        expT = jnp.exp(-T)
+        for m in range(mt - 1, 0, -1):
+            cols[m - 1] = (2.0 * T * cols[m] + expT) / (2 * m - 1)
+    return jnp.stack(cols)
+
+
 def _hermite_table(rho, RPC, mt, omega=None):
     """(mt, mt, mt) Hermite Coulomb integrals R^0_{t,u,v}.
 
@@ -526,10 +553,11 @@ def _hermite_table(rho, RPC, mt, omega=None):
     T = rho * jnp.sum(RPC ** 2)
     neg2rho = -2.0 * rho
     if omega is None:
-        base = jnp.stack([boys(m, T) for m in range(mt)])
+        base = _boys_ladder(mt, T)
     else:
         s = (omega * omega) / (omega * omega + rho)
-        base = jnp.stack([s ** (m + 0.5) * boys(m, s * T) for m in range(mt)])
+        ladder = _boys_ladder(mt, s * T)
+        base = jnp.stack([s ** (m + 0.5) * ladder[m] for m in range(mt)])
     # Integer powers (Python range): neg2rho is negative, so a float exponent
     # would NaN; range(mt) keeps the base real.
     powers = jnp.stack([neg2rho ** m for m in range(mt)])
@@ -592,8 +620,11 @@ def _make_class_kernel(la, lb, lc, anga, angb, angc, omega=None):
                 pref = (K * 2.0 * jnp.pi ** 2.5
                         / (safe * safec * jnp.sqrt(safe + safec)))
                 R = _hermite_table(rho, P - C, mt, omega)
-                Ec = [_Ec_table(lc, ga, mt) * sign for _ in range(3)]
-                G = [jnp.einsum("ijt,ku,tus->ijks", Et[x], Ec[x], conv)
+                # one table, not three: _Ec_table is single-centre, so it
+                # carries no axis dependence (the loop variable was unused).
+                # Only Et differs per axis.
+                Ec = _Ec_table(lc, ga, mt) * sign
+                G = [jnp.einsum("ijt,ku,tus->ijks", Et[x], Ec, conv)
                      for x in range(3)]
                 GX = G[0][ia[0][:, None, None], jb[0][None, :, None],
                           kc[0][None, None, :], :]
@@ -907,14 +938,16 @@ def _make_eri2c_kernel(la, lb, anga, angb, omega=None):
             sb = jnp.where(be == 0.0, 1.0, be)
             rho = sa * sb / (sa + sb)
             pref = 2.0 * jnp.pi ** 2.5 / (sa * sb * jnp.sqrt(sa + sb))
-            Ea = [_Ec_table(la, al, mt) for _ in range(3)]
-            Eb = [_Ec_table(lb, be, mt) * sign for _ in range(3)]
+            # Both sides are single-centre here, so not only are the tables
+            # axis-independent, the whole contraction is: one G, indexed three
+            # ways, where this built three identical copies of it.
+            Ea = _Ec_table(la, al, mt)
+            Eb = _Ec_table(lb, be, mt) * sign
             R = _hermite_table(rho, AB, mt, omega)
-            G = [jnp.einsum("it,ju,tus->ijs", Ea[x], Eb[x], conv)
-                 for x in range(3)]
-            GX = G[0][ia[0][:, None], jb[0][None, :], :]
-            GY = G[1][ia[1][:, None], jb[1][None, :], :]
-            GZ = G[2][ia[2][:, None], jb[2][None, :], :]
+            G = jnp.einsum("it,ju,tus->ijs", Ea, Eb, conv)
+            GX = G[ia[0][:, None], jb[0][None, :], :]
+            GY = G[ia[1][:, None], jb[1][None, :], :]
+            GZ = G[ia[2][:, None], jb[2][None, :], :]
             return pref * jnp.einsum("abs,abr,abq,srq->ab", GX, GY, GZ, R)
 
         vals = jax.vmap(jax.vmap(per_ab, (None, 0)), (0, None))(ea, eb)

@@ -60,35 +60,54 @@ CH3 = "C 0 0 0; H 1.079 0 0; H -0.5395 0.9345 0; H -0.5395 -0.9345 0"
 # energy when --converged is given. The exact-ERI cases are tight because
 # nothing amplifies there; the DF cases carry the metric pseudo-inverse's
 # documented ~1e7 amplification of last-bit changes.
+#
+# The DF ``e`` tolerances are 1e-9, not 1e-11, because a density-fitted energy
+# does not reproduce to 1e-11 across *machines*. Moving from cn-g006 to
+# cn-g020 (same A100 model) shifted every DF case by ~3e-10 with the library
+# untouched, while both exact-ERI cases stayed bit-identical: XLA picks GEMM
+# algorithms by measured timing, so the last bits follow the node, and the
+# metric's kept band turns a 1e-17 relative change into 1e-10 in the energy.
+# A gate that fails on which machine it ran is not measuring the code. The
+# exact cases stay at 1e-11 and are the sharp instrument; 1e-9 still catches
+# anything meaningful, since the changes this gate guards move DF energies by
+# 1e-12 or not at all.
 CASES = {
     "lda_exact": (dict(atom=WATER, basis="sto-3g", xc="LDA", backend="exact"),
                   dict(e=1e-11, f=1e-10, conv=1e-10)),
     "pbe_exact": (dict(atom=WATER, basis="sto-3g", xc="PBE", backend="exact"),
                   dict(e=1e-11, f=1e-10, conv=1e-10)),
     "pbe_df": (dict(atom=WATER, basis="def2-svp", xc="PBE", backend="df"),
-               dict(e=1e-11, f=None, conv=1e-8)),
+               dict(e=1e-9, f=None, conv=1e-8)),
     "pbe0_df": (dict(atom=WATER, basis="def2-svp", xc="PBE0", backend="df"),
-                dict(e=1e-11, f=None, conv=1e-8)),
+                dict(e=1e-9, f=None, conv=1e-8)),
     "uks_pbe_df": (dict(atom=CH3, basis="def2-svp", xc="PBE", backend="df",
                         spin=1),
-                   dict(e=1e-11, f=None, conv=1e-8)),
-    "rik_stream": (dict(atom=WATER, basis="sto-3g", xc="PBE0", backend="df",
-                        df_chunk=32),
-                   dict(e=1e-10, f=None, conv=1e-8)),
+                   dict(e=1e-9, f=None, conv=1e-8)),
+    # def2-svp, and the basis matters: sto-3g is l<=1, so cart2sph is None and
+    # the case cannot tell the cartesian and spherical AO spans apart. It ran
+    # at sto-3g while the streamed RI-K rebuilt the whole 3-center tensor once
+    # per occupied orbital (52 minutes on three atoms), and in that weakened
+    # form it passed clean over a slab RI-K that was contracting a 25-row
+    # tensor against a 24-row one; the def2-svp profiling run found it in one
+    # call. The slab engine removed the reason for the downgrade, so the
+    # coverage comes back with it.
+    "rik_stream": (dict(atom=WATER, basis="def2-svp", xc="PBE0", backend="df",
+                        df_chunk=64),
+                   dict(e=1e-9, f=None, conv=1e-8)),
     "r2scan_df": (dict(atom=WATER, basis="def2-svp", xc="R2SCAN",
                        backend="df"),
-                  dict(e=1e-11, f=None, conv=1e-8)),
+                  dict(e=1e-9, f=None, conv=1e-8)),
     # One density-fitted forces case, at the smallest basis that exercises
     # the path. The def2-svp ones cost 444 s each and say the same thing.
     "forces_df": (dict(atom=WATER, basis="sto-3g", xc="PBE", backend="df"),
-                  dict(e=1e-11, f=1e-8, conv=None)),
+                  dict(e=1e-9, f=1e-8, conv=None)),
     # VV10's pair quadrature is O(ng^2), so this case gets its own coarse
     # grid: at the gate's usual (50, 194) it is 8.5e8 point pairs and runs
     # for tens of minutes, which is not what a per-phase gate is for. The
     # point is to notice if the nonlocal-correlation path moves at all.
     "wb97xv_df": (dict(atom=WATER, basis="def2-svp", xc="WB97XV",
                        backend="df", screen=0.0, level=(20, 50)),
-                  dict(e=1e-11, f=None, conv=None)),
+                  dict(e=1e-9, f=None, conv=None)),
 }
 
 LEVEL = (50, 194)

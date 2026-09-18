@@ -352,7 +352,7 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
         # `e_here` is the energy at the density that produced this Fock, so
         # the convergence test below compares consecutive *consistent* pairs
         # rather than straddling an update.
-        e_here, F = ks.energy_and_fock(P)
+        e_here, F = ks.energy_and_fock(P, idempotent=smear_sigma is None)
         err = X.T @ (F @ P @ S - S @ P @ F) @ X          # (nspin, nmo, nmo)
         derr = jnp.linalg.norm(err)
 
@@ -407,6 +407,45 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
     else:
         ts = jnp.asarray(0.0, dtype=e_prev.dtype)
     return e_prev - ts, P, C, eps, converged, it, ts
+
+
+def _reject_smeared_frozen_exchange(ks, smearing):
+    """Refuse fractional occupations on a backend whose exchange assumes none.
+
+    The streamed RI-K recovers occupied orbitals from ``P`` and treats the top
+    ``nocc`` of them as fully occupied (see
+    :func:`~dftax.ks.terms._streamed_df_rik`), which is exact at an idempotent
+    density and silently wrong at a smeared one: the exchange energy and the
+    Fock it hands back describe an integer-occupied density instead.
+
+    Measured on water/sto-3g/PBE0 against the materialized backend, which does
+    not make the assumption: 7.1e-6 Ha apart without smearing (the expected
+    cartesian-vs-spherical auxiliary span difference) and **1.4e-3 Ha** apart
+    with ``fermi(sigma=0.05)``, with the solve reporting ``converged=True``
+    both times. A wrong answer that converges is the failure worth refusing
+    over.
+
+    ``dftax.ks.forces`` already rejects this combination for the same reason;
+    the SCF simply never enforced it. Use ``df(chunk=None)`` (materialized) for
+    smeared hybrids, which is what ``forces`` tells callers too.
+    """
+    if smearing is None:
+        return
+    from dftax.ks.terms import ShardedStreamedDFCoulomb, StreamedDFCoulomb
+
+    c = ks.coulomb
+    if not isinstance(c, (StreamedDFCoulomb, ShardedStreamedDFCoulomb)):
+        return
+    if float(getattr(c, "hf_coeff", 0.0)) == 0.0 and \
+       float(getattr(c, "hf_coeff_lr", 0.0)) == 0.0:
+        return                              # pure DFT: no frozen exchange
+    raise NotImplementedError(
+        "smearing with a hybrid on the streamed density-fitting backend: the "
+        "streamed RI-K freezes the occupied orbitals it recovers from P and "
+        "treats them as integer-occupied, which is wrong by ~1e-3 Ha at "
+        "fractional occupations (and still reports convergence). Use "
+        "coulomb=df(chunk=None) for a smeared hybrid, as forces() requires."
+    )
 
 
 def scf(
@@ -478,6 +517,7 @@ def scf(
         res.e_tot, res.converged, res.P[0]       # P is spin-stacked
         ```
     """
+    _reject_smeared_frozen_exchange(ks, smearing)
     X = canonical_orthonormalizer(ks.S, lindep_thresh)
     P0 = density_from_guess(ks, guess, X)
     # Tolerances ride along as traced arrays: under filter_jit a Python scalar

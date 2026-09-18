@@ -277,6 +277,14 @@ def terms(ks, P, grid_coords, aux):
                 lambda R: k.coulomb.energy(R, k.S, k.nocc))(Q)),
         (ks, P))
 
+    # The Coulomb term's own paired entry point. jk_e/jk_g measure
+    # coulomb.energy() and its reverse-mode gradient, which is the path the
+    # SCF no longer takes; jk_ev is what it does take, so a change to
+    # energy_and_potential is invisible in the first two and visible here.
+    out["jk_ev"] = (
+        eqx.filter_jit(
+            lambda k, Q: k.coulomb.energy_and_potential(Q, k.S, k.nocc)),
+        (ks, P))
     out["total"] = (eqx.filter_jit(lambda k, Q: k.total(Q)), (ks, P))
     out["fock"] = (
         eqx.filter_jit(
@@ -293,7 +301,7 @@ def terms(ks, P, grid_coords, aux):
     return out
 
 
-ALL_TERMS = ["hcore", "ao_flat", "ao_flatg", "ao_grid", "int3c", "xc_e", "xc_g", "jk_e", "jk_g",
+ALL_TERMS = ["hcore", "ao_flat", "ao_flatg", "ao_grid", "int3c", "xc_e", "xc_g", "jk_e", "jk_g", "jk_ev",
              "total", "fock", "enfock", "vandg"]
 
 

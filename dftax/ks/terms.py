@@ -608,9 +608,63 @@ def _rik_kmatrix_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
     return c2s.T @ Kc @ c2s if c2s is not None else Kc
 
 
+def _rik_gmat_slabs(basis, aux_basis, slabs, C, omega=None):
+    """Half-transformed 3-center ``G_{X,m,i} = Σ_l (ml|X) C_li``, by aux slab.
+
+    The slab's ``(nao, nao, k)`` block is built once through the bucketed
+    kernels and contracted against *every* occupied orbital before being
+    dropped. :func:`_rik_bmj`, which this replaces, rebuilt the whole
+    ``nao²·naux`` tensor **once per occupied orbital** through the flat
+    per-element engine, so the streamed RI-K did O(nocc) times the integral
+    work it needed, with the slow kernel.
+
+    Memory is O(naux·nao·nocc) for the result plus O(slab·nao²) in flight,
+    against O(nao²·naux) for the materialized tensor: smaller by nao/nocc,
+    which is the point of the streamed backend.
+    """
+    return jnp.concatenate([
+        jnp.einsum("mnk,ni->kmi", _aux_slab_tensor(basis, aux_basis, sl,
+                                                   omega), C)
+        for sl in slabs
+    ])
+
+
+def _rik_slabs(basis, aux_basis, int2c_inv, Cocc, slabs, omega=None):
+    """``(raw exchange energy, raw exchange kernel KK)`` from one slab pass.
+
+    One quantity yields both. With ``G_X = T_X C`` and ``D_X = Cᵀ G_X``,
+
+        KK_mn = Σ_XY V⁻¹_XY (G_X G_Yᵀ)_mn
+        E_raw = Σ_XY V⁻¹_XY Tr(D_X D_Y) = Tr(Cᵀ KK C),
+
+    so the energy is a contraction of the kernel and needs no second pass over
+    the integrals. That matters twice over here: the ``custom_vjp`` in
+    :func:`_streamed_df_rik` used to build every slab in its forward for the
+    energy and then build them all again in its backward for the kernel, which
+    is double the integral work *and* double the compiled graphs, on a path
+    whose compile already dwarfs its runtime (22 minutes of compilation for a
+    three-atom case that then evaluates in 23 ms).
+
+    No cart2sph, unlike the flat :func:`_rik_energy`. That one contracts
+    cartesian elements from ``_eri3c_elem`` and has to lift ``Cocc`` into the
+    cartesian span; the bucketed slab builder already transforms each class to
+    spherical harmonics, so its tensor is in the basis ``Cocc`` is in (which
+    is why :func:`_streamed_df_rik_frozen` passes ``Zs`` straight through).
+    """
+    G = _rik_gmat_slabs(basis, aux_basis, slabs, Cocc, omega)  # (naux,n,nocc)
+    naux, n, nocc = G.shape
+    # H_X = Σ_Y V⁻¹_XY G_Y, then KK = Σ_X G_X H_Xᵀ. Applying the metric once
+    # to the half-transformed tensor is the naux² term; doing it per orbital
+    # (as _rik_bmj did) costs the same arithmetic on top of nocc times the
+    # integrals.
+    H = (int2c_inv @ G.reshape(naux, -1)).reshape(naux, n, nocc)
+    KK = jnp.einsum("xmi,xni->mn", G, H)
+    return jnp.vdot(Cocc, KK @ Cocc), KK
+
+
 def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
                      dscale, energy_pref, grad_pref, omega=None,
-                     devices=None):
+                     devices=None, slabs=None):
     """Streamed RI-K exchange energy with an exact analytic gradient.
 
     Orbital-chunk RI-K: ``E_K = energy_pref · Σ_ijx (Σ_P (ij|P) L_Px)²`` (``V⁻¹=LLᵀ``),
@@ -638,16 +692,22 @@ def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
     # the kernel are each a sum over occupied orbitals, and a psum of the
     # per-device partials is the single-device value.
     def _energy(Cocc):
-        if devices is None:
-            return _rik_energy(basis, aux_basis, int2c_inv, Cocc, omega)
-        return _rik_energy_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
-                                   omega)
+        if devices is not None:
+            return _rik_energy_sharded(basis, aux_basis, int2c_inv, Cocc,
+                                       devices, omega)
+        if slabs is not None:
+            return _rik_slabs(basis, aux_basis, int2c_inv, Cocc, slabs,
+                              omega)[0]
+        return _rik_energy(basis, aux_basis, int2c_inv, Cocc, omega)
 
     def _kmat(Cocc):
-        if devices is None:
-            return _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc, omega)
-        return _rik_kmatrix_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
-                                    omega)
+        if devices is not None:
+            return _rik_kmatrix_sharded(basis, aux_basis, int2c_inv, Cocc,
+                                        devices, omega)
+        if slabs is not None:
+            return _rik_slabs(basis, aux_basis, int2c_inv, Cocc, slabs,
+                              omega)[1]
+        return _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc, omega)
 
     @jax.custom_vjp
     def rik(P):
@@ -655,11 +715,23 @@ def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
         return energy_pref * _energy(Cocc)
 
     def fwd(P):
+        # The residual is the exchange kernel, not the orbitals: on the slab
+        # path one pass yields both (see _rik_slabs), so stashing KK here
+        # leaves the backward with no integral work at all. The flat and
+        # sharded paths keep their two-pass shape, so they stash the orbitals
+        # and rebuild, exactly as before.
         Cocc = _rik_occ_orbitals(P, S, nocc, dscale)
-        return energy_pref * _energy(Cocc), Cocc
+        if slabs is not None and devices is None:
+            e_raw, KK = _rik_slabs(basis, aux_basis, int2c_inv, Cocc, slabs,
+                                   omega)
+            return energy_pref * e_raw, (None, KK)
+        return energy_pref * _energy(Cocc), (Cocc, None)
 
-    def bwd(Cocc, g):
-        return (g * grad_pref * _kmat(Cocc),)
+    def bwd(res, g):
+        Cocc, KK = res
+        if KK is None:
+            KK = _kmat(Cocc)
+        return (g * grad_pref * KK,)
 
     rik.defvjp(fwd, bwd)
     return rik(P)
@@ -735,6 +807,32 @@ def _exchange_quadratic(kfun, P, ax):
     return -0.5 * ax * sum(jnp.sum(Ps * kfun(Ps)) for Ps in P)
 
 
+def _rik_materialized(int3c, int2c_inv, Cocc):
+    """``(raw exchange energy, kernel KK)`` from a materialized 3-center tensor.
+
+    The occupied-orbital form of the same quantity ``DFCoulomb.energy``
+    contracts out of the density. With ``G_X = T_X C`` and ``D_X = Cᵀ G_X``,
+
+        KK_mn = Σ_XY V⁻¹_XY (G_X G_Yᵀ)_mn,   E_raw = Tr(Cᵀ KK C),
+
+    which is the identity :func:`_rik_slabs` uses on the streamed path.
+
+    Why it is cheaper than ``einsum("mlP,PQ,nsQ,ls->mn")``. That contraction's
+    optimal path opens with ``PQ,mlP->Qml`` at naux²·nao², which is 69% of its
+    flops *and* is independent of the density, so the SCF recomputes it every
+    iteration; the remaining two steps are nao³·naux each. Routing through the
+    occupied orbitals replaces nao by nocc in every one of those: naux²·nao·nocc
+    plus two nao²·nocc·naux. On cubane/def2-svp (nao 152, naux 744, nocc 28)
+    that is 1.8e10 flops against 3.3e9, a factor of 5.4, and it grows with the
+    virtual space.
+    """
+    G = jnp.einsum("mlX,li->Xmi", int3c, Cocc)              # (naux, nao, nocc)
+    naux, n, no = G.shape
+    H = (int2c_inv @ G.reshape(naux, -1)).reshape(naux, n, no)
+    KK = jnp.einsum("xmi,xni->mn", G, H)
+    return jnp.vdot(Cocc, KK @ Cocc), KK
+
+
 class CoulombTerm(eqx.Module):
     """Coulomb + exact-exchange energy ``E_J + a_x·E_x`` of a spin-stacked density.
 
@@ -751,6 +849,24 @@ class CoulombTerm(eqx.Module):
         nocc: tuple[int, ...],
     ) -> Scalar:
         raise NotImplementedError
+
+    def energy_and_potential(self, P, S, nocc, idempotent: bool = True):
+        """``(E, ∂E/∂P)``, sharing work between them where the backend can.
+
+        The SCF wants both at the same density every iteration. The default is
+        plain reverse mode, which is what every consumer outside the SCF
+        (forces, the Hessian, Newton, minimize) keeps using; backends override
+        it where they can do better.
+
+        ``idempotent`` states that ``P`` is an integer-occupation projector,
+        which is true of an aufbau density and false under Fermi smearing.
+        Overrides that route exchange through recovered occupied orbitals are
+        exact only under that assumption and must fall back here when it does
+        not hold. It is an argument rather than something sniffed from ``P``
+        because the caller knows it for certain and a numerical idempotency
+        test would be a threshold nobody could defend.
+        """
+        return jax.value_and_grad(lambda Q: self.energy(Q, S, nocc))(P)
 
 
 class ExactCoulomb(CoulombTerm):
@@ -837,6 +953,67 @@ class DFCoulomb(CoulombTerm):
                 self.hf_coeff_lr,
             )
         return e
+
+    def energy_and_potential(self, P, S, nocc, idempotent=True):
+        """``(E, ∂E/∂P)`` with RI-J in closed form and RI-K through the
+        occupied orbitals.
+
+        Neither half needs reverse mode. RI-J's derivative is exactly the
+        Coulomb matrix ``J = Σ_P (μν|P)(V⁻¹γ)_P`` it already builds γ for, and
+        RI-K goes through :func:`_rik_materialized`, whose analytic Fock is
+        ``grad_pref · KK`` (the same prefactor algebra
+        :func:`_streamed_df_rik` documents: for a closed shell ``P = 2CCᵀ``
+        gives ``K(P) = 2·KK`` so ``∂/∂P`` of ``-¼a_x Tr(P K(P))`` is
+        ``-a_x·KK``; per spin channel ``P_σ = C_σC_σᵀ`` gives ``-a_x·KK_σ``).
+
+        Falls back to the base class whenever the occupied-orbital route would
+        be a lie: at fractional occupations ``P`` is not a projector, the
+        orbitals recovered from it are not the whole density, and the exchange
+        would describe an integer-occupied system (measured at 1.4e-3 Ha on
+        the streamed backend, which is why ``scf`` now refuses that
+        combination outright).
+        """
+        if not idempotent:
+            return super().energy_and_potential(P, S, nocc, idempotent)
+
+        Ptot = jnp.sum(P, axis=0)
+        gamma = jnp.einsum("mnP,mn->P", self.int3c, Ptot)
+        # Symmetrized on purpose. d/dγ of ½γᵀV⁻¹γ is ½(V⁻¹ + V⁻¹ᵀ)γ, and
+        # _metric_pinv builds (U·w⁻¹)Uᵀ, which is symmetric only to rounding.
+        # The quadratic form hides that in the *energy* (the antisymmetric
+        # part cancels), so ½γ·Vg below is unchanged, but the gradient sees it
+        # and the metric's kept band amplifies it: taking V⁻¹γ here put the
+        # Fock 2e-10 away from the reverse-mode reference on CH3/PBE, over
+        # the gate's 1e-10 invariant. One extra matvec on a naux-vector.
+        Vg = 0.5 * (self.int2c_inv @ gamma + gamma @ self.int2c_inv)
+        e = 0.5 * jnp.dot(gamma, Vg)
+        J = jnp.einsum("mnP,P->mn", self.int3c, Vg)      # ∂E_J/∂P_σ, every σ
+        V = jnp.broadcast_to(J, P.shape)
+
+        nspin = P.shape[0]
+        dscale = 0.5 if nspin == 1 else 1.0
+        for ax, t3, vinv in ((self.hf_coeff, self.int3c, self.int2c_inv),
+                             (self.hf_coeff_lr, self.int3c_lr,
+                              self.int2c_inv_lr)):
+            if ax == 0.0:
+                continue
+            e_pref = -ax if nspin == 1 else -0.5 * ax
+            for sigma, n in enumerate(nocc):
+                if n == 0:                      # empty channel (e.g. H atom β)
+                    continue
+                # stop_gradient for the same reason _streamed_df_rik keeps
+                # its orbital extraction inside a custom_vjp: the eigh behind
+                # it has 1/(w_i - w_j) in its backward and the occupied
+                # eigenvalues are degenerate by construction. Nothing
+                # differentiates this method today (only the SCF loop calls
+                # it), and this makes that a property of the code rather than
+                # of who happens to call it.
+                C = jax.lax.stop_gradient(
+                    _rik_occ_orbitals(P[sigma], S, n, dscale))
+                raw, KK = _rik_materialized(t3, vinv, C)
+                e = e + e_pref * raw
+                V = V.at[sigma].add(-ax * KK)
+        return e, V
 
 
 class ShardedDFCoulomb(CoulombTerm):
@@ -959,25 +1136,41 @@ class StreamedDFCoulomb(CoulombTerm):
     int2c_inv_lr: Float[Array, "naux naux"] | None = None
     hf_coeff_lr: float = eqx.field(static=True, default=0.0)
     omega: float = eqx.field(static=True, default=0.0)
+    # Shell-aligned auxiliary slab plans. None falls back to the per-element
+    # streaming below, which is the engine the bucketed build replaced
+    # everywhere else and is kept only for a term constructed without plans.
+    slab_plans: tuple | None = eqx.field(static=True, default=None)
 
     def _rik_sum(self, e, P, S, nocc, metric_inv, ax, omega):
         if P.shape[0] == 1:                            # closed shell: P = 2 C Cᵀ
             return e + _streamed_df_rik(
                 self.basis, self.aux_basis, metric_inv,
                 S, nocc[0], P[0], 0.5, -ax, -ax, omega,
+                slabs=self.slab_plans,
             )
         for Ps, n in zip(P, nocc):                     # one spin channel: P_σ = C Cᵀ
             e = e + _streamed_df_rik(
                 self.basis, self.aux_basis, metric_inv,
                 S, n, Ps, 1.0, -0.5 * ax, -ax, omega,
+                slabs=self.slab_plans,
             )
         return e
 
     def energy(self, P, S, nocc):
         Ptot = jnp.sum(P, axis=0)
-        e = _streamed_df_rij(
-            self.basis, self.aux_basis, self.int2c_inv, Ptot, self.chunk, self.pairs
-        )
+        if self.slab_plans is not None:
+            # One bucketed build per shell-aligned aux slab, contracted and
+            # dropped, instead of one flat per-element lookup per auxiliary
+            # function. Same value, same O(slab·nao²) memory.
+            e = _streamed_df_rij_slabs(
+                self.basis, self.aux_basis, self.int2c_inv, Ptot,
+                self.slab_plans,
+            )
+        else:
+            e = _streamed_df_rij(
+                self.basis, self.aux_basis, self.int2c_inv, Ptot,
+                self.chunk, self.pairs,
+            )
         if self.hf_coeff != 0.0:
             e = self._rik_sum(e, P, S, nocc, self.int2c_inv, self.hf_coeff,
                               None)
@@ -1702,7 +1895,7 @@ class ShardedGridXC(XCTerm):
 
 def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                   eri_lr=None, int3c_lr=None, int2c_inv_lr=None,
-                  hf_coeff_lr=0.0, omega=0.0, devices=None):
+                  hf_coeff_lr=0.0, omega=0.0, devices=None, slab_plans=None):
     """Wrap the integral arrays built for ``spec`` into the matching Coulomb term.
 
     ``hf_coeff_lr`` (with the ``*_lr`` attenuated tensors and ``omega``) is the
@@ -1729,7 +1922,7 @@ def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                 basis=basis, aux_basis=spec.auxbasis, int2c_inv=int2c_inv,
                 pairs=pairs, chunk=spec.chunk, hf_coeff=hf_coeff,
                 int2c_inv_lr=int2c_inv_lr, hf_coeff_lr=hf_coeff_lr,
-                omega=omega,
+                omega=omega, slab_plans=slab_plans,
             )
         return DFCoulomb(
             int3c=int3c, int2c_inv=int2c_inv, hf_coeff=hf_coeff,

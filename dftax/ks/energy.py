@@ -616,6 +616,21 @@ class KS(eqx.Module):
             plan_eri3c(basis, aux_basis, keep_pairs=screen_keep)
             if aux_basis is not None else None
         )
+        # Shell-aligned auxiliary slabs for the streamed backend. The forces
+        # path has built these since 0.7.0 and the streamed SCF backend never
+        # did: it looked its 3-center elements up one at a time through the
+        # flat per-element engine, which the bucketed build replaced
+        # everywhere else. Same eager-vs-traced split as the plans above.
+        slab_plans = None
+        if is_df and isinstance(spec.chunk, int):
+            from dftax.integrals.eri3c_bucketed import plan_aux_slabs
+
+            slab_keep = (_shell_pair_keep(basis, float(spec.screen))
+                         if spec.screen is not None else None)
+            slab_plans = plan_aux_slabs(
+                basis, aux_basis,
+                max_fns=max(1, int(spec.chunk)), keep_pairs=slab_keep,
+            )
         pair_plan = plan_pairs(basis)
         aux_pair_plan = (
             plan_pairs(aux_basis) if aux_basis is not None else None
@@ -686,6 +701,7 @@ class KS(eqx.Module):
                 spec, basis, eri, int3c, int2c_inv, pairs, float(xc.hf_coeff),
                 eri_lr, int3c_lr, int2c_inv_lr, hf_lr, omega,
                 devices=devices if shard_df else None,
+                slab_plans=slab_plans,
             )
         if devices is not None:
             # Pad the quadrature to the mesh and lay it out sharded; the AO
@@ -769,7 +785,7 @@ class KS(eqx.Module):
         return self.electronic(P) + self.e_nn + self.e_disp
 
     def energy_and_fock(
-        self, P: Float[Array, "nspin nao nao"]
+        self, P: Float[Array, "nspin nao nao"], idempotent: bool = True
     ) -> tuple[Scalar, Float[Array, "nspin nao nao"]]:
         """``(E_total, F)`` for one density, sharing the work between them.
 
@@ -781,25 +797,31 @@ class KS(eqx.Module):
         cubane/def2-svp that is 34.1 ms + 22.4 ms where the gradient alone is
         33.3 ms.
 
-        So the XC term is asked for both at once (see
-        :meth:`~dftax.ks.terms.XCTerm.energy_and_potential`, which takes the
-        VJP per block while the residuals are still alive), and everything
-        else -- the one-electron trace and the Coulomb/exchange term -- goes
-        through one ``value_and_grad``, which is already single-pass since
-        nothing there is checkpointed.
+        So each term is asked for both at once: the XC term takes the VJP per
+        block while the residuals are still alive
+        (:meth:`~dftax.ks.terms.XCTerm.energy_and_potential`), and the
+        Coulomb term gives RI-J's derivative in closed form and routes RI-K
+        through the occupied orbitals
+        (:meth:`~dftax.ks.terms.CoulombTerm.energy_and_potential`). The
+        one-electron trace is linear in ``P`` and costs nothing either way.
+
+        ``idempotent`` says whether ``P`` is an integer-occupation projector.
+        It is, for an aufbau density; it is not under Fermi smearing, and the
+        occupied-orbital exchange route is exact only when it is, so the
+        Coulomb term falls back to reverse mode when told otherwise.
 
         The result is the same ``(total(P), sym(∂E/∂P))`` the two calls gave,
         and ``total`` / ``electronic`` are untouched, so every other consumer
         (forces, the Hessian, Newton, direct minimization) keeps the plain
         autodiff path.
         """
-        def rest(Q):
-            e1 = jnp.sum(jnp.sum(Q, axis=0) * self.hcore)
-            return e1 + self.coulomb.energy(Q, self.S, self.nocc)
-
-        e_rest, g_rest = jax.value_and_grad(rest)(P)
+        e1, g1 = jax.value_and_grad(
+            lambda Q: jnp.sum(jnp.sum(Q, axis=0) * self.hcore))(P)
+        e_2e, g_2e = self.coulomb.energy_and_potential(
+            P, self.S, self.nocc, idempotent)
         e_xc, v_xc = self.xc_term.energy_and_potential(P)
-        g = g_rest + v_xc
+        e_rest = e1 + e_2e
+        g = g1 + g_2e + v_xc
         F = 0.5 * (g + g.transpose(0, 2, 1))
         return e_rest + e_xc + self.e_nn + self.e_disp, F
 

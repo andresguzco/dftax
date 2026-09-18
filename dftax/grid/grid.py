@@ -28,6 +28,12 @@ from dftax.grid.lebedev import lebedev_grid
 from dftax.grid.becke import becke_radial, becke_partition, bragg_radius
 
 
+# Atom count from which screen="auto" switches per-block screening on. Below
+# the crossover the gather overhead outweighs the saving.
+SCREEN_AUTO_MIN_ATOMS = 50
+SCREEN_AUTO_CUTOFF = 1e-10
+
+
 @dataclass(frozen=True)
 class Becke:
     """Native Becke grid spec (see :func:`becke`)."""
@@ -38,7 +44,7 @@ class Becke:
     prune: str | None = "nwchem"
     r_max: float | None = 45.0
     cutoff: float | None = 1e-15
-    screen: float | None = None
+    screen: float | str | None = "auto"
     screen_block: int = 2048
     screen_buckets: int = 4
 
@@ -60,7 +66,7 @@ def becke(
     prune: str | None = "nwchem",
     r_max: float | None = 45.0,
     cutoff: float | None = 1e-15,
-    screen: float | None = None,
+    screen: float | str | None = "auto",
     screen_block: int = 2048,
     screen_buckets: int = 4,
 ) -> Becke:
@@ -90,16 +96,11 @@ def becke(
         screen: amplitude threshold for per-block basis screening (see
             :mod:`dftax.grid.screen`). The grid is reordered into compact
             blocks and each block keeps only the shells that reach it, so the
-            XC term costs ``ng·nsub²`` instead of ``ng·nao²``. ``None``
-            (default) evaluates the whole basis everywhere.
-
-            **Only worth turning on above ~50 atoms.** Measured end to end on
-            a ``grad`` of the XC energy (what an SCF iteration pays),
-            def2-svp, against the streamed dense path: 0.89x at 23 atoms
-            (i.e. a loss), 1.53x at 53, 3.11x at 153, with peak memory equal
-            or lower. The saving keeps growing with the molecule, so it is
-            the large-system knob and costs a little on small ones.
-            Closed-shell only for now.
+            XC term costs ``ng·nsub²`` instead of ``ng·nao²``. A float sets
+            the threshold, ``None`` evaluates the whole basis everywhere, and
+            ``"auto"`` (the default) turns it on from
+            ``SCREEN_AUTO_MIN_ATOMS`` atoms up. It is a large-system knob: a
+            small loss below the crossover, and a growing win above it.
         screen_block: grid points per screening block. Larger blocks amortize
             the gather but reach more shells.
         screen_buckets: how many distinct padded shapes to compile. More

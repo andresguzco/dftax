@@ -51,7 +51,7 @@ import equinox as eqx
 from jaxtyping import Array, Float, Scalar
 
 from dftax.energy.d3 import D3BJSpec, _resolve_dispersion
-from dftax.energy.gto import BasisData, extract_basis_data, eval_gto
+from dftax.energy.gto import BasisData, extract_basis_data, eval_gto_and_grad
 from dftax.energy.xc import XCFunctional
 from dftax.grid import Becke, Points, becke, becke_grid
 from dftax.integrals import (
@@ -228,6 +228,25 @@ def _resolve_chunk(chunk, ng: int, nao: int):
     return chunk
 
 
+def _resolve_screen(screen, n_atom: int) -> float | None:
+    """Resolve a grid spec's ``screen`` against the molecule's size.
+
+    ``n_atom`` must come from ``coords.shape``, never from
+    ``np.asarray(coords)``: ``forces`` rebuilds the energy with *traced*
+    nuclear coordinates, and converting a tracer raises. A shape is static
+    even when its contents are not.
+
+    ``"auto"`` is a size gate because per-block screening is a loss on small
+    molecules and a growing win on large ones; see :func:`~dftax.grid.becke`.
+    An explicit float or ``None`` is honored as given.
+    """
+    from dftax.grid.grid import SCREEN_AUTO_CUTOFF, SCREEN_AUTO_MIN_ATOMS
+
+    if screen == "auto":
+        return SCREEN_AUTO_CUTOFF if n_atom >= SCREEN_AUTO_MIN_ATOMS else None
+    return None if screen is None else float(screen)
+
+
 def _resolve_grid(grid, symbols, coords):
     """Resolve a grid input to ``(coords, weights, chunk)``.
 
@@ -361,10 +380,11 @@ def ao_on_grid(
     basis: BasisData,
     coords: Float[Array, "ng 3"],
 ) -> tuple[Float[Array, "ng nao"], Float[Array, "ng nao 3"]]:
-    """Atomic-orbital values and spatial gradients at grid points (pure JAX)."""
-    ao = jax.vmap(lambda r: eval_gto(basis, r))(coords)
-    dao = jax.vmap(lambda r: jax.jacfwd(eval_gto, argnums=1)(basis, r))(coords)
-    return ao, dao
+    """Atomic-orbital values and spatial gradients at grid points (pure JAX).
+
+    One pass, not two: see :func:`~dftax.energy.gto.eval_gto_and_grad`.
+    """
+    return jax.vmap(lambda r: eval_gto_and_grad(basis, r))(coords)
 
 
 @eqx.filter_jit
@@ -589,6 +609,18 @@ class KS(eqx.Module):
             plan_eri3c(basis, aux_basis, keep_pairs=screen_keep)
             if aux_basis is not None else None
         )
+        # Shell-aligned auxiliary slabs for the streamed backend, built
+        # eagerly like the plans above.
+        slab_plans = None
+        if is_df and isinstance(spec.chunk, int):
+            from dftax.integrals.eri3c_bucketed import plan_aux_slabs
+
+            slab_keep = (_shell_pair_keep(basis, float(spec.screen))
+                         if spec.screen is not None else None)
+            slab_plans = plan_aux_slabs(
+                basis, aux_basis,
+                max_fns=max(1, int(spec.chunk)), keep_pairs=slab_keep,
+            )
         pair_plan = plan_pairs(basis)
         aux_pair_plan = (
             plan_pairs(aux_basis) if aux_basis is not None else None
@@ -659,6 +691,7 @@ class KS(eqx.Module):
                 spec, basis, eri, int3c, int2c_inv, pairs, float(xc.hf_coeff),
                 eri_lr, int3c_lr, int2c_inv_lr, hf_lr, omega,
                 devices=devices if shard_df else None,
+                slab_plans=slab_plans,
             )
         if devices is not None:
             # Pad the quadrature to the mesh and lay it out sharded; the AO
@@ -674,7 +707,8 @@ class KS(eqx.Module):
                     chunk=grid_chunk, xc=xc,
                 )
             self.xc_term = ShardedGridXC(inner=inner, devices=devices)
-        elif getattr(grid, "screen", None) is not None:
+        elif _resolve_screen(getattr(grid, "screen", None),
+                             int(coords.shape[0])) is not None:
             # Per-block basis screening: reorder the grid into compact blocks
             # and give each only the shells that reach it. The plan is built
             # eagerly (it reads concrete geometry), like the Schwarz screen.
@@ -682,7 +716,8 @@ class KS(eqx.Module):
 
             plan = plan_grid_screen(
                 basis, grid_coords, coords, block=grid.screen_block,
-                cutoff=float(grid.screen), n_bucket=grid.screen_buckets,
+                cutoff=_resolve_screen(grid.screen, int(coords.shape[0])),
+                n_bucket=grid.screen_buckets,
             )
             gc_o = jnp.asarray(np.asarray(grid_coords)[plan.order])
             gw_o = np.asarray(weights)[plan.order]
@@ -738,6 +773,35 @@ class KS(eqx.Module):
     def total(self, P: Float[Array, "nspin nao nao"]) -> Scalar:
         """Total KS energy (electronic + nuclear repulsion + dispersion)."""
         return self.electronic(P) + self.e_nn + self.e_disp
+
+    def energy_and_fock(
+        self, P: Float[Array, "nspin nao nao"], idempotent: bool = True
+    ) -> tuple[Scalar, Float[Array, "nspin nao nao"]]:
+        """``(E_total, F)`` for one density, sharing the work between them.
+
+        Computing the two separately walks the quadrature twice, because the
+        streaming backends checkpoint their grid blocks and ``grad``
+        rematerializes them. Each term is therefore asked for both at once
+        (:meth:`~dftax.ks.terms.XCTerm.energy_and_potential`,
+        :meth:`~dftax.ks.terms.CoulombTerm.energy_and_potential`).
+
+        ``idempotent`` says whether ``P`` is an integer-occupation projector:
+        true of an aufbau density, false under Fermi smearing. The Coulomb
+        term falls back to reverse mode when told otherwise.
+
+        The result is the same ``(total(P), sym(∂E/∂P))`` as the two separate
+        calls, which ``total`` / ``electronic`` still provide for every other
+        consumer (forces, the Hessian, Newton, direct minimization).
+        """
+        e1, g1 = jax.value_and_grad(
+            lambda Q: jnp.sum(jnp.sum(Q, axis=0) * self.hcore))(P)
+        e_2e, g_2e = self.coulomb.energy_and_potential(
+            P, self.S, self.nocc, idempotent)
+        e_xc, v_xc = self.xc_term.energy_and_potential(P)
+        e_rest = e1 + e_2e
+        g = g1 + g_2e + v_xc
+        F = 0.5 * (g + g.transpose(0, 2, 1))
+        return e_rest + e_xc + self.e_nn + self.e_disp, F
 
     def density(
         self, P: Float[Array, "nspin nao nao"]

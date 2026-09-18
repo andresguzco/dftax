@@ -319,7 +319,10 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
             P = jnp.einsum("smi,si,sni->smn", Co, f, Co)  # aufbau fill
         return P, C, eps
 
-    e0 = ks.total(P0)
+    # Infinity, not E(P0): the loop evaluates the energy at the density that
+    # produces the Fock, so an actual E(P0) would make `de` zero on iteration 0
+    # and hand convergence to any guess with a small commutator.
+    e0 = jnp.array(jnp.inf, dtype=P0.dtype)
     # C/eps placeholders: the body always runs at least one iteration
     # (``converged`` starts False), which overwrites them.
     C0 = jnp.zeros((nspin, nao, nmo))
@@ -342,8 +345,9 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
 
     def body(st):
         it, P, C, eps, e_prev, _, _, dF, dErr = st[:9]
-        g = jax.grad(lambda Q: ks.electronic(Q))(P)
-        F = 0.5 * (g + g.transpose(0, 2, 1))
+        # One call, not `grad(electronic)` beside `total`: on the streaming
+        # backends those walk the quadrature twice (see KS.energy_and_fock).
+        e_here, F = ks.energy_and_fock(P, idempotent=smear_sigma is None)
         err = X.T @ (F @ P @ S - S @ P @ F) @ X          # (nspin, nmo, nmo)
         derr = jnp.linalg.norm(err)
 
@@ -365,11 +369,13 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
             # alternatives were measured worse on the hard-case set.
             F_ext = jnp.where(derr > adiis_switch, F_adiis, F_ext)
 
+        de = e_here - e_prev
+        # Both halves describe the same density: `derr` is the commutator at
+        # P, `de` the step in E(P) since the previous iteration's density.
+        converged = (jnp.abs(de) < e_tol) & (derr < d_tol)
         F_ls = F_ext + level_shift * (S - inv_w * (S @ P @ S))   # raise virtuals
         P, C, eps = make_density(F_ls)
-        e = ks.total(P)
-        de = e - e_prev
-        converged = (jnp.abs(de) < e_tol) & (derr < d_tol)
+        e = e_here
         if verbose:
             jax.debug.print(
                 "  scf {it}: E={e:.10f} dE={de:+.2e} |[F,P]|={derr:.2e}",
@@ -379,7 +385,10 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
         return out + ((dD,) if adiis_switch is not None else ())
 
     final = lax.while_loop(cond, body, state0)
-    it, P, C, eps, e_prev, _, converged = final[:7]
+    it, P, C, eps, _e_at_prev, _, converged = final[:7]
+    # The loop's energy belongs to the density that produced the last Fock,
+    # while `P` is the one built from it, so report the energy at `P`.
+    e_prev = ks.total(P)
     # Mermin free energy under smearing: subtract the electronic entropy term
     # from the converged KS energy so the reported energy is the variational
     # (force-consistent) quantity. ts = 0 without smearing.
@@ -389,6 +398,34 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
     else:
         ts = jnp.asarray(0.0, dtype=e_prev.dtype)
     return e_prev - ts, P, C, eps, converged, it, ts
+
+
+def _reject_smeared_frozen_exchange(ks, smearing):
+    """Refuse fractional occupations on a backend whose exchange assumes none.
+
+    The streamed RI-K recovers occupied orbitals from ``P`` and treats the top
+    ``nocc`` as fully occupied (see
+    :func:`~dftax.ks.terms._streamed_df_rik`), which is exact at an idempotent
+    density and silently wrong at a smeared one. Use ``df(chunk=None)``
+    (materialized) for smeared hybrids, as ``dftax.ks.forces`` also requires.
+    """
+    if smearing is None:
+        return
+    from dftax.ks.terms import ShardedStreamedDFCoulomb, StreamedDFCoulomb
+
+    c = ks.coulomb
+    if not isinstance(c, (StreamedDFCoulomb, ShardedStreamedDFCoulomb)):
+        return
+    if float(getattr(c, "hf_coeff", 0.0)) == 0.0 and \
+       float(getattr(c, "hf_coeff_lr", 0.0)) == 0.0:
+        return                              # pure DFT: no frozen exchange
+    raise NotImplementedError(
+        "smearing with a hybrid on the streamed density-fitting backend: the "
+        "streamed RI-K freezes the occupied orbitals it recovers from P and "
+        "treats them as integer-occupied, which is wrong by ~1e-3 Ha at "
+        "fractional occupations (and still reports convergence). Use "
+        "coulomb=df(chunk=None) for a smeared hybrid, as forces() requires."
+    )
 
 
 def scf(
@@ -460,6 +497,7 @@ def scf(
         res.e_tot, res.converged, res.P[0]       # P is spin-stacked
         ```
     """
+    _reject_smeared_frozen_exchange(ks, smearing)
     X = canonical_orthonormalizer(ks.S, lindep_thresh)
     P0 = density_from_guess(ks, guess, X)
     # Tolerances ride along as traced arrays: under filter_jit a Python scalar

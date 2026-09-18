@@ -33,7 +33,18 @@ _SLOW_MODULES = {
     # slow per-element kernels; the PR smoke exercises the integrals via energy.
     "test_eri", "test_integrals",
     "test_spherical", "test_high_l",
+    # 212 s: contracts K against the materialized 4-center tensor at two
+    # bases. K symmetric / linear in P is covered in the default tier.
+    "test_exchange_k_symmetry",
 }
+
+# Kept OUT of the slow tier on purpose, because each guards a silent wrong
+# answer rather than a crash:
+#
+#   test_boys_ladder          49 s; the boys() large-t cutoff.
+#   test_ao_gradient          82 s; eval_gto and its analytic gradient.
+#   test_smeared_hybrid_guard the refusal test only (its SCF cases are slow).
+#   test_native_basis_span    its matrix tests only (the SCF test is slow).
 
 from pyscf import gto, dft
 

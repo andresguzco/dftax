@@ -147,11 +147,13 @@ def build_basis_data(
             _block_diag([blocks[l] for (l, _, _, _, _) in raw_shells])
         )
 
+    ang_np = np.array(angular, dtype=np.int32)
+    exp_np = np.array(all_exps, dtype=np.float64)
     basis = BasisData(
         centers=jnp.asarray(np.array(centers, dtype=np.float64)),
-        exponents=jnp.asarray(np.array(all_exps, dtype=np.float64)),
+        exponents=jnp.asarray(exp_np),
         coefficients=jnp.asarray(np.array(all_coeffs, dtype=np.float64)),
-        angular=jnp.asarray(np.array(angular, dtype=np.int32)),
+        angular=jnp.asarray(ang_np),
         cart2sph=cart2sph,
         max_l=int(max(l for (l, _, _, _, _) in raw_shells)),
     )

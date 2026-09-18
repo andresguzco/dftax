@@ -40,7 +40,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Scalar
 
 from dftax.energy.grid import xc_energy
-from dftax.energy.gto import BasisData, eval_gto
+from dftax.energy.gto import BasisData, eval_gto, eval_gto_and_grad
 from dftax.energy.potentials import xc_potential
 from dftax.energy.xc import XCFunctional
 from dftax.integrals.eri3c import _DF_BRA_BUDGET, _contracted_eri3c, _eri3c_sizes
@@ -213,7 +213,8 @@ def _metric_pinv_jvp(primals, tangents):
 # Streamed XC kernels (AO recomputed per grid chunk, O(chunk·nao) memory)
 # ---------------------------------------------------------------------------
 
-def _streamed_e_xc(xc, basis, coords, weights, P, chunk):
+def _streamed_e_xc(xc, basis, coords, weights, P, chunk,
+                   checkpoint=True):
     """XC energy ``∫ ε_xc ρ`` streamed over grid-point chunks (closed shell).
 
     AO values (and gradients for GGA) are recomputed per chunk and rematerialized
@@ -225,12 +226,14 @@ def _streamed_e_xc(xc, basis, coords, weights, P, chunk):
     mgga = xc.xc_type == "MGGA"
 
     def point(r, w):
-        ao_g = eval_gto(basis, r)                       # (nao,)
+        if gga or mgga:
+            ao_g, dao_g = eval_gto_and_grad(basis, r)   # (nao,), (nao, 3)
+        else:
+            ao_g = eval_gto(basis, r)                   # (nao,)
         rho = ao_g @ P @ ao_g
         mask = rho > 1e-10
         safe_rho = jnp.where(mask, rho, 1.0)
         if gga or mgga:
-            dao_g = jax.jacfwd(eval_gto, argnums=1)(basis, r)   # (nao, 3)
             grad = 2.0 * (ao_g @ P) @ dao_g             # (3,)
             if mgga:
                 tau = 0.5 * jnp.einsum("mx,mn,nx->", dao_g, P, dao_g)
@@ -242,13 +245,16 @@ def _streamed_e_xc(xc, basis, coords, weights, P, chunk):
             eps = xc(safe_rho)
         return jnp.where(mask, w * eps * rho, 0.0)
 
+    # checkpoint=False when the caller takes the VJP of this whole call
+    # (_streamed_e_and_v): rematerializing inside it would undo the saving.
     contribs = _chunked_vmap(
-        point, in_axes=(0, 0), chunk_size=chunk, checkpoint=True
+        point, in_axes=(0, 0), chunk_size=chunk, checkpoint=checkpoint
     )(coords, weights)
     return jnp.sum(contribs)
 
 
-def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk):
+def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk,
+                        checkpoint=True):
     """Spin-polarized XC energy ``∫ ε_xc(ρα,ρβ,∇ρα,∇ρβ) ρ_tot`` streamed over grid-point
     chunks, the open-shell analog of :func:`_streamed_e_xc`.
 
@@ -262,7 +268,10 @@ def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk):
     mgga = xc.xc_type == "MGGA"
 
     def point(r, w):
-        ao = eval_gto(basis, r)                                 # (nao,)
+        if gga or mgga:
+            ao, dao = eval_gto_and_grad(basis, r)
+        else:
+            ao = eval_gto(basis, r)                             # (nao,)
         rho_a = ao @ Pa @ ao
         rho_b = ao @ Pb @ ao
         rho_tot = rho_a + rho_b
@@ -271,7 +280,6 @@ def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk):
         tb = rho_b > 1e-10
         rho2 = jnp.stack([jnp.where(ta, rho_a, 1e-10), jnp.where(tb, rho_b, 1e-10)])   # (2,)
         if gga or mgga:
-            dao = jax.jacfwd(eval_gto, argnums=1)(basis, r)     # (nao, 3)
             ga = jnp.where(ta, 2.0 * (ao @ Pa) @ dao, 0.0)      # (3,)
             gb = jnp.where(tb, 2.0 * (ao @ Pb) @ dao, 0.0)
             if mgga:
@@ -286,8 +294,11 @@ def _streamed_e_xc_spin(xc, basis, coords, weights, Pa, Pb, chunk):
             eps = xc(rho2)
         return jnp.where(mask, w * eps * rho_tot, 0.0)
 
+    # checkpoint=False when the caller is taking the VJP of this whole call
+    # (see _streamed_e_and_v): rematerializing inside it would reintroduce
+    # exactly the second traversal the VJP was moved out here to avoid.
     contribs = _chunked_vmap(
-        point, in_axes=(0, 0), chunk_size=chunk, checkpoint=True
+        point, in_axes=(0, 0), chunk_size=chunk, checkpoint=checkpoint
     )(coords, weights)
     return jnp.sum(contribs)
 
@@ -594,9 +605,44 @@ def _rik_kmatrix_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
     return c2s.T @ Kc @ c2s if c2s is not None else Kc
 
 
+def _rik_gmat_slabs(basis, aux_basis, slabs, C, omega=None):
+    """Half-transformed 3-center ``G_{X,m,i} = Σ_l (ml|X) C_li``, by aux slab.
+
+    Each slab's ``(nao, nao, k)`` block is built once, contracted against every
+    occupied orbital, and dropped. Memory is O(naux·nao·nocc) for the result
+    plus O(slab·nao²) in flight.
+    """
+    return jnp.concatenate([
+        jnp.einsum("mnk,ni->kmi", _aux_slab_tensor(basis, aux_basis, sl,
+                                                   omega), C)
+        for sl in slabs
+    ])
+
+
+def _rik_slabs(basis, aux_basis, int2c_inv, Cocc, slabs, omega=None):
+    """``(raw exchange energy, raw exchange kernel KK)`` from one slab pass.
+
+    With ``G_X = T_X C``,
+
+        KK_mn = Σ_XY V⁻¹_XY (G_X G_Yᵀ)_mn,   E_raw = Tr(Cᵀ KK C),
+
+    so the energy is a contraction of the kernel and needs no second pass over
+    the integrals.
+
+    No cart2sph, unlike the flat :func:`_rik_energy`: the bucketed slab builder
+    already returns each class in the spherical basis ``Cocc`` is in.
+    """
+    G = _rik_gmat_slabs(basis, aux_basis, slabs, Cocc, omega)  # (naux,n,nocc)
+    naux, n, nocc = G.shape
+    # H_X = Σ_Y V⁻¹_XY G_Y, then KK = Σ_X G_X H_Xᵀ.
+    H = (int2c_inv @ G.reshape(naux, -1)).reshape(naux, n, nocc)
+    KK = jnp.einsum("xmi,xni->mn", G, H)
+    return jnp.vdot(Cocc, KK @ Cocc), KK
+
+
 def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
                      dscale, energy_pref, grad_pref, omega=None,
-                     devices=None):
+                     devices=None, slabs=None):
     """Streamed RI-K exchange energy with an exact analytic gradient.
 
     Orbital-chunk RI-K: ``E_K = energy_pref · Σ_ijx (Σ_P (ij|P) L_Px)²`` (``V⁻¹=LLᵀ``),
@@ -624,16 +670,22 @@ def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
     # the kernel are each a sum over occupied orbitals, and a psum of the
     # per-device partials is the single-device value.
     def _energy(Cocc):
-        if devices is None:
-            return _rik_energy(basis, aux_basis, int2c_inv, Cocc, omega)
-        return _rik_energy_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
-                                   omega)
+        if devices is not None:
+            return _rik_energy_sharded(basis, aux_basis, int2c_inv, Cocc,
+                                       devices, omega)
+        if slabs is not None:
+            return _rik_slabs(basis, aux_basis, int2c_inv, Cocc, slabs,
+                              omega)[0]
+        return _rik_energy(basis, aux_basis, int2c_inv, Cocc, omega)
 
     def _kmat(Cocc):
-        if devices is None:
-            return _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc, omega)
-        return _rik_kmatrix_sharded(basis, aux_basis, int2c_inv, Cocc, devices,
-                                    omega)
+        if devices is not None:
+            return _rik_kmatrix_sharded(basis, aux_basis, int2c_inv, Cocc,
+                                        devices, omega)
+        if slabs is not None:
+            return _rik_slabs(basis, aux_basis, int2c_inv, Cocc, slabs,
+                              omega)[1]
+        return _rik_kmatrix(basis, aux_basis, int2c_inv, Cocc, omega)
 
     @jax.custom_vjp
     def rik(P):
@@ -641,11 +693,21 @@ def _streamed_df_rik(basis, aux_basis, int2c_inv, S, nocc, P,
         return energy_pref * _energy(Cocc)
 
     def fwd(P):
+        # On the slab path one pass yields energy and kernel together, so
+        # stashing KK leaves the backward with no integral work. The flat and
+        # sharded paths stash the orbitals and rebuild.
         Cocc = _rik_occ_orbitals(P, S, nocc, dscale)
-        return energy_pref * _energy(Cocc), Cocc
+        if slabs is not None and devices is None:
+            e_raw, KK = _rik_slabs(basis, aux_basis, int2c_inv, Cocc, slabs,
+                                   omega)
+            return energy_pref * e_raw, (None, KK)
+        return energy_pref * _energy(Cocc), (Cocc, None)
 
-    def bwd(Cocc, g):
-        return (g * grad_pref * _kmat(Cocc),)
+    def bwd(res, g):
+        Cocc, KK = res
+        if KK is None:
+            KK = _kmat(Cocc)
+        return (g * grad_pref * KK,)
 
     rik.defvjp(fwd, bwd)
     return rik(P)
@@ -721,6 +783,21 @@ def _exchange_quadratic(kfun, P, ax):
     return -0.5 * ax * sum(jnp.sum(Ps * kfun(Ps)) for Ps in P)
 
 
+def _rik_materialized(int3c, int2c_inv, Cocc):
+    """``(raw exchange energy, kernel KK)`` from a materialized 3-center tensor.
+
+    The occupied-orbital form of what ``DFCoulomb.energy`` contracts out of the
+    density, using the same identity as :func:`_rik_slabs`. Routing through the
+    orbitals replaces nao by nocc in every contraction step, so it scales with
+    the occupied space rather than the full basis.
+    """
+    G = jnp.einsum("mlX,li->Xmi", int3c, Cocc)              # (naux, nao, nocc)
+    naux, n, no = G.shape
+    H = (int2c_inv @ G.reshape(naux, -1)).reshape(naux, n, no)
+    KK = jnp.einsum("xmi,xni->mn", G, H)
+    return jnp.vdot(Cocc, KK @ Cocc), KK
+
+
 class CoulombTerm(eqx.Module):
     """Coulomb + exact-exchange energy ``E_J + a_x·E_x`` of a spin-stacked density.
 
@@ -737,6 +814,20 @@ class CoulombTerm(eqx.Module):
         nocc: tuple[int, ...],
     ) -> Scalar:
         raise NotImplementedError
+
+    def energy_and_potential(self, P, S, nocc, idempotent: bool = True):
+        """``(E, ∂E/∂P)``, sharing work between them where the backend can.
+
+        The default is plain reverse mode; backends override it where they can
+        do better. Only the SCF calls this, and every other consumer (forces,
+        the Hessian, Newton, minimize) keeps using ``energy`` directly.
+
+        ``idempotent`` states that ``P`` is an integer-occupation projector:
+        true of an aufbau density, false under Fermi smearing. Overrides that
+        route exchange through recovered occupied orbitals are exact only under
+        that assumption and fall back here when it does not hold.
+        """
+        return jax.value_and_grad(lambda Q: self.energy(Q, S, nocc))(P)
 
 
 class ExactCoulomb(CoulombTerm):
@@ -823,6 +914,54 @@ class DFCoulomb(CoulombTerm):
                 self.hf_coeff_lr,
             )
         return e
+
+    def energy_and_potential(self, P, S, nocc, idempotent=True):
+        """``(E, ∂E/∂P)`` with RI-J in closed form and RI-K through the
+        occupied orbitals.
+
+        Neither half needs reverse mode. RI-J's derivative is the Coulomb
+        matrix ``J = Σ_P (μν|P)(V⁻¹γ)_P`` it already builds γ for, and RI-K
+        goes through :func:`_rik_materialized`, whose Fock is ``-a_x·KK`` per
+        spin channel (the prefactor algebra :func:`_streamed_df_rik` sets out).
+
+        Falls back to the base class at fractional occupations, where ``P`` is
+        not a projector and the recovered orbitals are not the whole density.
+        """
+        if not idempotent:
+            return super().energy_and_potential(P, S, nocc, idempotent)
+
+        Ptot = jnp.sum(P, axis=0)
+        gamma = jnp.einsum("mnP,mn->P", self.int3c, Ptot)
+        # Symmetrized on purpose: d/dγ of ½γᵀV⁻¹γ is ½(V⁻¹ + V⁻¹ᵀ)γ, and
+        # _metric_pinv builds (U·w⁻¹)Uᵀ, symmetric only to rounding. The
+        # energy's quadratic form cancels the antisymmetric part; the gradient
+        # does not, and the metric amplifies it. One extra naux matvec.
+        Vg = 0.5 * (self.int2c_inv @ gamma + gamma @ self.int2c_inv)
+        e = 0.5 * jnp.dot(gamma, Vg)
+        J = jnp.einsum("mnP,P->mn", self.int3c, Vg)      # ∂E_J/∂P_σ, every σ
+        V = jnp.broadcast_to(J, P.shape)
+
+        nspin = P.shape[0]
+        dscale = 0.5 if nspin == 1 else 1.0
+        for ax, t3, vinv in ((self.hf_coeff, self.int3c, self.int2c_inv),
+                             (self.hf_coeff_lr, self.int3c_lr,
+                              self.int2c_inv_lr)):
+            if ax == 0.0:
+                continue
+            e_pref = -ax if nspin == 1 else -0.5 * ax
+            for sigma, n in enumerate(nocc):
+                if n == 0:                      # empty channel (e.g. H atom β)
+                    continue
+                # stop_gradient for the same reason _streamed_df_rik keeps
+                # its orbital extraction inside a custom_vjp: the eigh behind
+                # it has 1/(w_i - w_j) in its backward and the occupied
+                # eigenvalues are degenerate by construction.
+                C = jax.lax.stop_gradient(
+                    _rik_occ_orbitals(P[sigma], S, n, dscale))
+                raw, KK = _rik_materialized(t3, vinv, C)
+                e = e + e_pref * raw
+                V = V.at[sigma].add(-ax * KK)
+        return e, V
 
 
 class ShardedDFCoulomb(CoulombTerm):
@@ -945,25 +1084,38 @@ class StreamedDFCoulomb(CoulombTerm):
     int2c_inv_lr: Float[Array, "naux naux"] | None = None
     hf_coeff_lr: float = eqx.field(static=True, default=0.0)
     omega: float = eqx.field(static=True, default=0.0)
+    # Shell-aligned auxiliary slab plans. None falls back to the per-element
+    # streaming below.
+    slab_plans: tuple | None = eqx.field(static=True, default=None)
 
     def _rik_sum(self, e, P, S, nocc, metric_inv, ax, omega):
         if P.shape[0] == 1:                            # closed shell: P = 2 C Cᵀ
             return e + _streamed_df_rik(
                 self.basis, self.aux_basis, metric_inv,
                 S, nocc[0], P[0], 0.5, -ax, -ax, omega,
+                slabs=self.slab_plans,
             )
         for Ps, n in zip(P, nocc):                     # one spin channel: P_σ = C Cᵀ
             e = e + _streamed_df_rik(
                 self.basis, self.aux_basis, metric_inv,
                 S, n, Ps, 1.0, -0.5 * ax, -ax, omega,
+                slabs=self.slab_plans,
             )
         return e
 
     def energy(self, P, S, nocc):
         Ptot = jnp.sum(P, axis=0)
-        e = _streamed_df_rij(
-            self.basis, self.aux_basis, self.int2c_inv, Ptot, self.chunk, self.pairs
-        )
+        if self.slab_plans is not None:
+            # One bucketed build per aux slab, contracted and dropped.
+            e = _streamed_df_rij_slabs(
+                self.basis, self.aux_basis, self.int2c_inv, Ptot,
+                self.slab_plans,
+            )
+        else:
+            e = _streamed_df_rij(
+                self.basis, self.aux_basis, self.int2c_inv, Ptot,
+                self.chunk, self.pairs,
+            )
         if self.hf_coeff != 0.0:
             e = self._rik_sum(e, P, S, nocc, self.int2c_inv, self.hf_coeff,
                               None)
@@ -1128,6 +1280,25 @@ class XCTerm(eqx.Module):
     def energy(self, P: Float[Array, "nspin nao nao"]) -> Scalar:
         raise NotImplementedError
 
+    def energy_and_potential(
+        self, P: Float[Array, "nspin nao nao"]
+    ) -> tuple[Scalar, Float[Array, "nspin nao nao"]]:
+        """``(E_xc, ∂E_xc/∂P)`` in as few grid traversals as the backend allows.
+
+        On the streaming backends, asking for the energy and the potential
+        separately costs two traversals: their kernels are checkpointed to hold
+        memory at O(block·nsub), so the backward rematerializes the grid and
+        the energy call walks it again. ``value_and_grad`` does not help, since
+        the checkpoint recomputes regardless. Taking the VJP per block does,
+        and those backends override this default. ``GridXC`` holds the AO
+        values already, so reverse mode is one traversal here by construction.
+
+        Deliberately *not* a ``custom_vjp`` on ``energy``: a custom VJP in
+        ``P`` reports a zero cotangent for the basis and the grid, which would
+        be silently wrong for :func:`dftax.ks.forces.forces`.
+        """
+        return jax.value_and_grad(self.energy)(P)
+
 
 class GridXC(XCTerm):
     """XC on precomputed AO grid values (O(ng·nao) memory).
@@ -1249,6 +1420,11 @@ class StreamedGridXC(XCTerm):
             P[0], P[1], self.chunk,
         )
 
+    def energy_and_potential(self, P):
+        return _streamed_e_and_v(
+            self.xc, self.basis, self.grid_coords, self.weights, P, self.chunk
+        )
+
 
 def _screened_sub_basis(basis, cart, cmask, sph):
     """The block's own basis: rows gathered down to the shells that reach it,
@@ -1279,11 +1455,13 @@ def _screened_rho_block(basis, P, cart, sph, cmask, smask, pts, need_grad):
     Psub = P[sph][:, sph]
 
     def one(r):
-        ao = eval_gto(sub, r) * smask
-        rho = ao @ Psub @ ao
         if not need_grad:
-            return rho, jnp.zeros(3), jnp.zeros(())
-        dao = jax.jacfwd(eval_gto, argnums=1)(sub, r) * smask[:, None]
+            ao = eval_gto(sub, r) * smask
+            return ao @ Psub @ ao, jnp.zeros(3), jnp.zeros(())
+        ao, dao = eval_gto_and_grad(sub, r)
+        ao = ao * smask
+        dao = dao * smask[:, None]
+        rho = ao @ Psub @ ao
         grad = 2.0 * (ao @ Psub) @ dao
         tau = 0.5 * jnp.einsum("mx,mn,nx->", dao, Psub, dao)
         return rho, grad, tau
@@ -1311,21 +1489,8 @@ def _screened_e_xc(xc, basis, coords, weights, P, buckets, block, n_block):
 
         def body(args, _ids=ids):
             cart, sph, cm, sm, i = args
-            rho, grad, tau = _screened_rho_block(
-                basis, P, cart, sph, cm, sm, cg[i], need)
-            w = wg[i]
-            mask = rho > 1e-10
-            safe = jnp.where(mask, rho, 1.0)
-            # The functionals take one point at a time (scalar ρ, (3,) ∇ρ), so
-            # the block's points are vmapped over rather than passed as arrays.
-            if mgga:
-                eps = jax.vmap(xc)(safe, jnp.where(mask[:, None], grad, 0.0),
-                                   jnp.where(mask, tau, 1.0))
-            elif gga:
-                eps = jax.vmap(xc)(safe, jnp.where(mask[:, None], grad, 0.0))
-            else:
-                eps = jax.vmap(xc)(safe)
-            return jnp.sum(jnp.where(mask, w * eps * rho, 0.0))
+            return _screened_block_e(xc, basis, P, cart, sph, cm, sm, cg[i],
+                                     wg[i], gga, mgga, need)
 
         # Rematerialize per block in the backward pass, as the streamed path
         # does. Without it lax.map keeps every block's AO values (and their
@@ -1337,6 +1502,169 @@ def _screened_e_xc(xc, basis, coords, weights, P, buckets, block, n_block):
             (bucket.cart, bucket.sph, bucket.cart_mask, bucket.sph_mask, ids),
         ))
     return total
+
+
+def _screened_block_e(xc, basis, P, cart, sph, cm, sm, pts, w, gga, mgga,
+                      need):
+    """Closed-shell XC energy of one screened grid block.
+
+    Shared by :func:`_screened_e_xc` and :func:`_screened_e_and_v`.
+    """
+    rho, grad, tau = _screened_rho_block(basis, P, cart, sph, cm, sm, pts,
+                                         need)
+    mask = rho > 1e-10
+    safe = jnp.where(mask, rho, 1.0)
+    if mgga:
+        eps = jax.vmap(xc)(safe, jnp.where(mask[:, None], grad, 0.0),
+                           jnp.where(mask, tau, 1.0))
+    elif gga:
+        eps = jax.vmap(xc)(safe, jnp.where(mask[:, None], grad, 0.0))
+    else:
+        eps = jax.vmap(xc)(safe)
+    return jnp.sum(jnp.where(mask, w * eps * rho, 0.0))
+
+
+def _screened_block_e_spin(xc, basis, Pa, Pb, cart, sph, cm, sm, pts, w, gga,
+                           mgga, need):
+    """Spin-polarized XC energy of one screened grid block.
+
+    Not a sum of per-channel energies: eps_xc(rho_a, rho_b, ...) couples the
+    channels, so both densities ride through the same gathered sub-basis.
+    """
+    sub = _screened_sub_basis(basis, cart, cm, sph)
+    Pas, Pbs = Pa[sph][:, sph], Pb[sph][:, sph]
+
+    def point(r, wt):
+        if gga or mgga:
+            ao, dao = eval_gto_and_grad(sub, r)
+            ao, dao = ao * sm, dao * sm[:, None]
+        else:
+            ao = eval_gto(sub, r) * sm
+        rho_a = ao @ Pas @ ao
+        rho_b = ao @ Pbs @ ao
+        rho_tot = rho_a + rho_b
+        mask = rho_tot > 1e-10
+        ta, tb = rho_a > 1e-10, rho_b > 1e-10
+        rho2 = jnp.stack([jnp.where(ta, rho_a, 1e-10),
+                          jnp.where(tb, rho_b, 1e-10)])
+        if gga or mgga:
+            ga = jnp.where(ta, 2.0 * (ao @ Pas) @ dao, 0.0)
+            gb = jnp.where(tb, 2.0 * (ao @ Pbs) @ dao, 0.0)
+            if mgga:
+                tau2 = jnp.stack([
+                    jnp.where(ta, 0.5 * jnp.einsum(
+                        "mx,mn,nx->", dao, Pas, dao), 1e-10),
+                    jnp.where(tb, 0.5 * jnp.einsum(
+                        "mx,mn,nx->", dao, Pbs, dao), 1e-10),
+                ])
+                eps = xc(rho2, jnp.stack([ga, gb], axis=-1), tau2)
+            else:
+                eps = xc(rho2, jnp.stack([ga, gb], axis=-1))
+        else:
+            eps = xc(rho2)
+        return jnp.where(mask, wt * eps * rho_tot, 0.0)
+
+    return jnp.sum(jax.vmap(point)(pts, w))
+
+
+def _sum_e_and_v(piece, P, xs, init_v=None):
+    """``(Σ_i e(P, x_i), Σ_i ∂e/∂P)`` in one traversal.
+
+    ``jax.vjp`` on one piece keeps that piece's residuals alive only while its
+    backward consumes them: the same O(piece) working set ``jax.checkpoint``
+    buys, without the second forward pass. The potential accumulates in the
+    ``scan`` carry rather than coming back stacked.
+    """
+    v0 = jnp.zeros_like(P) if init_v is None else init_v
+
+    def step(carry, x):
+        e_acc, v_acc = carry
+        e, pull = jax.vjp(lambda Q: piece(Q, x), P)
+        (v,) = pull(jnp.ones((), dtype=e.dtype))
+        return (e_acc + e, v_acc + v), None
+
+    (E, V), _ = jax.lax.scan(step, (jnp.zeros(()), v0), xs)
+    return E, V
+
+
+def _streamed_e_and_v(xc, basis, coords, weights, P, chunk):
+    """``(E_xc, ∂E_xc/∂P)`` from one pass over the streamed grid chunks.
+
+    Same chunking as :func:`_streamed_e_xc`, with each chunk's VJP taken where
+    its residuals still exist.
+    """
+    ng = coords.shape[0]
+    nchunk = max(1, min(int(chunk), ng))
+    n_full = ng // nchunk
+    tail = ng - n_full * nchunk
+
+    def piece(Q, args):
+        c, w = args
+        if Q.shape[0] == 1:
+            return _streamed_e_xc(xc, basis, c, w, Q[0], nchunk,
+                                  checkpoint=False)
+        return _streamed_e_xc_spin(xc, basis, c, w, Q[0], Q[1], nchunk,
+                                   checkpoint=False)
+
+    E = jnp.zeros(())
+    V = jnp.zeros_like(P)
+    if n_full:
+        E, V = _sum_e_and_v(
+            piece, P,
+            (coords[:n_full * nchunk].reshape(n_full, nchunk, 3),
+             weights[:n_full * nchunk].reshape(n_full, nchunk)),
+        )
+    if tail:
+        # The remainder is its own piece rather than padded: a padded point
+        # carries a real basis value at a fake position, kept out of the sum
+        # only by its zero weight, which is fragile inside a VJP.
+        ct, wt = coords[n_full * nchunk:], weights[n_full * nchunk:]
+        e_t, pull = jax.vjp(
+            lambda Q: (_streamed_e_xc(xc, basis, ct, wt, Q[0], tail,
+                                      checkpoint=False)
+                       if Q.shape[0] == 1 else
+                       _streamed_e_xc_spin(xc, basis, ct, wt, Q[0], Q[1],
+                                           tail, checkpoint=False)),
+            P)
+        (v_t,) = pull(jnp.ones((), dtype=e_t.dtype))
+        E, V = E + e_t, V + v_t
+    return E, V
+
+
+def _screened_e_and_v(xc, basis, coords, weights, P, buckets, block, n_block):
+    """``(E_xc, ∂E_xc/∂P)`` from one traversal of the screened grid.
+
+    Same quadrature and same per-block memory as :func:`_screened_e_xc`, with
+    each block's VJP taken where its residuals still exist. The potential
+    accumulates in a ``scan`` carry rather than coming back stacked.
+    """
+    gga = xc.xc_type == "GGA"
+    mgga = xc.xc_type == "MGGA"
+    need = gga or mgga
+    cg = coords.reshape(n_block, block, 3)
+    wg = weights.reshape(n_block, block)
+    E = jnp.zeros(())
+    V = jnp.zeros_like(P)
+
+    for bucket in buckets:
+        def body(Q, args):
+            cart, sph, cm, sm, i = args
+            # Q is the spin-stacked density, so the VJP's transpose scatters
+            # each block's contribution back with no index bookkeeping.
+            if Q.shape[0] == 1:
+                return _screened_block_e(xc, basis, Q[0], cart, sph, cm, sm,
+                                         cg[i], wg[i], gga, mgga, need)
+            return _screened_block_e_spin(xc, basis, Q[0], Q[1], cart, sph,
+                                          cm, sm, cg[i], wg[i], gga, mgga,
+                                          need)
+
+        e_b, v_b = _sum_e_and_v(
+            body, P,
+            (bucket.cart, bucket.sph, bucket.cart_mask, bucket.sph_mask,
+             bucket.block_ids),
+        )
+        E, V = E + e_b, V + v_b
+    return E, V
 
 
 def _screened_e_xc_spin(xc, basis, coords, weights, Pa, Pb, buckets, block,
@@ -1362,37 +1690,9 @@ def _screened_e_xc_spin(xc, basis, coords, weights, Pa, Pb, buckets, block,
     for bucket in buckets:
         def body(args):
             cart, sph, cm, sm, i = args
-            sub = _screened_sub_basis(basis, cart, cm, sph)
-            Pas, Pbs = Pa[sph][:, sph], Pb[sph][:, sph]
-
-            def point(r, w):
-                ao = eval_gto(sub, r) * sm
-                rho_a = ao @ Pas @ ao
-                rho_b = ao @ Pbs @ ao
-                rho_tot = rho_a + rho_b
-                mask = rho_tot > 1e-10
-                ta, tb = rho_a > 1e-10, rho_b > 1e-10
-                rho2 = jnp.stack([jnp.where(ta, rho_a, 1e-10),
-                                  jnp.where(tb, rho_b, 1e-10)])
-                if gga or mgga:
-                    dao = jax.jacfwd(eval_gto, argnums=1)(sub, r) * sm[:, None]
-                    ga = jnp.where(ta, 2.0 * (ao @ Pas) @ dao, 0.0)
-                    gb = jnp.where(tb, 2.0 * (ao @ Pbs) @ dao, 0.0)
-                    if mgga:
-                        tau2 = jnp.stack([
-                            jnp.where(ta, 0.5 * jnp.einsum(
-                                "mx,mn,nx->", dao, Pas, dao), 1e-10),
-                            jnp.where(tb, 0.5 * jnp.einsum(
-                                "mx,mn,nx->", dao, Pbs, dao), 1e-10),
-                        ])
-                        eps = xc(rho2, jnp.stack([ga, gb], axis=-1), tau2)
-                    else:
-                        eps = xc(rho2, jnp.stack([ga, gb], axis=-1))
-                else:
-                    eps = xc(rho2)
-                return jnp.where(mask, w * eps * rho_tot, 0.0)
-
-            return jnp.sum(jax.vmap(point)(cg[i], wg[i]))
+            return _screened_block_e_spin(xc, basis, Pa, Pb, cart, sph, cm,
+                                          sm, cg[i], wg[i], gga, mgga,
+                                          gga or mgga)
 
         total = total + jnp.sum(jax.lax.map(
             jax.checkpoint(body),
@@ -1432,6 +1732,12 @@ class ScreenedGridXC(XCTerm):
         return _screened_e_xc_spin(self.xc, self.basis, self.grid_coords,
                                    self.weights, P[0], P[1], self.buckets,
                                    self.block, self.n_block)
+
+    def energy_and_potential(self, P):
+        return _screened_e_and_v(
+            self.xc, self.basis, self.grid_coords, self.weights, P,
+            self.buckets, self.block, self.n_block,
+        )
 
 
 class ShardedGridXC(XCTerm):
@@ -1490,7 +1796,7 @@ class ShardedGridXC(XCTerm):
 
 def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                   eri_lr=None, int3c_lr=None, int2c_inv_lr=None,
-                  hf_coeff_lr=0.0, omega=0.0, devices=None):
+                  hf_coeff_lr=0.0, omega=0.0, devices=None, slab_plans=None):
     """Wrap the integral arrays built for ``spec`` into the matching Coulomb term.
 
     ``hf_coeff_lr`` (with the ``*_lr`` attenuated tensors and ``omega``) is the
@@ -1517,7 +1823,7 @@ def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                 basis=basis, aux_basis=spec.auxbasis, int2c_inv=int2c_inv,
                 pairs=pairs, chunk=spec.chunk, hf_coeff=hf_coeff,
                 int2c_inv_lr=int2c_inv_lr, hf_coeff_lr=hf_coeff_lr,
-                omega=omega,
+                omega=omega, slab_plans=slab_plans,
             )
         return DFCoulomb(
             int3c=int3c, int2c_inv=int2c_inv, hf_coeff=hf_coeff,

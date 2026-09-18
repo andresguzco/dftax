@@ -228,10 +228,24 @@ have different fixes:
 - **Compilation.** The cold column is dftax tracing and compiling the whole
   build, which is a one-off per shape: irrelevant when the shape is reused
   (geometry optimization, conformer batches, anything differentiated), and the
-  entire cost when it is not. It splits about evenly between Python tracing of
-  the 45 shell-class kernels and XLA compiling the result, so a persistent
-  `JAX_COMPILATION_CACHE_DIR` removes roughly the second half (coronene's
-  build: 286 s cold, 198 s warm-cached).
+  entire cost when it is not. It is roughly **10:1 XLA against Python
+  tracing**, measured on an A100 with the cache dir forced cold
+  (`scripts/perf/profile_terms.py`):
+
+  | | trace(+lower) | XLA | XLA share |
+  |---|---:|---:|---:|
+  | water/def2-svp `int3c` | 7.6 s | 79.4 s | 91% |
+  | cubane/def2-svp `int3c` | 11.0 s | 125.1 s | 92% |
+  | cubane/def2-svp `xc_g` | 0.7 s | 10.1 s | 94% |
+
+  A persistent `JAX_COMPILATION_CACHE_DIR` stores the XLA output, so it
+  removes about **83%** of a cold build: cubane's 3-center build is 132.7 s
+  cold against 23.3 s warm. Setting it is the single most effective thing a
+  user can do about first-call cost.
+
+  The class count is set by the basis rather than the molecule (water/def2-svp
+  has 177 3-center classes, cubane 202), so compile cost is roughly constant
+  in system size while runtime grows.
 
 **On the wall-clock columns.** This is a shared cluster node, and the cold
 column is host-CPU-bound (it is XLA compiling), so it carries the node's load

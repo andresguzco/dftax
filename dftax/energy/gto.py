@@ -336,6 +336,89 @@ def extract_coulomb_basis_data(mol) -> CoulombBasisData:
 # Safe integer power (avoids NaN Hessians from JAX's lax.pow at x=0)
 # ---------------------------------------------------------------------------
 
+def shell_records(angular, exponents) -> tuple:
+    """``(l, row0, ncomp, nprim)`` per shell, from static basis metadata.
+
+    A shell starts wherever the canonical Cartesian component sequence
+    restarts at ``(l, 0, 0)``, so two same-l shells on one atom split by row
+    order alone. ``nprim`` is the shell's true contraction length, not the
+    padded row width.
+    """
+    ang = np.asarray(angular)
+    ex = np.asarray(exponents)
+    ltot = ang.sum(1)
+    n = ang.shape[0]
+    starts = [i for i in range(n)
+              if ang[i, 0] == ltot[i] and ang[i, 1] == 0 and ang[i, 2] == 0]
+    if not starts or starts[0] != 0:
+        raise ValueError("basis rows do not start shells at (l,0,0); "
+                         "shell_records assumes gto.py row order")
+    bounds = starts + [n]
+    return tuple(
+        (int(ltot[s]), int(s), int(e - s), max(1, int((ex[s] != 0).sum())))
+        for s, e in zip(bounds[:-1], bounds[1:])
+    )
+
+
+def _axis_powers(x, l: int):
+    """``(n, l+1)`` with column ``i`` equal to ``x**i``, by multiplication.
+
+    Products rather than ``lax.pow``, whose float power rule gives NaN second
+    derivatives at ``x = 0`` (the same reason :func:`safe_int_pow` exists).
+    """
+    cols = [jnp.ones_like(x)]
+    for _ in range(l):
+        cols.append(cols[-1] * x)
+    return jnp.stack(cols, axis=-1)
+
+
+def _eval_gto_flat_grad(basis: BasisData, r: Float[Array, "3"]):
+    """Per-AO values *and* analytic gradient, in the flat vectorized layout.
+
+    The middle option between the two above, and the one that isolates which
+    half of the shell-blocked rewrite actually pays on a GPU. It keeps the
+    per-AO layout (so the redundant exponentials stay, but so does the single
+    wide elementwise kernel that makes them nearly free when the evaluation is
+    bandwidth-bound) and drops only the ``jacfwd``, which was three extra
+    tangent passes over the whole basis.
+    """
+    dr = r[None, :] - basis.centers
+    r2 = jnp.sum(dr ** 2, axis=-1)
+    E = jnp.exp(-basis.exponents * r2[:, None])
+    R = jnp.sum(basis.coefficients * E, axis=-1)
+    Rp = jnp.sum(basis.coefficients * basis.exponents * E, axis=-1)
+
+    # One power ladder per axis, indexed twice, rather than six independent
+    # safe_int_pow chains. safe_int_pow is a six-deep `where` over the whole
+    # (nao,) vector, and the gradient needs both x^l and x^{l-1}; spelling
+    # that as two chains doubles the widest intermediate in the kernel, which
+    # is the wrong thing to double when the evaluation is bandwidth-bound.
+    L = int(basis.max_l)
+    lk = [basis.angular[:, k] for k in range(3)]
+    pw = [_axis_powers(dr[:, k], L) for k in range(3)]        # (nao, L+1)
+    P = [jnp.take_along_axis(pw[k], lk[k][:, None], axis=1)[:, 0]
+         for k in range(3)]
+    A = P[0] * P[1] * P[2]
+    ao_cart = A * R
+
+    d = []
+    for k in range(3):
+        lower = jnp.take_along_axis(
+            pw[k], jnp.maximum(lk[k] - 1, 0)[:, None], axis=1)[:, 0]
+        # the lk factor is zero exactly where the clamped index would be
+        # wrong, so the clamp never contributes
+        dA = lk[k] * lower * P[(k + 1) % 3] * P[(k + 2) % 3]
+        # second term is -2 dr_k * A * R', with the *angular* factor A, not
+        # the AO value A*R
+        d.append(dA * R - 2.0 * dr[:, k] * A * Rp)
+    dao_cart = jnp.stack(d, axis=-1)
+
+    if basis.cart2sph is not None:
+        return (ao_cart @ basis.cart2sph,
+                jnp.einsum("cx,cs->sx", dao_cart, basis.cart2sph))
+    return ao_cart, dao_cart
+
+
 def safe_int_pow(x, n):
     """x^n for small non-negative integer n, safe for autodiff at x=0.
 
@@ -381,6 +464,26 @@ def eval_gto(basis: BasisData, r: Float[Array, "3"]) -> Float[Array, "nao"]:
     Returns:
         AO values, shape (nao,), matching dft.numint.eval_ao(mol, r[None])[0].
     """
+    return _eval_gto_flat(basis, r)
+
+
+def eval_gto_and_grad(basis: BasisData, r: Float[Array, "3"]):
+    """AO values and their spatial gradients ``(nao,), (nao, 3)`` at ``r``.
+
+    One pass for both, with the gradient in closed form. Prefer this to
+    ``eval_gto`` beside ``jacfwd(eval_gto)``, which evaluates the basis five
+    times over.
+
+    The gradient is written in the per-AO layout rather than the shell-blocked
+    one, which is the opposite of what the FLOP count suggests: shell-blocking
+    does 4-6x fewer exponentials and still measures slower, because the
+    evaluation is bandwidth-bound. See ``scripts/perf/ao_bench.py``.
+    """
+    return _eval_gto_flat_grad(basis, r)
+
+
+def _eval_gto_flat(basis: BasisData, r: Float[Array, "3"]) -> Float[Array, "nao"]:
+    """The original per-AO evaluation; kept for A/B validation."""
     # Displacement from each AO centre: (nao, 3)
     dr = r[None, :] - basis.centers
 

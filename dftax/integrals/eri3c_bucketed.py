@@ -50,55 +50,36 @@ _IDX = np.int32
 
 # Padding budget for the bucket merge below: how much padded primitive work a
 # plan may carry above the exact-contraction partition, in exchange for fewer
-# compiled kernels.
+# compiled kernels. Lower it if a build runs out of device memory; raise it if
+# a build is compile-bound.
 #
-# Measured on penicillin G (C16H18N2O4S) / cc-pVDZ / DF / A100, reporting the
-# 3-center class count, the build's peak scratch, and its compile time:
+# Swept on cubane / def2-svp (scripts/perf/pad_tol_sweep.py), showing that the
+# knee is at 0.5 -- below it costs compile, above it costs execution:
 #
-#     budget    classes    scratch    compile
-#     0 (exact)     416   12.42 GiB     1065 s
-#     0.25          177   12.44 GiB      655 s
-#     0.5           138   17.76 GiB      594 s
-#     1.0           104   17.59 GiB      492 s
-#     inf (old)      45   20.26 GiB      353 s
+#     budget  classes   XLA s   warm ms   device    host
+#     0.25        202   134.7     65.24   1.30 GiB  6.54 GiB
+#     0.5         161   113.1     63.64   1.41 GiB  5.85 GiB
+#     1.0         128    91.9     78.52   1.53 GiB  5.13 GiB
+#     inf          45    44.5    209.36   2.50 GiB  3.21 GiB
 #
-# Scratch is a max over classes, not a sum, so it does not fall smoothly with
-# the budget: it sits flat until one particular merge re-admits a sulfur-sized
-# class. 0.25 is just below that step -- it keeps the memory of the exact
-# partition to 0.15% while merging back 239 of its 416 kernels. Raising it to
-# 0.5 buys 60 s of compile and gives back 5.3 GiB, which is the wrong trade
-# when peak memory is what caps the molecules this engine can reach.
-_PAD_TOL = 0.25
+# Device memory is not the binding constraint on an A100: a cold build is ~91%
+# XLA compilation, and host RSS during that compilation is what caps molecule
+# size. Both fall with the class count.
+_PAD_TOL = 0.5
 
 
 def _merge_padded_buckets(nprims, counts, tol=None):
     """Group same-angular-class sub-buckets, trading padding for kernel count.
 
-    Bucketing shells by angular class alone pads every member to the largest
-    primitive count any shell of that class carries, so one second-row atom
-    re-sizes the kernels for triples it does not appear in: in cc-pVDZ, sulfur
-    is 12s8p1d against carbon's 9s4p1d, which takes the (s,s) class from 9x9
-    to 12x12 and (p,p) from 4x4 to 8x8 for the whole molecule. On penicillin G
-    that is 8x the padded primitive work in the 3-center build and 20.3 GiB of
-    scratch against 12.4 GiB.
+    Bucketing by angular class alone pads every member to the largest primitive
+    count any shell of that class carries, so one second-row atom re-sizes the
+    kernels for triples it does not appear in. Keying on the contraction
+    lengths instead removes the padding but multiplies the compiled kernels.
 
-    Keying on the contraction lengths instead removes the padding entirely,
-    but compile time scales with the number of distinct (angular class x
-    contraction combo) kernels -- measured at ~1.4 s per 3-center class -- and
-    exact keying takes penicillin from 45 classes to 416, tripling the build's
-    compile time.
-
-    Neither end is right, because the two costs have different shapes: padded
-    work is a sum over classes (it sets the build's FLOPs) while scratch is a
-    max over them (it sets the ceiling on molecule size). A first-row-only
-    molecule pays the full compile for exact keying and gets nothing back on
-    the max, since its heavy atoms already share a contraction length.
-
-    So: start exact and merge greedily, cheapest merge first, while the total
-    padded work stays inside ``(1 + tol)`` of the exact partition. Merges that
-    cost nothing (equal counts) are always taken, so a molecule whose angular
-    classes are already contraction-uniform collapses back to the angular
-    partition exactly.
+    Start from the exact keying and merge greedily, cheapest merge first, while
+    the total padded work stays inside ``(1 + tol)`` of it. Free merges (equal
+    counts) are always taken, so a contraction-uniform molecule collapses back
+    to the angular partition exactly.
 
     Args:
         nprims: per-sub-bucket tuples of primitive counts (2- or 3-tuples).
@@ -235,24 +216,10 @@ def _check_orbital_l(basis):
 # ---------------------------------------------------------------------------
 
 def _shells(angular, exponents):
-    """Shell records from static metadata: (l, row0, ncomp, nprim).
+    """Shell records ``(l, row0, ncomp, nprim)`` plus the angular array."""
+    from dftax.energy.gto import shell_records
 
-    A shell starts wherever the canonical component sequence restarts at
-    ``(l, 0, 0)`` (every l=0 row is its own shell); no center reads, so two
-    same-l shells on one atom split correctly by row order alone.
-    """
-    ang = np.asarray(angular)
-    ex = np.asarray(exponents)
-    ltot = ang.sum(1)
-    n = ang.shape[0]
-    starts = [i for i in range(n)
-              if ang[i, 0] == ltot[i] and ang[i, 1] == 0 and ang[i, 2] == 0]
-    if not starts or starts[0] != 0:
-        raise ValueError("basis rows do not start shells at (l,0,0); the "
-                         "bucketed eri3c build assumes gto.py row order")
-    bounds = starts + [n]
-    return [(int(ltot[s]), s, e - s, max(1, int((ex[s] != 0).sum())))
-            for s, e in zip(bounds[:-1], bounds[1:])], ang
+    return list(shell_records(angular, exponents)), np.asarray(angular)
 
 
 def _shell_pair_keep(basis, thresh):
@@ -503,6 +470,33 @@ def _Ec_table(lc, gamma, mt):
     return jnp.stack(rows)
 
 
+def _boys_ladder(mt: int, T):
+    """``F_0(T) .. F_{mt-1}(T)``, stacked, from a single table evaluation.
+
+    The Hermite table needs every Boys order from 0 to mt-1 at the same
+    argument, and asked for them one at a time: ``boys`` is a table gather
+    plus a degree-6 Taylor, so ``mt`` calls is ``7·mt`` reads of the table
+    where ``mt + 6`` would do, and each call also materializes its own copy of
+    the 80 KB interpolation table into the graph.
+
+    One call for the top order plus the downward recursion
+
+        F_{m-1}(T) = (2T·F_m(T) + e^{-T}) / (2m - 1)
+
+    gives the rest in ``mt`` fused multiply-adds. Downward is the stable
+    direction (the upward form differences two nearly equal numbers as T
+    grows), and it is the same recursion ``boys._build_table`` already uses to
+    build the table in the first place.
+    """
+    cols = [None] * mt
+    cols[mt - 1] = boys(mt - 1, T)
+    if mt > 1:
+        expT = jnp.exp(-T)
+        for m in range(mt - 1, 0, -1):
+            cols[m - 1] = (2.0 * T * cols[m] + expT) / (2 * m - 1)
+    return jnp.stack(cols)
+
+
 def _hermite_table(rho, RPC, mt, omega=None):
     """(mt, mt, mt) Hermite Coulomb integrals R^0_{t,u,v}.
 
@@ -520,10 +514,11 @@ def _hermite_table(rho, RPC, mt, omega=None):
     T = rho * jnp.sum(RPC ** 2)
     neg2rho = -2.0 * rho
     if omega is None:
-        base = jnp.stack([boys(m, T) for m in range(mt)])
+        base = _boys_ladder(mt, T)
     else:
         s = (omega * omega) / (omega * omega + rho)
-        base = jnp.stack([s ** (m + 0.5) * boys(m, s * T) for m in range(mt)])
+        ladder = _boys_ladder(mt, s * T)
+        base = jnp.stack([s ** (m + 0.5) * ladder[m] for m in range(mt)])
     # Integer powers (Python range): neg2rho is negative, so a float exponent
     # would NaN; range(mt) keeps the base real.
     powers = jnp.stack([neg2rho ** m for m in range(mt)])
@@ -586,8 +581,11 @@ def _make_class_kernel(la, lb, lc, anga, angb, angc, omega=None):
                 pref = (K * 2.0 * jnp.pi ** 2.5
                         / (safe * safec * jnp.sqrt(safe + safec)))
                 R = _hermite_table(rho, P - C, mt, omega)
-                Ec = [_Ec_table(lc, ga, mt) * sign for _ in range(3)]
-                G = [jnp.einsum("ijt,ku,tus->ijks", Et[x], Ec[x], conv)
+                # one table, not three: _Ec_table is single-centre, so it
+                # carries no axis dependence (the loop variable was unused).
+                # Only Et differs per axis.
+                Ec = _Ec_table(lc, ga, mt) * sign
+                G = [jnp.einsum("ijt,ku,tus->ijks", Et[x], Ec, conv)
                      for x in range(3)]
                 GX = G[0][ia[0][:, None, None], jb[0][None, :, None],
                           kc[0][None, None, :], :]
@@ -901,14 +899,16 @@ def _make_eri2c_kernel(la, lb, anga, angb, omega=None):
             sb = jnp.where(be == 0.0, 1.0, be)
             rho = sa * sb / (sa + sb)
             pref = 2.0 * jnp.pi ** 2.5 / (sa * sb * jnp.sqrt(sa + sb))
-            Ea = [_Ec_table(la, al, mt) for _ in range(3)]
-            Eb = [_Ec_table(lb, be, mt) * sign for _ in range(3)]
+            # Both sides are single-centre here, so not only are the tables
+            # axis-independent, the whole contraction is: one G, indexed three
+            # ways, where this built three identical copies of it.
+            Ea = _Ec_table(la, al, mt)
+            Eb = _Ec_table(lb, be, mt) * sign
             R = _hermite_table(rho, AB, mt, omega)
-            G = [jnp.einsum("it,ju,tus->ijs", Ea[x], Eb[x], conv)
-                 for x in range(3)]
-            GX = G[0][ia[0][:, None], jb[0][None, :], :]
-            GY = G[1][ia[1][:, None], jb[1][None, :], :]
-            GZ = G[2][ia[2][:, None], jb[2][None, :], :]
+            G = jnp.einsum("it,ju,tus->ijs", Ea, Eb, conv)
+            GX = G[ia[0][:, None], jb[0][None, :], :]
+            GY = G[ia[1][:, None], jb[1][None, :], :]
+            GZ = G[ia[2][:, None], jb[2][None, :], :]
             return pref * jnp.einsum("abs,abr,abq,srq->ab", GX, GY, GZ, R)
 
         vals = jax.vmap(jax.vmap(per_ab, (None, 0)), (0, None))(ea, eb)

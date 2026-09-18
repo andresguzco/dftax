@@ -32,7 +32,10 @@ from jax.scipy.special import gammainc, gammaln
 
 _ORDER = 6          # local Taylor degree (node error ~ (dt/2)^{_ORDER+1}/(_ORDER+1)! ~ 1e-12)
 _DT = 0.1           # table grid spacing in t
-_TMAX = 40.0        # beyond this, the large-t asymptotic (gammainc -> 1)
+# Beyond this the large-t asymptotic drops the incomplete-gamma tail, whose
+# size grows with the ORDER: negligible for F_0 at t=40, but ~1e-7 for F_12
+# and ~3e-3 for F_24. Set by the highest tabulated order, not the lowest.
+_TMAX = 90.0
 _TBL_NMAX = 24      # tabulate F_0..F_{_TBL_NMAX}; boys(n) uses the table when n+_ORDER <= _TBL_NMAX
 
 
@@ -137,8 +140,9 @@ def boys(n: int, t: jax.Array) -> jax.Array:
     Beyond t = _TMAX the large-t asymptotic F_n ~ Gamma(n+0.5) / (2 t^{n+0.5}) is used.
     For n beyond the table it falls back to the exact ``_boys_ref``.
 
-    Accurate to ~1e-11 vs ``_boys_ref``. Fully differentiable
-    (jax.grad(boys(n, .))(t) == -boys(n+1, t)), and works under jit and vmap.
+    Accurate to ~1e-11 vs ``_boys_ref`` at every tabulated order. Fully
+    differentiable (jax.grad(boys(n, .))(t) == -boys(n+1, t)), and works under
+    jit and vmap.
 
     Args:
         n: Order (Python int, not a traced value).

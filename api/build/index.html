@@ -2114,6 +2114,35 @@ resolve from the functional's name unless given explicitly.</p>
 <div class="doc doc-object doc-function">
 
 
+<h5 id="dftax.ks.energy.KS.energy_and_fock" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">energy_and_fock</span><span class="p">(</span><span class="n">P</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'nspin nao nao'</span><span class="p">],</span> <span class="n">idempotent</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Scalar</span><span class="p">,</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'nspin nao nao'</span><span class="p">]]</span></code>
+
+<a href="#dftax.ks.energy.KS.energy_and_fock" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p><code>(E_total, F)</code> for one density, sharing the work between them.</p>
+<p>Computing the two separately walks the quadrature twice, because the
+streaming backends checkpoint their grid blocks and <code>grad</code>
+rematerializes them. Each term is therefore asked for both at once
+(:meth:<code>~dftax.ks.terms.XCTerm.energy_and_potential</code>,
+:meth:<code>~dftax.ks.terms.CoulombTerm.energy_and_potential</code>).</p>
+<p><code>idempotent</code> says whether <code>P</code> is an integer-occupation projector:
+true of an aufbau density, false under Fermi smearing. The Coulomb
+term falls back to reverse mode when told otherwise.</p>
+<p>The result is the same <code>(total(P), sym(∂E/∂P))</code> as the two separate
+calls, which <code>total</code> / <code>electronic</code> still provide for every other
+consumer (forces, the Hessian, Newton, direct minimization).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h5 id="dftax.ks.energy.KS.density" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">density</span><span class="p">(</span><span class="n">P</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'nspin nao nao'</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">ng</span><span class="p">],</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'ng 3'</span><span class="p">]]</span></code>
 

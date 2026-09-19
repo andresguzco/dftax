@@ -387,7 +387,46 @@ def ao_on_grid(
     return jax.vmap(lambda r: eval_gto_and_grad(basis, r))(coords)
 
 
+# Each builder compiles on its own. One jit over the lot put every shell-class
+# kernel into a single graph, and XLA's passes are superlinear in graph size:
+# measured on cubane/def2-svp with a cold cache, jit(_build_integrals) alone was
+# 169.1 s of the 205.5 s of XLA in the whole build, while the other 360 compiled
+# programs together came to ~22 s. Splitting keeps each builder internally fused
+# (which is what the jit was for) and hands XLA several moderate graphs instead
+# of one huge one. jit composes with grad either way, so forces is unaffected.
+
+
 @eqx.filter_jit
+def _jit_st(basis, pair_plan):
+    return overlap_kinetic_bucketed(basis, plan=pair_plan)
+
+
+@eqx.filter_jit
+def _jit_v(basis, coords, charges, pair_plan):
+    return nuclear_attraction_matrix(basis, coords, charges, plan=pair_plan)
+
+
+@eqx.filter_jit
+def _jit_ao(basis, grid_coords):
+    return ao_on_grid(basis, grid_coords)
+
+
+@eqx.filter_jit
+def _jit_int3c(basis, aux_basis, plan, omega=None):
+    return eri3c_matrix(basis, aux_basis, omega=omega, plan=plan)
+
+
+@eqx.filter_jit
+def _jit_int2c_inv(aux_basis, plan, omega=None):
+    return _metric_pinv(eri2c_matrix(aux_basis, omega=omega, plan=plan))
+
+
+@eqx.filter_jit
+def _jit_eri4c(basis, quartets, qof, plan, omega=None):
+    return eri4c_matrix(basis, quartets=quartets, qof=qof, omega=omega,
+                        plan=plan)
+
+
 def _build_integrals(
     basis, coords, charges, grid_coords, aux_basis, materialize_ao, materialize_int3c,
     eri_quartets=None, eri_qof=None, stream_exact=False, omega=None,
@@ -406,9 +445,10 @@ def _build_integrals(
     """
     # One bucketed pass builds both (shared OS tables per shell pair); the
     # public overlap_matrix / kinetic_matrix wrappers stay for direct users.
-    S, T = overlap_kinetic_bucketed(basis, plan=pair_plan)
-    V = nuclear_attraction_matrix(basis, coords, charges, plan=pair_plan)
-    ao, dao = ao_on_grid(basis, grid_coords) if materialize_ao else (None, None)
+    S, T = _jit_st(basis, pair_plan)
+    V = _jit_v(basis, coords, charges, pair_plan)
+    ao, dao = (_jit_ao(basis, grid_coords) if materialize_ao
+               else (None, None))
     e_nn = nuclear_repulsion(coords, charges)
 
     eri_lr = None
@@ -418,28 +458,25 @@ def _build_integrals(
         # stream_exact: skip the O(N⁴) tensor; J/K are contracted on the fly
         # in StreamedExactCoulomb (coulomb_j_4c / exchange_k_4c).
         eri = (None if stream_exact
-               else eri4c_matrix(basis, quartets=eri_quartets, qof=eri_qof,
-                                 plan=eri4c_plan))
+               else _jit_eri4c(basis, eri_quartets, eri_qof, eri4c_plan))
         int3c = None
         int2c_inv = None
         if omega is not None:
             # Long-range erf(ω·r₁₂)/r₁₂ tensor for range-separated hybrids.
-            eri_lr = eri4c_matrix(
-                basis, quartets=eri_quartets, qof=eri_qof, omega=omega,
-                plan=eri4c_plan,
-            )
+            eri_lr = _jit_eri4c(basis, eri_quartets, eri_qof,
+                                eri4c_plan, omega=omega)
     else:
         # int3c (nao²×naux) is the big DF tensor; skip it when streaming RI-J.
-        int3c = (eri3c_matrix(basis, aux_basis, plan=eri3c_plan)
+        int3c = (_jit_int3c(basis, aux_basis, eri3c_plan)
                  if materialize_int3c else None)
-        int2c = eri2c_matrix(aux_basis, plan=aux_pair_plan)  # (naux, naux)
+        # (naux, naux), pseudo-inverted inside the same program
         # Symmetric pseudo-inverse of the Coulomb metric, dropping near-null
         # directions (both aux spans; see the measured studies in the
         # _metric_pinv docstring, including the rejected spherical-metric
         # Cholesky). Standard JK-fitting sets are near-redundant even in
         # spherical form; the 1e-7 relative cutoff keeps the inverse
         # well-conditioned at sub-mHa RI cost.
-        int2c_inv = _metric_pinv(int2c)
+        int2c_inv = _jit_int2c_inv(aux_basis, aux_pair_plan)
         eri = None
         if omega is not None:
             # The RI treatment of the long-range operator attenuates both the
@@ -451,11 +488,9 @@ def _build_integrals(
             # The attenuated 3-center is only materialized alongside the
             # full-range one; the streamed backend recomputes its elements on
             # the fly and needs just the (small) attenuated metric inverse.
-            int3c_lr = (eri3c_matrix(basis, aux_basis, omega=omega,
-                                     plan=eri3c_plan)
+            int3c_lr = (_jit_int3c(basis, aux_basis, eri3c_plan, omega=omega)
                         if materialize_int3c else None)
-            int2c_inv_lr = _metric_pinv(
-                eri2c_matrix(aux_basis, omega=omega, plan=aux_pair_plan))
+            int2c_inv_lr = _jit_int2c_inv(aux_basis, aux_pair_plan, omega=omega)
 
     return (S, T + V, ao, dao, e_nn, eri, int3c, int2c_inv,
             eri_lr, int3c_lr, int2c_inv_lr)

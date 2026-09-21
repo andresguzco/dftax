@@ -59,7 +59,7 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, Float
 
-from dftax.energy.gto import BasisData, eval_gto
+from dftax.energy.gto import BasisData, eval_gto, static_fingerprint
 from dftax.grid import Becke, becke, becke_grid
 from dftax.integrals import (
     cross_overlap_matrix,
@@ -316,9 +316,30 @@ def _minimal_occupations(Z: int, minb: BasisData, name: str) -> Array:
     return jnp.asarray(occ)
 
 
+# The block's functions and the minimal basis it projects onto all sit on one
+# center, so the overlaps are translation invariant and the block depends on
+# the basis parameters alone. Memoized because each miss re-traces and
+# recompiles the two small overlap builds.
+_MINAO_CACHE: dict = {}
+_MINAO_CACHE_MAX = 64
+
+
 def _minao_block(symbol: str, sub_basis: BasisData, min_name: str) -> Array:
     """One atom's density block: minimal-basis occupations projected through
     the cross overlap, ``P_A = C f Cᵀ`` with ``C = S_AA⁻¹ S_AM``."""
+    key = (symbol, min_name, static_fingerprint(sub_basis))
+    hit = _MINAO_CACHE.get(key)
+    if hit is not None:
+        return hit
+    out = _minao_block_uncached(symbol, sub_basis, min_name)
+    if len(_MINAO_CACHE) >= _MINAO_CACHE_MAX:
+        _MINAO_CACHE.clear()
+    _MINAO_CACHE[key] = out
+    return out
+
+
+def _minao_block_uncached(symbol: str, sub_basis: BasisData,
+                          min_name: str) -> Array:
     from dftax.basis.loader import build_basis_data
 
     Z = symbol_to_Z(symbol)

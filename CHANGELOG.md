@@ -4,6 +4,28 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [0.8.1] - 2026-09-21
+
+### Changed
+- **Host-side overhead removed from the KS build and the SCF setup.** Warm
+  cubane/def2-svp/PBE on an A100 goes 4.42 s to 0.74 s. Nothing here touches
+  the integrals, the functionals or the solvers:
+  - Bucket plans and minimal-basis guess blocks are memoized. Neither depends
+    on the nuclear coordinates, so a geometry optimization, an MD trajectory
+    or a conformer batch plans and guesses once instead of once per step.
+  - Bucket plans are wrapped so JAX sees one pytree leaf rather than millions
+    of python ints; `eqx.filter_jit` had been inspecting every one of them on
+    every call.
+  - The grid screening bound is vectorized over blocks, and `becke_grid` is
+    jitted instead of dispatching one chunked Becke partition per atom.
+
+### Notes
+- The first two changes are bit-identical to 0.8.0, checked case by case
+  against the parity gate. The grid change shifts energies at the 1e-11 level
+  through fusion order and can move an SCF iteration count by one.
+- Cold (first-call) cost is unchanged. It is dominated by XLA compiling the
+  3-center build, which is roughly linear in the number of shell classes.
+
 ## [0.8.0] - 2026-09-18
 
 ### Added

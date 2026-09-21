@@ -2049,6 +2049,9 @@ the per-atom grids are merged with Becke's fuzzy-Voronoi partition.</p>
 <code>(n_grid,)</code>, differentiable w.r.t. <code>coords_bohr</code>. Shapes depend only
 on <code>symbols</code> and the spec constants, so this can run under <code>jit</code> /
 <code>vmap</code> with traced coordinates.</p>
+<p>Jitted, because eagerly this dispatches one chunked partition per atom
+plus the per-shell assembly. One compiled program per (symbols, spec)
+shape serves every geometry.</p>
 
 
     </div>

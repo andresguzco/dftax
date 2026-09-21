@@ -42,7 +42,8 @@ import numpy as np
 from jax import lax
 from jaxtyping import Float, Array, Scalar
 
-from dftax.energy.gto import BasisData
+from dftax.energy.gto import BasisData, static_fingerprint
+from dftax.integrals.eri3c_bucketed import Plan
 from dftax.utils.vmap import vmap as chunked_vmap
 from dftax.integrals.eri3c import (
     _md_E_coefficients_1d,
@@ -331,7 +332,7 @@ def _eri4c_matrix_flat(
 # Shell-quartet-class bucketed build (the unscreened engine)
 # ---------------------------------------------------------------------------
 
-def plan_eri4c(basis):
+def _plan_eri4c_uncached(basis):
     """Static shell-quartet bucket plan for :func:`eri4c_matrix_bucketed`.
 
     Canonical 8-fold-unique shell quartets (bra pair ``ia<=jb``, ket pair
@@ -381,7 +382,16 @@ def plan_eri4c(basis):
             tuple(rows_a), tuple(rows_b), tuple(rows_c), tuple(rows_d),
             npr,
         ))
-    return (int(np.asarray(basis.angular).shape[0]), tuple(classes))
+    return Plan((int(np.asarray(basis.angular).shape[0]), tuple(classes)))
+
+
+def plan_eri4c(basis):
+    """Memoized and wrapped; see :class:`~dftax.integrals.eri3c_bucketed.Plan`."""
+    from dftax.integrals.eri3c_bucketed import _plan_cached
+
+    key = ("eri4c", static_fingerprint(basis))
+    return _plan_cached(key, lambda: _plan_eri4c_uncached(basis))
+
 
 
 def _make_eri4c_kernel(la, lb, lc, ld, anga, angb, angc, angd, omega=None):

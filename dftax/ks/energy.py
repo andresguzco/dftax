@@ -468,8 +468,7 @@ _jit_nuclear_repulsion = jax.jit(nuclear_repulsion)
 
 
 def _build_integrals_tiled(basis, coords, charges, grid_coords, aux_basis,
-                           materialize_ao, omega, eri3c_plan, pair_plan,
-                           aux_pair_plan):
+                           materialize_ao, omega, keep_pairs):
     """The DF half of :func:`_build_integrals` on the tiled engine.
 
     Same outputs, built eagerly class by class so each kernel stays its own
@@ -481,6 +480,10 @@ def _build_integrals_tiled(basis, coords, charges, grid_coords, aux_basis,
         overlap_kinetic_tiled,
     )
 
+    # Exact partitions (tol=0): see dftax.integrals.tiled.
+    eri3c_plan = plan_eri3c(basis, aux_basis, keep_pairs=keep_pairs, tol=0.0)
+    pair_plan = plan_pairs(basis, tol=0.0)
+    aux_pair_plan = plan_pairs(aux_basis, tol=0.0)
     S, T = overlap_kinetic_tiled(basis, plan=pair_plan)
     V = nuclear_attraction_tiled(basis, coords, charges, plan=pair_plan)
     ao, dao = (_jit_ao_on_grid(basis, grid_coords) if materialize_ao
@@ -681,8 +684,7 @@ class KS(eqx.Module):
             (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv, eri_lr, int3c_lr,
              int2c_inv_lr) = _build_integrals_tiled(
                 basis, coords, charges, grid_coords, aux_basis, materialize_ao,
-                omega if hf_lr != 0.0 else None, eri3c_plan, pair_plan,
-                aux_pair_plan)
+                omega if hf_lr != 0.0 else None, screen_keep)
         else:
             (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
              eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(

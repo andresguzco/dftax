@@ -80,16 +80,15 @@ def test_shared_classes_ask_for_identical_kernels():
     and the spherical blocks, either of which would tie a kernel to a molecule
     if it were derived from the molecule.
     """
-    by_class = []
+    keys = []
     for mol in (WATER, H2O2):
         basis, aux = _pair(mol, orbital="def2-svp",
                            aux="def2-universal-jkfit")
-        keys = kernel_keys(basis, aux, plan_eri3c(basis, aux))
-        by_class.append({k[:3] + (k[7],): k for k in keys})
-    shared = by_class[0].keys() & by_class[1].keys()
-    assert len(shared) > 20
-    for c in shared:
-        assert by_class[0][c] == by_class[1][c], c
+        keys.append(set(kernel_keys(basis, aux,
+                                    plan_eri3c(basis, aux, tol=0.0))))
+    # Same elements, so the same kernels, whatever the atom count and order.
+    assert keys[0] == keys[1]
+    assert len(keys[0]) > 20
 
 
 def test_tile_size_is_a_bounded_power_of_two():

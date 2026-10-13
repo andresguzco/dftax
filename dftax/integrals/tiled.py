@@ -25,6 +25,12 @@ function of the class alone (see :func:`tile_size`), so it never ties the
 kernel to a molecule either: cheap classes, which are many triples each, get
 large tiles, and expensive high-l classes, which are few, get small ones, so
 padding the last tile costs little work wherever the work is.
+
+The plans default to the exact partition (``tol=0``): every class is one
+contraction pattern, so the class set is a function of the basis and the
+elements alone and no triple is padded to a longer contraction. Merging
+classes, which the bucketed build does to compile fewer of them, decides by
+how many triples each holds, and that ties the partition to the molecule.
 """
 
 from __future__ import annotations
@@ -216,7 +222,7 @@ def eri3c_tiled(basis, aux_basis, omega=None, plan=None):
     build; under ``grad`` each kernel's derivative is its own executable too.
     """
     if plan is None:
-        plan = plan_eri3c(basis, aux_basis)
+        plan = plan_eri3c(basis, aux_basis, tol=0.0)
     _specs, gather, scatter = _programs(plan, omega)
     packed = gather(basis, aux_basis)
     blocks = []
@@ -356,14 +362,14 @@ def overlap_kinetic_tiled(basis, plan=None):
     """``(S, T)``; same value as
     :func:`~dftax.integrals.eri3c_bucketed.overlap_kinetic_bucketed`."""
     _check_orbital_l(basis)
-    return _pairs_tiled("st", basis, plan or plan_pairs(basis))
+    return _pairs_tiled("st", basis, plan or plan_pairs(basis, tol=0.0))
 
 
 def nuclear_attraction_tiled(basis, atom_coords, atom_charges, plan=None):
     """Nuclear attraction; same value as
     :func:`~dftax.integrals.eri3c_bucketed.nuclear_attraction_bucketed`."""
     _check_orbital_l(basis)
-    return _pairs_tiled("nuc", basis, plan or plan_pairs(basis),
+    return _pairs_tiled("nuc", basis, plan or plan_pairs(basis, tol=0.0),
                         atom_coords=atom_coords,
                         atom_charges=atom_charges)[0]
 
@@ -371,5 +377,6 @@ def nuclear_attraction_tiled(basis, atom_coords, atom_charges, plan=None):
 def eri2c_tiled(aux_basis, omega=None, plan=None):
     """The 2-center metric; same value as
     :func:`~dftax.integrals.eri3c_bucketed.eri2c_matrix_bucketed`."""
-    return _pairs_tiled("eri2c", aux_basis, plan or plan_pairs(aux_basis),
+    return _pairs_tiled("eri2c", aux_basis,
+                        plan or plan_pairs(aux_basis, tol=0.0),
                         omega=omega)[0]

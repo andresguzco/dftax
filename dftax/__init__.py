@@ -29,6 +29,11 @@ The most common entry points are re-exported here; import the submodules
 directly for the full surface.
 """
 
+from dftax.cache import _enable_on_import, enable_compilation_cache
+
+_enable_on_import()
+del _enable_on_import
+
 from dftax.energy.d3 import d3bj
 from dftax.energy.d4 import d4
 from dftax.energy.gto import BasisData, extract_basis_data, eval_gto
@@ -83,6 +88,8 @@ __all__ = [
     "raman_spectrum", "alchemical_deriv",
     # implicit-differentiation SCF response
     "implicit_density",
+    # the persistent compilation cache (on by default; see dftax.cache)
+    "enable_compilation_cache",
     # low-level building blocks
     "BasisData", "extract_basis_data", "eval_gto",
     "overlap_matrix", "kinetic_matrix", "nuclear_attraction_matrix",

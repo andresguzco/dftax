@@ -45,7 +45,7 @@ from dftax.integrals import (
 from dftax.ks import (
     KS, System, exact, df, mesh, distributed, is_coordinator, barrier,
     core, sad, minao, sap,
-    scf, adiis, fermi, newton, roks, minimize, forces, scf_batched,
+    scf, adiis, fermi, newton, roks, minimize, gdm, forces, scf_batched,
     KSResult,
     BatchedResult,
     dipole, polarizability, hessian, vibrations, ir_spectrum, raman_spectrum,
@@ -74,7 +74,7 @@ __all__ = [
     "d3bj",
     "d4",
     # run: solver verbs + result
-    "scf", "adiis", "fermi", "newton", "roks", "minimize", "forces",
+    "scf", "adiis", "fermi", "newton", "roks", "minimize", "gdm", "forces",
     "scf_batched",
     "KSResult",
     "BatchedResult",

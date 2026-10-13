@@ -121,7 +121,7 @@ def _padded(rows, tile):
 def _sph_block(c2s, row0, ncomp, col0, l):
     if c2s is None:
         return None
-    blk = np.asarray(c2s)[row0:row0 + ncomp, col0:col0 + 2 * l + 1]
+    blk = c2s[row0:row0 + ncomp, col0:col0 + 2 * l + 1]
     return tuple(tuple(float(x) for x in r) for r in blk)
 
 
@@ -178,28 +178,45 @@ def _programs(plan, omega):
     return specs, gather, scatter
 
 
+def kernel_keys(basis, aux_basis, plan, omega=None):
+    """The :func:`_tile_kernel` key of every class in ``plan``, in order.
+
+    Two molecules share a compiled kernel exactly when they produce the same
+    key, which holds for every class they have in common: nothing in a key
+    depends on where a shell sits or how many triples its class holds.
+    """
+    specs = _programs(plan, omega)[0]
+    c2s_b = None if basis.cart2sph is None else np.asarray(basis.cart2sph)
+    c2s_a = (None if aux_basis.cart2sph is None
+             else np.asarray(aux_basis.cart2sph))
+    keys = []
+    for (la, lb, lc, anga, angb, angc, nprims, tile, ra, rb, rc, _n,
+         starts) in specs:
+        keys.append((
+            la, lb, lc, anga, angb, angc, omega, nprims, tile,
+            _sph_block(c2s_b, int(ra[0]), _ncart(la), int(starts[0, 0]), la),
+            _sph_block(c2s_b, int(rb[0]), _ncart(lb), int(starts[0, 1]), lb),
+            _sph_block(c2s_a, int(rc[0]), _ncart(lc), int(starts[0, 2]), lc),
+        ))
+    return keys
+
+
 def eri3c_tiled(basis, aux_basis, omega=None, plan=None):
     """(nao, nao, naux) 3-center tensor; same value as
     :func:`~dftax.integrals.eri3c_bucketed.eri3c_matrix_bucketed`.
 
     Must be called eagerly (outside ``jit``), with concrete basis metadata:
-    the point is that each tile kernel stays its own executable.
+    the point is that each tile kernel stays its own executable. It is
+    differentiable with respect to both basis' ``centers`` like the bucketed
+    build; under ``grad`` each kernel's derivative is its own executable too.
     """
     if plan is None:
         plan = plan_eri3c(basis, aux_basis)
-    specs, gather, scatter = _programs(plan, omega)
+    _specs, gather, scatter = _programs(plan, omega)
     packed = gather(basis, aux_basis)
     blocks = []
-    for (la, lb, lc, anga, angb, angc, nprims, tile, ra, rb, rc, _n,
-         starts), tiles in zip(specs, packed):
-        kern = _tile_kernel(
-            la, lb, lc, anga, angb, angc, omega, nprims, tile,
-            _sph_block(basis.cart2sph, int(ra[0]), _ncart(la),
-                       int(starts[0, 0]), la),
-            _sph_block(basis.cart2sph, int(rb[0]), _ncart(lb),
-                       int(starts[0, 1]), lb),
-            _sph_block(aux_basis.cart2sph, int(rc[0]), _ncart(lc),
-                       int(starts[0, 2]), lc),
-        )
+    for key, tiles in zip(kernel_keys(basis, aux_basis, plan, omega),
+                          packed):
+        kern = _tile_kernel(*key)
         blocks.append(tuple(kern(t) for t in tiles))
     return scatter(tuple(blocks))

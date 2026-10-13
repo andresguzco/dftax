@@ -124,3 +124,28 @@ def test_tiled_two_index_builds_match_bucketed(spherical):
         np.testing.assert_allclose(eri2c_tiled(aux, omega=omega),
                                    eri2c_matrix_bucketed(aux, omega=omega),
                                    rtol=0, atol=1e-12)
+
+
+@pytest.mark.float64
+def test_tiled_ks_build_matches_default(monkeypatch):
+    """The whole DF build on the tiled engine, through a range-separated
+    hybrid so the attenuated tensors are covered: same energy and Fock."""
+    from dftax import KS, Molecule, becke, df
+    from dftax.energy.xc import functional
+
+    mol = Molecule.from_xyz("O 0 0 0; H 0.76 0 0.50; H 0.76 0 -0.50",
+                            "6-31g*", spherical=True)
+
+    def build():
+        return KS(mol, functional("cam-b3lyp"), grid=becke(35, 50),
+                  coulomb=df("def2-universal-jkfit", chunk=None))
+
+    ref = build()
+    monkeypatch.setenv("DFTAX_TILED", "1")
+    got = build()
+    P = jnp.stack([jnp.eye(ref.S.shape[0]) * 0.1])
+    e0, F0 = ref.energy_and_fock(P)
+    e1, F1 = got.energy_and_fock(P)
+    assert abs(float(e1 - e0)) < 1e-10
+    np.testing.assert_allclose(F1, F0, rtol=0, atol=1e-10)
+    np.testing.assert_allclose(got.S, ref.S, rtol=0, atol=1e-13)

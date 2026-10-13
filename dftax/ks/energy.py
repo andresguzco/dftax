@@ -462,6 +462,41 @@ def _build_integrals(
             eri_lr, int3c_lr, int2c_inv_lr)
 
 
+_jit_metric_pinv = jax.jit(_metric_pinv)
+_jit_ao_on_grid = jax.jit(ao_on_grid)
+_jit_nuclear_repulsion = jax.jit(nuclear_repulsion)
+
+
+def _build_integrals_tiled(basis, coords, charges, grid_coords, aux_basis,
+                           materialize_ao, omega, eri3c_plan, pair_plan,
+                           aux_pair_plan):
+    """The DF half of :func:`_build_integrals` on the tiled engine.
+
+    Same outputs, built eagerly class by class so each kernel stays its own
+    cached executable; only the gathers, scatters, the metric inverse and the
+    AO grid are compiled per molecule.
+    """
+    from dftax.integrals.tiled import (
+        eri2c_tiled, eri3c_tiled, nuclear_attraction_tiled,
+        overlap_kinetic_tiled,
+    )
+
+    S, T = overlap_kinetic_tiled(basis, plan=pair_plan)
+    V = nuclear_attraction_tiled(basis, coords, charges, plan=pair_plan)
+    ao, dao = (_jit_ao_on_grid(basis, grid_coords) if materialize_ao
+               else (None, None))
+    e_nn = _jit_nuclear_repulsion(coords, charges)
+    int3c = eri3c_tiled(basis, aux_basis, plan=eri3c_plan)
+    int2c_inv = _jit_metric_pinv(eri2c_tiled(aux_basis, plan=aux_pair_plan))
+    int3c_lr = int2c_inv_lr = None
+    if omega is not None:
+        int3c_lr = eri3c_tiled(basis, aux_basis, omega=omega, plan=eri3c_plan)
+        int2c_inv_lr = _jit_metric_pinv(
+            eri2c_tiled(aux_basis, omega=omega, plan=aux_pair_plan))
+    return (S, T + V, ao, dao, e_nn, None, int3c, int2c_inv, None, int3c_lr,
+            int2c_inv_lr)
+
+
 class KS(eqx.Module):
     """Spin-stacked KS total energy as a differentiable function of ``P``.
 
@@ -635,28 +670,29 @@ class KS(eqx.Module):
         )
         materialize_int3c = (
             (not shard_df) and not (is_df and spec.chunk is not None))
-        # Tiled 3-center build (dftax.integrals.tiled): its class kernels are
-        # separate executables keyed on the basis family, so the persistent
-        # cache carries them across molecules. It runs eagerly, outside the
-        # jitted build below, and only where its plan is concrete.
+        materialize_ao = devices is None and grid_chunk is None
+        # Tiled build (dftax.integrals.tiled): every shell-class kernel is a
+        # separate executable keyed on the basis family alone, so the
+        # persistent cache carries it from one molecule to the next. It runs
+        # eagerly, outside any jit, on the materialized DF path.
         tiled = (materialize_int3c and aux_basis is not None
-                 and os.environ.get("DFTAX_TILED_INT3C") == "1")
-        (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
-         eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(
-            basis, coords, charges, grid_coords, aux_basis,
-            devices is None and grid_chunk is None,   # sharded AO grid built below
-            materialize_int3c and not tiled,
-            quartets, qof, (not is_df) and spec.stream,
-            omega if hf_lr != 0.0 else None,
-            eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan,
-        )
+                 and os.environ.get("DFTAX_TILED") == "1")
         if tiled:
-            from dftax.integrals.tiled import eri3c_tiled
-
-            int3c = eri3c_tiled(basis, aux_basis, plan=eri3c_plan)
-            if hf_lr != 0.0:
-                int3c_lr = eri3c_tiled(basis, aux_basis, omega=omega,
-                                       plan=eri3c_plan)
+            (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv, eri_lr, int3c_lr,
+             int2c_inv_lr) = _build_integrals_tiled(
+                basis, coords, charges, grid_coords, aux_basis, materialize_ao,
+                omega if hf_lr != 0.0 else None, eri3c_plan, pair_plan,
+                aux_pair_plan)
+        else:
+            (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
+             eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(
+                basis, coords, charges, grid_coords, aux_basis,
+                materialize_ao,   # sharded AO grid built below
+                materialize_int3c,
+                quartets, qof, (not is_df) and spec.stream,
+                omega if hf_lr != 0.0 else None,
+                eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan,
+            )
         # Dispersion is P-independent: a scalar of the (traced) coordinates,
         # mirroring e_nn, so the rebuilt energies in forces/batched carry its
         # gradient automatically. Atomic numbers come from the charges (works

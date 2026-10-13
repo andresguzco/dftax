@@ -83,7 +83,7 @@ def read_xyz(name: str) -> str:
 CONV_TOL = 1e-8
 
 
-def run_dftax(atom, basis, aux, xc, level, repeat, ndev, screen=1e-10):
+def run_dftax(atom, basis, aux, xc, level, repeat, ndev, screen="auto"):
     import jax
 
     jax.config.update("jax_enable_x64", True)
@@ -100,13 +100,15 @@ def run_dftax(atom, basis, aux, xc, level, repeat, ndev, screen=1e-10):
     # (which *is* pruned) against an unpruned PySCF, as this harness did
     # before, gave dftax a grid 1.7x smaller than the one it was measured
     # against.
-    # Grid block screening ON by default: GPU4PySCF's numint always screens
-    # AOs per grid batch internally (it cannot be disabled), so an unscreened
-    # dftax XC term pays ng*nao^2 everywhere and the comparison measures the
-    # missing feature, not the engine. becke(screen=) is the matched setting;
-    # pass --screen 0 to measure the dense term.
-    grid = becke(*level, prune=None,
-                 screen=screen if screen and screen > 0 else None)
+    # Grid block screening follows dftax's own default, "auto": on from
+    # SCREEN_AUTO_MIN_ATOMS up, where it is measured to win, and off below,
+    # where it is measured to lose (0.89x at 23 atoms). Forcing it on for
+    # every molecule, as this harness used to, understated the small rows.
+    # GPU4PySCF always screens, but its screen is free at those sizes and
+    # ours is not. Pass --screen 0 for the dense term or a float to force it.
+    if screen != "auto":
+        screen = float(screen) if float(screen) > 0 else None
+    grid = becke(*level, prune=None, screen=screen)
     functional = getattr(xcmod, xc)()
     walls = []
     ks = res = None
@@ -269,8 +271,9 @@ def main():
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--ndev", type=int, default=1)
     ap.add_argument("--grid", nargs=2, type=int, default=[75, 302])
-    ap.add_argument("--screen", type=float, default=1e-10,
-                    help="dftax grid block-screening threshold (0 disables)")
+    ap.add_argument("--screen", default="auto",
+                    help="dftax grid block screening: auto (dftax's size "
+                         "gate, the default), a threshold, or 0 to disable")
     args = ap.parse_args()
 
     if args.drive:

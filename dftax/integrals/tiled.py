@@ -35,7 +35,9 @@ how many triples each holds, and that ties the partition to the molecule.
 
 from __future__ import annotations
 
+import hashlib
 import math
+import os
 from functools import lru_cache
 
 import equinox as eqx
@@ -89,6 +91,80 @@ def _widths(la, lb, lc, nprims):
     return tuple(zip(edges[:-1].tolist(), edges[1:].tolist())), int(edges[-1])
 
 
+# ---------------------------------------------------------------------------
+# Serialized kernels: no tracing on a cache hit
+# ---------------------------------------------------------------------------
+#
+# The persistent compilation cache stores XLA executables, but JAX computes
+# the cache key from the lowered module, so every process still traces and
+# lowers every kernel before it can find it in the cache; on cubane that is
+# ~30 s of a ~45 s fully cached 3-center build. Each tile kernel is therefore
+# also kept as serialized StableHLO (jax.export), with its derivative, next to
+# the compilation cache. A later process deserializes it instead of tracing,
+# and calls it through the same wrapper every time, so the executable it then
+# compiles is the same one the cache already holds.
+
+
+@lru_cache(maxsize=1)
+def _code_fingerprint() -> str:
+    """Hash of everything a serialized kernel was traced from."""
+    from dftax.energy import boys
+    from dftax.integrals import eri3c_bucketed
+
+    h = hashlib.sha256(jax.__version__.encode())
+    for mod in (boys, eri3c_bucketed):
+        with open(mod.__file__, "rb") as fh:
+            h.update(fh.read())
+    with open(__file__, "rb") as fh:
+        h.update(fh.read())
+    return h.hexdigest()[:20]
+
+
+@lru_cache(maxsize=1)
+def _can_serialize() -> bool:
+    """jax.export serialization needs ``flatbuffers``, which JAX does not
+    install; without it the kernels are traced per process as before."""
+    try:
+        import flatbuffers  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _export_dir():
+    if os.environ.get("DFTAX_EXPORT", "1") == "0":
+        return None
+    root = jax.config.jax_compilation_cache_dir
+    return None if not root else os.path.join(root, "dftax-export")
+
+
+def _serialized(name, key, build, shape):
+    """``build()``'s jitted function, called through its serialized export
+    when one exists (or can be written); the plain jit otherwise."""
+    root = _export_dir()
+    if root is None or not _can_serialize():
+        return build()
+    platform = jax.devices()[0].platform
+    tag = hashlib.sha256(repr((name, key, shape, platform,
+                               _code_fingerprint())).encode()).hexdigest()
+    path = os.path.join(root, tag[:40] + ".stablehlo")
+    try:
+        with open(path, "rb") as fh:
+            exp = jax.export.deserialize(bytearray(fh.read()))
+    except (OSError, ValueError):
+        exp = jax.export.export(build())(
+            jax.ShapeDtypeStruct(shape, jnp.float64))
+        try:
+            os.makedirs(root, exist_ok=True)
+            tmp = f"{path}.{os.getpid()}.tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(exp.serialize(vjp_order=1))
+            os.replace(tmp, path)
+        except OSError:
+            pass
+    return exp.call
+
+
 @lru_cache(maxsize=4096)
 def _tile_kernel(la, lb, lc, anga, angb, angc, omega, nprims, tile, ta, tb,
                  tc):
@@ -118,7 +194,9 @@ def _tile_kernel(la, lb, lc, anga, angb, angc, omega, nprims, tile, ta, tb,
             vals = jnp.einsum("tpqc,cr->tpqr", vals, Tc)
         return vals
 
-    return jax.jit(run)
+    _, width = _widths(la, lb, lc, nprims)
+    key = (la, lb, lc, anga, angb, angc, omega, nprims, tile, ta, tb, tc)
+    return _serialized("eri3c", key, lambda: jax.jit(run), (tile, width))
 
 
 def _padded(rows, tile):
@@ -278,7 +356,8 @@ def _pair_kernel(kind, la, lb, anga, angb, omega, nprims, tile):
                 for lo, hi, shp in zip(edges[:-1], edges[1:], shapes)]
         return kern(*args)
 
-    return jax.jit(run)
+    key = (kind, la, lb, anga, angb, omega, nprims, tile)
+    return _serialized("pair", key, lambda: jax.jit(run), (tile, edges[-1]))
 
 
 @lru_cache(maxsize=64)

@@ -31,6 +31,7 @@ classifiers = [
 dependencies = [
     "basis-set-exchange>=0.12",
     "equinox>=0.13.2",
+    "flatbuffers>=24.3",
     "jax>=0.10.0",
     "jaxtyping>=0.2.0",
     "numpy>=1.26",

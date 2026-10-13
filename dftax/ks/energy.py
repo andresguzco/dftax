@@ -41,6 +41,7 @@ The Coulomb/exchange backend is a value from :func:`~dftax.ks.terms.exact` /
 
 from __future__ import annotations
 
+import os
 import warnings
 from dataclasses import dataclass
 
@@ -632,15 +633,30 @@ class KS(eqx.Module):
             if aux_basis is None and not spec.stream and quartets is None
             else None
         )
+        materialize_int3c = (
+            (not shard_df) and not (is_df and spec.chunk is not None))
+        # Tiled 3-center build (dftax.integrals.tiled): its class kernels are
+        # separate executables keyed on the basis family, so the persistent
+        # cache carries them across molecules. It runs eagerly, outside the
+        # jitted build below, and only where its plan is concrete.
+        tiled = (materialize_int3c and aux_basis is not None
+                 and os.environ.get("DFTAX_TILED_INT3C") == "1")
         (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
          eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(
             basis, coords, charges, grid_coords, aux_basis,
             devices is None and grid_chunk is None,   # sharded AO grid built below
-            (not shard_df) and not (is_df and spec.chunk is not None),
+            materialize_int3c and not tiled,
             quartets, qof, (not is_df) and spec.stream,
             omega if hf_lr != 0.0 else None,
             eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan,
         )
+        if tiled:
+            from dftax.integrals.tiled import eri3c_tiled
+
+            int3c = eri3c_tiled(basis, aux_basis, plan=eri3c_plan)
+            if hf_lr != 0.0:
+                int3c_lr = eri3c_tiled(basis, aux_basis, omega=omega,
+                                       plan=eri3c_plan)
         # Dispersion is P-independent: a scalar of the (traced) coordinates,
         # mirroring e_nn, so the rebuilt energies in forces/batched carry its
         # gradient automatically. Atomic numbers come from the charges (works

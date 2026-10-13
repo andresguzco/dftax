@@ -38,10 +38,15 @@ import jax.numpy as jnp
 import numpy as np
 
 from dftax.integrals.eri3c_bucketed import (
+    _check_orbital_l,
     _gather_rows,
     _make_class_kernel,
+    _make_eri2c_kernel,
+    _make_pair_kernel,
+    _make_st_kernel,
     _scatter_blocks,
     plan_eri3c,
+    plan_pairs,
 )
 
 # Work per kernel launch, in the units of :func:`_class_cost`. Measured on the
@@ -220,3 +225,151 @@ def eri3c_tiled(basis, aux_basis, omega=None, plan=None):
         kern = _tile_kernel(*key)
         blocks.append(tuple(kern(t) for t in tiles))
     return scatter(tuple(blocks))
+
+
+# ---------------------------------------------------------------------------
+# Two-index builds: overlap + kinetic, nuclear attraction, the aux metric
+# ---------------------------------------------------------------------------
+#
+# Same three stages over the pair classes of :func:`plan_pairs`. The nuclear
+# attraction is tiled over (pair, nucleus) rows rather than over pairs with
+# the nuclei inside the kernel, so the number of atoms never enters a
+# kernel's shape either; the scatter sums each pair's rows.
+
+
+def _pair_cost(kind, la, lb, nprims) -> int:
+    mt = max(la + lb + 1, 2)
+    base = nprims[0] * nprims[1] * _ncart(la) * _ncart(lb)
+    return base * (3 * (la + 1) * (lb + 3) if kind == "st" else mt ** 3)
+
+
+def _pair_tile(kind, la, lb, nprims) -> int:
+    t = TILE_WORK / _pair_cost(kind, la, lb, nprims)
+    t = 2 ** int(round(math.log2(t)))
+    return int(min(max(t, TILE_MIN), TILE_MAX))
+
+
+@lru_cache(maxsize=4096)
+def _pair_kernel(kind, la, lb, anga, angb, omega, nprims, tile):
+    """Jitted tile kernel of one pair class: ``(tile, width) -> blocks``."""
+    npa, npb = nprims
+    shapes = [(3,), (3,), (npa,), (npb,), (_ncart(la), npa),
+              (_ncart(lb), npb)]
+    if kind == "st":
+        one = _make_st_kernel(la, lb, anga, angb)
+        kern = jax.vmap(lambda *a: jnp.stack(one(*a)))
+    elif kind == "eri2c":
+        kern = jax.vmap(_make_eri2c_kernel(la, lb, anga, angb, omega))
+    else:                                       # "nuc": one nucleus per row
+        one = _make_pair_kernel(la, lb, anga, angb)
+        kern = jax.vmap(lambda A, B, ea, eb, ca, cb, C, Z:
+                        one(A, B, ea, eb, ca, cb, C[None], Z))
+        shapes += [(3,), (1,)]
+    edges = np.cumsum([0] + [int(np.prod(sh)) for sh in shapes]).tolist()
+
+    def run(packed):
+        args = [packed[:, lo:hi].reshape((tile,) + shp)
+                for lo, hi, shp in zip(edges[:-1], edges[1:], shapes)]
+        return kern(*args)
+
+    return jax.jit(run)
+
+
+@lru_cache(maxsize=64)
+def _pair_programs(kind, plan, omega, natom):
+    """Per-molecule gather and scatter for a pair plan (``natom`` only for
+    the nuclear attraction, whose rows are pair x nucleus)."""
+    nao, classes = plan
+    reps = natom if kind == "nuc" else 1
+    specs = []
+    for (la, lb, anga, angb, ra, rb, nprims) in classes:
+        tile = _pair_tile(kind, la, lb, nprims)
+        ra = np.asarray(ra, np.int32)
+        rb = np.asarray(rb, np.int32)
+        n = ra.shape[0] * reps
+        rows = np.arange(n, dtype=np.int32)
+        pad = -n % tile
+        rows = np.concatenate([rows, np.zeros(pad, np.int32)])
+        specs.append((la, lb, anga, angb, nprims, tile, ra, rb,
+                      rows // reps, rows % reps, n))
+
+    @eqx.filter_jit
+    def gather(basis, atom_coords, atom_charges):
+        out = []
+        for (la, lb, _a, _b, (npa, npb), tile, ra, rb, pr, ak, n) in specs:
+            a, b = ra[pr], rb[pr]
+            parts = [
+                basis.centers[a], basis.centers[b],
+                basis.exponents[a][:, :npa], basis.exponents[b][:, :npb],
+                _gather_rows(basis.coefficients, a, _ncart(la))[:, :, :npa]
+                .reshape(a.shape[0], -1),
+                _gather_rows(basis.coefficients, b, _ncart(lb))[:, :, :npb]
+                .reshape(b.shape[0], -1),
+            ]
+            if kind == "nuc":
+                parts += [atom_coords[ak], atom_charges[ak][:, None]]
+            packed = jnp.concatenate(parts, axis=1)
+            out.append(tuple(packed[i * tile:(i + 1) * tile]
+                             for i in range(packed.shape[0] // tile)))
+        return tuple(out)
+
+    @jax.jit
+    def scatter(blocks, c2s):
+        nout = 2 if kind == "st" else 1
+        outs = [jnp.zeros((nao, nao), dtype=jnp.float64)
+                for _ in range(nout)]
+        for (la, lb, _a, _b, _np, _t, ra, rb, _pr, _ak, n), tiles in zip(
+                specs, blocks):
+            vals = jnp.concatenate(tiles, axis=0)[:n]
+            if kind == "nuc":
+                vals = vals.reshape((ra.shape[0], reps) + vals.shape[1:]
+                                    ).sum(axis=1)
+            starts = np.stack((ra, rb), axis=1)
+            swapped = np.ascontiguousarray(starts[:, ::-1])
+            for i in range(nout):
+                v = vals[:, i] if kind == "st" else vals
+                outs[i] = _scatter_blocks(outs[i], starts, v)
+                outs[i] = _scatter_blocks(outs[i], swapped, v.swapaxes(1, 2))
+        if c2s is not None:
+            outs = [c2s.T @ o @ c2s for o in outs]
+        return tuple(outs)
+
+    return specs, gather, scatter
+
+
+def _pairs_tiled(kind, basis, plan, omega=None, atom_coords=None,
+                 atom_charges=None):
+    natom = 0 if atom_coords is None else int(atom_coords.shape[0])
+    specs, gather, scatter = _pair_programs(kind, plan, omega, natom)
+    if atom_coords is None:
+        atom_coords = jnp.zeros((1, 3))
+        atom_charges = jnp.zeros((1,))
+    packed = gather(basis, atom_coords, atom_charges)
+    blocks = []
+    for (la, lb, anga, angb, nprims, tile, *_r), tiles in zip(specs, packed):
+        kern = _pair_kernel(kind, la, lb, anga, angb, omega, nprims, tile)
+        blocks.append(tuple(kern(t) for t in tiles))
+    return scatter(tuple(blocks), basis.cart2sph)
+
+
+def overlap_kinetic_tiled(basis, plan=None):
+    """``(S, T)``; same value as
+    :func:`~dftax.integrals.eri3c_bucketed.overlap_kinetic_bucketed`."""
+    _check_orbital_l(basis)
+    return _pairs_tiled("st", basis, plan or plan_pairs(basis))
+
+
+def nuclear_attraction_tiled(basis, atom_coords, atom_charges, plan=None):
+    """Nuclear attraction; same value as
+    :func:`~dftax.integrals.eri3c_bucketed.nuclear_attraction_bucketed`."""
+    _check_orbital_l(basis)
+    return _pairs_tiled("nuc", basis, plan or plan_pairs(basis),
+                        atom_coords=atom_coords,
+                        atom_charges=atom_charges)[0]
+
+
+def eri2c_tiled(aux_basis, omega=None, plan=None):
+    """The 2-center metric; same value as
+    :func:`~dftax.integrals.eri3c_bucketed.eri2c_matrix_bucketed`."""
+    return _pairs_tiled("eri2c", aux_basis, plan or plan_pairs(aux_basis),
+                        omega=omega)[0]

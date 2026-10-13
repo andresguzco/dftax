@@ -98,3 +98,29 @@ def test_tile_size_is_a_bounded_power_of_two():
             t = tile_size(la, lb, lc, nprims)
             assert TILE_MIN <= t <= TILE_MAX
             assert t & (t - 1) == 0
+
+
+@pytest.mark.float64
+@pytest.mark.parametrize("spherical", [True, False])
+def test_tiled_two_index_builds_match_bucketed(spherical):
+    from dftax.integrals.eri3c_bucketed import (
+        eri2c_matrix_bucketed, nuclear_attraction_bucketed,
+        overlap_kinetic_bucketed,
+    )
+    from dftax.integrals.tiled import (
+        eri2c_tiled, nuclear_attraction_tiled, overlap_kinetic_tiled,
+    )
+
+    basis, aux = _pair(WATER, orbital="6-31g*", spherical=spherical)
+    xyz = jnp.asarray(WATER[1])
+    Z = jnp.asarray([8.0, 1.0, 1.0])
+    for got, ref in zip(overlap_kinetic_tiled(basis),
+                        overlap_kinetic_bucketed(basis)):
+        np.testing.assert_allclose(got, ref, rtol=0, atol=1e-13)
+    np.testing.assert_allclose(nuclear_attraction_tiled(basis, xyz, Z),
+                               nuclear_attraction_bucketed(basis, xyz, Z),
+                               rtol=0, atol=1e-12)
+    for omega in (None, 0.33):
+        np.testing.assert_allclose(eri2c_tiled(aux, omega=omega),
+                                   eri2c_matrix_bucketed(aux, omega=omega),
+                                   rtol=0, atol=1e-12)

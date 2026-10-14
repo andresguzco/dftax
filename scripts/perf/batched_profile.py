@@ -93,6 +93,28 @@ def main():
     t0 = time.perf_counter()
     res = gdm_batched(kss)
     t_solve = (time.perf_counter() - t0) * 1e3
+
+    # gdm_batched's setup, stage by stage (warm)
+    from dftax.ks.batched_gdm import _block, _solve_batch
+    from dftax.ks.guess import density_from_guess
+    from dftax.ks.scf import canonical_orthonormalizer
+
+    def stage(fn):
+        t0 = time.perf_counter()
+        out = jax.block_until_ready(fn())
+        return out, (time.perf_counter() - t0) * 1e3
+
+    padded, t_pad = stage(lambda: [pad_ks(ks, b) for ks in kss])
+    P0s, t_guess = stage(lambda: [_block(density_from_guess(
+        ks, None, canonical_orthonormalizer(ks.S))[0], (b.nao, b.nao))
+        for ks in kss])
+    st, t_stack = stage(lambda: (jax.tree.map(lambda *x: jnp.stack(x),
+                                              *padded), jnp.stack(P0s)))
+    _, t_core = stage(lambda: _solve_batch(
+        st[0], st[1], jnp.asarray(200), jnp.asarray(1e-8),
+        jnp.asarray(1e-6), jnp.asarray(0.5), jnp.asarray(0.05), m))
+    print(f"  setup: pad {t_pad:.1f} ms, guess {t_guess:.1f} ms, stack "
+          f"{t_stack:.1f} ms; jitted solve alone {t_core:.1f} ms")
     iters = int(np.max(res.n_iter))
     print(f"batch {B}, bucket nao {nao} nocc {no} naux {b.naux} ng {b.ng}")
     print(f"  evaluation (vmapped)   {t_eval:8.2f} ms  ({t_eval / B:.2f} ms "

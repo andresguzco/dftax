@@ -159,9 +159,17 @@ def _resolve_system(system):
 
 # Element budget for the materialized AO grid values, ao (ng, nao) plus dao
 # (ng, nao, 3), i.e. 4·ng·nao doubles (~1 GiB at 2^27). Above it the
-# ``chunk="auto"`` policy streams the XC integral instead of materializing
-# (same budget pattern as ``eri3c._DF_BRA_BUDGET``).
+# ``chunk="auto"`` policy streams the XC integral instead of materializing.
+# The fixed value is the CPU / unknown-device fallback and a floor; on a GPU
+# ``_ao_grid_budget`` sizes it to the device pool, like the DF tensor's.
 _AO_GRID_BUDGET = 2**27
+# Fraction of the device pool the stored AO values may claim. Streaming
+# re-evaluates every basis function at every point on every Fock build, which
+# measured as ~98% of a PBE iteration on cubane; storing them costs memory
+# once per geometry. The XC backward holds about as much again in
+# temporaries, so an eighth of the pool for the values leaves the DF
+# tensor's quarter (_DF_POOL_FRACTION) and room for both.
+_AO_POOL_FRACTION = 0.125
 # Per-chunk element budget when streaming (~32 MiB of AO values per chunk).
 _AO_CHUNK_BUDGET = 2**22
 # Element budget for the materialized DF 3-center tensor (nao², naux). The
@@ -214,15 +222,30 @@ def _resolve_df_chunk(chunk, nao: int, naux: int, sharded: bool):
     return max(8, _DF_CHUNK_BUDGET // (nao * nao))
 
 
+def _ao_grid_budget() -> int:
+    """Element budget for the materialized AO grid values: a fraction of the
+    default device's memory pool, never less than ``_AO_GRID_BUDGET`` (see
+    :func:`_df_materialize_budget`, the same policy for the DF tensor)."""
+    try:
+        stats = jax.local_devices()[0].memory_stats()
+        limit = stats.get("bytes_limit") if stats else None
+    except Exception:
+        limit = None
+    if limit is None:
+        return _AO_GRID_BUDGET
+    return max(_AO_GRID_BUDGET, int(_AO_POOL_FRACTION * limit) // 8)
+
+
 def _resolve_chunk(chunk, ng: int, nao: int):
     """Resolve a spec's chunk policy to a concrete value.
 
-    ``"auto"`` materializes the AO grid when it fits ``_AO_GRID_BUDGET`` and
-    otherwise streams with a budget-derived chunk; ``None`` forces the
-    materialized grid; an int streams with exactly that chunk.
+    ``"auto"`` materializes the AO grid when it fits the device-aware budget
+    (:func:`_ao_grid_budget`) and otherwise streams with a budget-derived
+    chunk; ``None`` forces the materialized grid; an int streams with exactly
+    that chunk.
     """
     if chunk == "auto":
-        if 4 * ng * nao <= _AO_GRID_BUDGET:
+        if 4 * ng * nao <= _ao_grid_budget():
             return None
         return max(512, _AO_CHUNK_BUDGET // (4 * nao))
     return chunk

@@ -83,11 +83,12 @@ def read_xyz(name: str) -> str:
 CONV_TOL = 1e-8
 
 
-def run_dftax(atom, basis, aux, xc, level, repeat, ndev, screen="auto"):
+def run_dftax(atom, basis, aux, xc, level, repeat, ndev, screen="auto",
+              solver="scf"):
     import jax
 
     jax.config.update("jax_enable_x64", True)
-    from dftax import KS, Molecule, df, mesh, minao, scf
+    from dftax import KS, Molecule, df, gdm, mesh, minao, scf
     from dftax.energy import xc as xcmod
     from dftax.grid import becke
 
@@ -123,8 +124,10 @@ def run_dftax(atom, basis, aux, xc, level, repeat, ndev, screen="auto"):
         # minao, because that is what PySCF starts from; dftax's own default
         # is the core Hamiltonian, which costs an order of magnitude more
         # iterations here and would measure the guess, not the engine.
-        res = scf(ks, guess=minao(), e_tol=CONV_TOL,
-                  d_tol=CONV_TOL ** 0.5)          # PySCF's rule, see CONV_TOL
+        # gdm stops on the same pair of criteria, measured the same way
+        solve = scf if solver == "scf" else gdm
+        res = solve(ks, guess=minao(), e_tol=CONV_TOL,
+                    d_tol=CONV_TOL ** 0.5)        # PySCF's rule, see CONV_TOL
         e = float(res.e_tot)
         walls.append(time.perf_counter() - t0)
     peak = max(int((d.memory_stats() or {}).get("peak_bytes_in_use", 0))
@@ -208,7 +211,8 @@ def drive(args):
             cmd = [py, os.path.abspath(__file__), "--engine", engine,
                    "--mol", name, "--basis", args.basis, "--aux", args.aux,
                    "--xc", args.xc, "--repeat", str(args.repeat),
-                   "--ndev", str(args.ndev), "--screen", str(args.screen)]
+                   "--ndev", str(args.ndev), "--screen", str(args.screen),
+                   "--solver", args.solver]
             env = dict(os.environ)
             # Both engines see exactly the same GPUs: GPU4PySCF 1.8 spreads
             # over every visible device on its own, so pinning the set is the
@@ -271,6 +275,8 @@ def main():
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--ndev", type=int, default=1)
     ap.add_argument("--grid", nargs=2, type=int, default=[75, 302])
+    ap.add_argument("--solver", choices=("scf", "gdm"), default="scf",
+                    help="dftax solver: DIIS scf or direct minimization gdm")
     ap.add_argument("--screen", default="auto",
                     help="dftax grid block screening: auto (dftax's size "
                          "gate, the default), a threshold, or 0 to disable")
@@ -281,11 +287,12 @@ def main():
     atom = read_xyz(args.mol)
     if args.engine == "dftax":
         rec = run_dftax(atom, args.basis, args.aux, args.xc, tuple(args.grid),
-                        args.repeat, args.ndev, args.screen)
+                        args.repeat, args.ndev, args.screen, args.solver)
     else:
         rec = run_gpu4pyscf(atom, args.basis, args.aux, args.xc,
                             tuple(args.grid), args.repeat, args.ndev)
-    rec.update(engine=args.engine, mol=args.mol, basis=args.basis, xc=args.xc)
+    rec.update(engine=args.engine, mol=args.mol, basis=args.basis, xc=args.xc,
+               solver=args.solver if args.engine == "dftax" else "scf")
     print("RESULT " + json.dumps(rec))
 
 

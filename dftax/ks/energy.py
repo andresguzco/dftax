@@ -90,6 +90,7 @@ from dftax.ks.terms import (
     _metric_pinv,  # noqa: F401  (re-exported; also used by _build_integrals)
     _whiten,
     _whiten_packed,
+    resolve_df_screen,
     df,
     exact,
 )
@@ -619,6 +620,9 @@ class KS(eqx.Module):
         shard_df = devices is not None and is_df
         if is_df:
             spec = _resolve_aux(spec, symbols, coords, nao_final, shard_df)
+            # n_atom from the shape: static even at traced coordinates
+            spec = dataclasses.replace(spec, screen=resolve_df_screen(
+                spec.screen, int(coords.shape[0])))
         quartets, qof, pairs = _resolve_screening(spec, basis)
         aux_basis = spec.auxbasis if is_df else None
         # Whitening folds the metric into the materialized tensor

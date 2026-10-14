@@ -72,7 +72,7 @@ class DFSpec:
 
     auxbasis: str | BasisData = "def2-universal-jkfit"
     chunk: int | str | None = "auto"
-    screen: float | None = None
+    screen: float | str | None = "auto"
     spherical: bool | None = None
     whiten: bool | None = None
     packed: bool = False
@@ -99,7 +99,7 @@ def df(
     auxbasis: str | BasisData = "def2-universal-jkfit",
     *,
     chunk: int | str | None = "auto",
-    screen: float | None = None,
+    screen: float | str | None = "auto",
     spherical: bool | None = None,
     whiten: bool | None = None,
     packed: bool = False,
@@ -124,8 +124,11 @@ def df(
             materialized path it is a shell-pair compact gather that omits
             the screened shell-pairs from the 3-center build (they stay
             exactly zero); with an int ``chunk`` it restricts the streamed
-            RI-J bra sum to the significant AO pairs. ``None`` (default)
-            keeps every pair, a bit-identical build.
+            RI-J bra sum to the significant AO pairs. ``None`` keeps every
+            pair, a bit-identical build. ``"auto"`` (default) screens at
+            ``DF_SCREEN_AUTO_CUTOFF`` from ``DF_SCREEN_AUTO_MIN_ATOMS`` atoms
+            up (the grid's gate) and keeps every pair below it; batched
+            geometries (``scf_batched``) never screen.
         spherical: auxiliary basis span. ``None`` (default) uses spherical
             harmonics on the materialized paths, single-device and
             mesh-sharded alike (non-redundant fit, positive definite metric),
@@ -174,6 +177,23 @@ def df(
         )
     return DFSpec(auxbasis=auxbasis, chunk=chunk, screen=screen,
                   spherical=spherical, whiten=whiten, packed=packed)
+
+
+# The default pair screen: off for small molecules, where nearly every pair
+# survives and an exact build is free, on from the size where the kept
+# fraction falls (cholesterol keeps ~half its pairs at 1e-10). Relative to
+# the largest Schwarz factor, like the grid's screen.
+DF_SCREEN_AUTO_MIN_ATOMS = 50
+DF_SCREEN_AUTO_CUTOFF = 1e-10
+
+
+def resolve_df_screen(screen, n_atom: int) -> float | None:
+    """A DF spec's ``screen`` for a molecule of ``n_atom`` atoms: ``"auto"``
+    by the size gate, an explicit float or ``None`` as given."""
+    if screen == "auto":
+        return (DF_SCREEN_AUTO_CUTOFF if n_atom >= DF_SCREEN_AUTO_MIN_ATOMS
+                else None)
+    return screen
 
 
 # ---------------------------------------------------------------------------

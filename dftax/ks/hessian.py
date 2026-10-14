@@ -51,7 +51,9 @@ import jax.numpy as jnp
 from dftax.basis.loader import build_basis_data
 from dftax.grid import becke_grid, becke_grid_size, points
 from dftax.ks.energy import KS, System, _resolve_chunk
-from dftax.ks.terms import DFSpec, ExactSpec, StreamedDFForcesCoulomb, df
+from dftax.ks.terms import (
+    DFSpec, ExactSpec, StreamedDFForcesCoulomb, df, resolve_df_screen,
+)
 
 
 def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
@@ -125,8 +127,9 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
         )
 
         keep = None
-        if coulomb.screen is not None:
-            keep = _shell_pair_keep(basis_t, float(coulomb.screen))
+        screen = resolve_df_screen(coulomb.screen, len(symbols))
+        if screen is not None:
+            keep = _shell_pair_keep(basis_t, float(screen))
         slab_plans = plan_aux_slabs(basis_t, aux_t, df_chunk, keep)
 
     nao_final = (

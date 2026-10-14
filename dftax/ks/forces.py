@@ -39,6 +39,7 @@ from dftax.ks.terms import (
     StreamedDFForcesCoulomb,
     _rik_occ_orbitals,
     df,
+    resolve_df_screen,
 )
 from dftax.system.molecule import Molecule
 
@@ -299,8 +300,9 @@ def forces(
         )
 
         keep = None
-        if coulomb.screen is not None:
-            keep = _shell_pair_keep(basis_t, float(coulomb.screen))
+        screen = resolve_df_screen(coulomb.screen, len(symbols))
+        if screen is not None:
+            keep = _shell_pair_keep(basis_t, float(screen))
         slab_plans = plan_aux_slabs(basis_t, aux_t, df_chunk, keep)
 
     # Resolve the "auto" XC streaming policy eagerly: the grid is rebuilt with

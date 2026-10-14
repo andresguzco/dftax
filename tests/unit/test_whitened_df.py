@@ -197,3 +197,18 @@ def test_solvers_on_the_packed_term():
     assert r0.converged and r1.converged and g.converged
     assert abs(r0.e_tot - r1.e_tot) < 1e-9
     assert abs(g.e_tot - r0.e_tot) < 1e-8
+
+
+def test_df_screen_auto_is_size_gated():
+    """df()'s default pair screen is off below the grid's 50-atom gate and
+    1e-10 relative from it up; explicit values pass through."""
+    from dftax.ks.terms import (
+        DF_SCREEN_AUTO_CUTOFF, DF_SCREEN_AUTO_MIN_ATOMS, resolve_df_screen,
+    )
+
+    assert df().screen == "auto"
+    assert resolve_df_screen("auto", DF_SCREEN_AUTO_MIN_ATOMS - 1) is None
+    assert (resolve_df_screen("auto", DF_SCREEN_AUTO_MIN_ATOMS)
+            == DF_SCREEN_AUTO_CUTOFF)
+    assert resolve_df_screen(None, 500) is None
+    assert resolve_df_screen(1e-8, 3) == 1e-8

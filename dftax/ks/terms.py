@@ -1065,12 +1065,52 @@ class DFCoulomb(CoulombTerm):
         return e, tuple(grads)
 
 
+# Exchange through a whitened tensor runs over aux blocks whose transient
+# (block x nao x nocc for G = B C) stays under this many elements (256 MiB in
+# float64); a system under it takes the whole aux range in one block.
+_K_BLOCK_ELEMS = 1 << 25
+
+
+def _over_aux_blocks(Bt, ncol, fn):
+    """``Σ_blocks fn(Bt[:, :, block])`` (``fn`` returns a pytree), with blocks
+    sized by ``_K_BLOCK_ELEMS`` for an ``ncol``-column right-hand side: a
+    ``fori_loop`` over the full blocks and one static tail."""
+    nao, _, naux = Bt.shape
+    b = max(1, min(naux, _K_BLOCK_ELEMS // max(1, nao * ncol)))
+    nfull, tail = divmod(naux, b)
+    acc = fn(Bt[:, :, :b])
+    if nfull > 1:
+        def body(i, acc):
+            blk = jax.lax.dynamic_slice_in_dim(Bt, i * b, b, axis=2)
+            return jax.tree.map(jnp.add, acc, fn(blk))
+        acc = jax.lax.fori_loop(1, nfull, body, acc)
+    if tail:
+        acc = jax.tree.map(jnp.add, acc, fn(Bt[:, :, nfull * b:]))
+    return acc
+
+
 def _rik_whitened(B, Cocc):
     """``(raw exchange, kernel KK)`` from a whitened tensor: ``_rik_materialized``
-    with the metric already folded in (``KK = Σ_x G_x G_xᵀ``, ``G_x = B_x C``)."""
-    G = jnp.einsum("mlx,li->xmi", B, Cocc)
-    KK = jnp.einsum("xmi,xni->mn", G, G)
+    with the metric already folded in (``KK = Σ_x G_x G_xᵀ``, ``G_x = B_x C``),
+    accumulated over aux blocks."""
+    def block(Bb):
+        G = jnp.einsum("mlx,li->xmi", Bb, Cocc)
+        return jnp.einsum("xmi,xni->mn", G, G)
+
+    KK = _over_aux_blocks(B, Cocc.shape[1], block)
     return jnp.vdot(Cocc, KK @ Cocc), KK
+
+
+def _rik_whitened_orbitals(B, Ct):
+    """``(Σ_x |D_x|², Σ_x G_x D_x)`` with ``G_x = B_x C``, ``D_x = Cᵀ G_x``:
+    the raw exchange and a quarter of its orbital gradient, with no
+    ``nao x nao`` kernel, over aux blocks."""
+    def block(Bb):
+        G = jnp.einsum("mlx,li->xmi", Bb, Ct)             # (b, nao, no)
+        D = jnp.einsum("mi,xmj->xij", Ct, G)              # (b, no, no)
+        return jnp.sum(D * D), jnp.einsum("xmi,xij->mj", G, D)
+
+    return _over_aux_blocks(B, Ct.shape[1], block)
 
 
 class WhitenedDFCoulomb(CoulombTerm):
@@ -1154,11 +1194,9 @@ class WhitenedDFCoulomb(CoulombTerm):
                     continue
                 scale = jnp.sqrt(w / w_full)
                 Ct = C * scale
-                G = jnp.einsum("mlx,li->xmi", Bt, Ct)          # (naux, nao, no)
-                D = jnp.einsum("mi,xmj->xij", Ct, G)           # (naux, no, no)
-                e = e + e_pref * jnp.sum(D * D)
-                grads[s] = grads[s] + 4.0 * e_pref * jnp.einsum(
-                    "xmi,xij->mj", G, D) * scale
+                raw, GD = _rik_whitened_orbitals(Bt, Ct)
+                e = e + e_pref * raw
+                grads[s] = grads[s] + 4.0 * e_pref * GD * scale
         return e, tuple(grads)
 
 

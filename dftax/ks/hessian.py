@@ -42,6 +42,8 @@ finite-difference Hessian.
 
 from __future__ import annotations
 
+import dataclasses
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -80,8 +82,7 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
                 "streamed response uses the cartesian auxiliary span; pass "
                 "df(chunk=None)."
             )
-        coulomb = DFSpec(auxbasis=coulomb.auxbasis, chunk=df_chunk,
-                         screen=coulomb.screen, spherical=coulomb.spherical)
+        coulomb = dataclasses.replace(coulomb, chunk=df_chunk)
 
     symbols = mol.symbols
     coords0 = jnp.asarray(mol.atom_coords())

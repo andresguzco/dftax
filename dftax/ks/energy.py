@@ -41,6 +41,7 @@ The Coulomb/exchange backend is a value from :func:`~dftax.ks.terms.exact` /
 
 from __future__ import annotations
 
+import dataclasses
 import warnings
 from dataclasses import dataclass
 
@@ -84,7 +85,9 @@ from dftax.ks.terms import (
     StreamedGridXC,
     XCTerm,
     _make_coulomb,
+    _metric_factor,
     _metric_pinv,  # noqa: F401  (re-exported; also used by _build_integrals)
+    _whiten,
     df,
     exact,
 )
@@ -376,8 +379,7 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
             "df(spherical=True) with a prebuilt cartesian BasisData; build "
             "it with build_basis_data(..., spherical=True)."
         )
-    return DFSpec(auxbasis=aux, chunk=chunk, screen=spec.screen,
-                  spherical=spec.spherical)
+    return dataclasses.replace(spec, auxbasis=aux, chunk=chunk)
 
 
 def _resolve_screening(spec, basis):
@@ -415,6 +417,7 @@ def _build_integrals(
     basis, coords, charges, grid_coords, aux_basis, materialize_ao, materialize_int3c,
     eri_quartets=None, eri_qof=None, stream_exact=False, omega=None,
     eri3c_plan=None, pair_plan=None, aux_pair_plan=None, eri4c_plan=None,
+    whiten=False,
 ):
     """Build all integral arrays in one jitted pass.
 
@@ -425,7 +428,9 @@ def _build_integrals(
     (the XC grid is streamed instead; see ``terms._streamed_e_xc``). ``eri_quartets``/
     ``eri_qof`` optionally supply a pre-screened (Cauchy-Schwarz) quartet list +
     orbit map for the exact ERI. Composes with grad (used by forces), where jit
-    is traced inline.
+    is traced inline. ``whiten`` (static, materialized DF only) returns the
+    whitened ``B = Lᵀ T`` tensors in the 3-center slots and ``None`` for the
+    metric inverses (see :class:`~dftax.ks.terms.WhitenedDFCoulomb`).
     """
     # One bucketed pass builds both (shared OS tables per shell pair); the
     # public overlap_matrix / kinetic_matrix wrappers stay for direct users.
@@ -462,7 +467,11 @@ def _build_integrals(
         # Cholesky). Standard JK-fitting sets are near-redundant even in
         # spherical form; the 1e-7 relative cutoff keeps the inverse
         # well-conditioned at sub-mHa RI cost.
-        int2c_inv = _metric_pinv(int2c)
+        if whiten:
+            int3c = _whiten(int3c, _metric_factor(int2c))
+            int2c_inv = None
+        else:
+            int2c_inv = _metric_pinv(int2c)
         eri = None
         if omega is not None:
             # The RI treatment of the long-range operator attenuates both the
@@ -477,8 +486,11 @@ def _build_integrals(
             int3c_lr = (eri3c_matrix(basis, aux_basis, omega=omega,
                                      plan=eri3c_plan)
                         if materialize_int3c else None)
-            int2c_inv_lr = _metric_pinv(
-                eri2c_matrix(aux_basis, omega=omega, plan=aux_pair_plan))
+            int2c_lr = eri2c_matrix(aux_basis, omega=omega, plan=aux_pair_plan)
+            if whiten:
+                int3c_lr = _whiten(int3c_lr, _metric_factor(int2c_lr))
+            else:
+                int2c_inv_lr = _metric_pinv(int2c_lr)
 
     return (S, T + V, ao, dao, e_nn, eri, int3c, int2c_inv,
             eri_lr, int3c_lr, int2c_inv_lr)
@@ -600,6 +612,21 @@ class KS(eqx.Module):
             spec = _resolve_aux(spec, symbols, coords, nao_final, shard_df)
         quartets, qof, pairs = _resolve_screening(spec, basis)
         aux_basis = spec.auxbasis if is_df else None
+        # Whitening folds the metric into the materialized tensor
+        # (WhitenedDFCoulomb). Its factor carries no geometry derivative, so a
+        # build at traced coordinates (forces, Hessians, scf_batched) keeps
+        # DFCoulomb, whose _metric_pinv jvp does.
+        whiten = False
+        if is_df:
+            whitenable = (spec.chunk is None and not shard_df
+                          and not isinstance(coords, jax.core.Tracer))
+            whiten = whitenable if spec.whiten is None else spec.whiten
+            if whiten and not whitenable:
+                raise ValueError(
+                    "df(whiten=True) needs a single-device materialized build "
+                    "at concrete coordinates (chunk=None, no mesh, outside "
+                    "grad/vmap); use whiten=None to whiten where it applies."
+                )
         # Range-separated hybrids: build the erf(ω·r₁₂)/r₁₂ tensors alongside
         # the Coulomb ones (memory doubles on the materialized backends; the
         # streamed DF backend stores only the attenuated metric and recomputes
@@ -662,7 +689,7 @@ class KS(eqx.Module):
             (not shard_df) and not (is_df and spec.chunk is not None),
             quartets, qof, (not is_df) and spec.stream,
             omega if hf_lr != 0.0 else None,
-            eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan,
+            eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan, whiten,
         )
         # Dispersion is P-independent: a scalar of the (traced) coordinates,
         # mirroring e_nn, so the rebuilt energies in forces/batched carry its

@@ -74,6 +74,7 @@ class DFSpec:
     chunk: int | str | None = "auto"
     screen: float | None = None
     spherical: bool | None = None
+    whiten: bool | None = None
 
 
 def exact(*, screen: float | None = None, stream: bool = False) -> ExactSpec:
@@ -99,6 +100,7 @@ def df(
     chunk: int | str | None = "auto",
     screen: float | None = None,
     spherical: bool | None = None,
+    whiten: bool | None = None,
 ) -> DFSpec:
     """Density-fitted (RI) Coulomb/exchange with the given auxiliary basis.
 
@@ -131,6 +133,15 @@ def df(
             compare a materialized result against a streamed one in the same
             fit space; ``True`` asserts the spherical span and raises where
             it is unsupported.
+        whiten: fold the metric into the materialized tensor once, ``B = Lᵀ T``
+            with ``L Lᵀ = V⁺`` (:class:`WhitenedDFCoulomb`): the same energy to
+            the density-fitting floor, no metric multiply per build, and an
+            orbital-route exchange that never forms ``nao x nao`` kernels.
+            ``None`` (default) whitens whenever the build is concrete and
+            single-device materialized, and keeps :class:`DFCoulomb` where the
+            geometry is traced (forces, Hessians, ``scf_batched``), whose
+            metric inverse carries the geometry derivative; ``False`` never
+            whitens; ``True`` asserts it and raises where it cannot apply.
 
     Example:
         ```python
@@ -144,8 +155,13 @@ def df(
             "df(spherical=True, chunk=<int>) is not supported: the streamed "
             "backend contracts cartesian auxiliary elements on the fly."
         )
+    if whiten is True and isinstance(chunk, int):
+        raise ValueError(
+            "df(whiten=True, chunk=<int>) is not supported: the streamed "
+            "backend never materializes the tensor it would whiten."
+        )
     return DFSpec(auxbasis=auxbasis, chunk=chunk, screen=screen,
-                  spherical=spherical)
+                  spherical=spherical, whiten=whiten)
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +223,44 @@ def _metric_pinv_jvp(primals, tangents):
     # eigenvalue differences, so it stays finite when metric eigenvalues coincide.
     dVs = 0.5 * (dV + dV.T)
     return Vp, -Vp @ dVs @ Vp
+
+
+def _metric_factor(V: Float[Array, "naux naux"]) -> Float[Array, "naux naux"]:
+    """``L`` with ``L Lᵀ = _metric_pinv(V)`` exactly: the same eigendecomposition
+    and the same 1e-7 relative cutoff, ``L = U_k w_k^{-1/2}``, with the dropped
+    directions kept as zero columns (so shapes do not depend on the spectrum).
+
+    Whitening the 3-center tensor with it, ``B = Lᵀ T``, folds the metric into
+    the tensor once per geometry, so neither RI-J nor RI-K multiplies by
+    ``V⁺`` again (the metric multiply was 72% of the exchange work on
+    coronene). Not differentiable here on purpose: the whitened term is built
+    only where the geometry is concrete (see :class:`WhitenedDFCoulomb`).
+    """
+    w, U = jnp.linalg.eigh(V)
+    keep = w > 1e-7 * w[-1]
+    return U * jnp.where(keep, 1.0 / jnp.sqrt(jnp.where(keep, w, 1.0)), 0.0)
+
+
+def _whiten(T: Float[Array, "nao nao naux"],
+            L: Float[Array, "naux naux"]) -> Float[Array, "nao nao naux"]:
+    """``B = Lᵀ T`` over the aux index, one block of AO rows at a time.
+
+    A loop of in-place slice updates rather than one einsum, so inside the
+    jitted build XLA rewrites ``T``'s own buffer and the whitened tensor costs
+    no second ``nao² naux`` allocation (the materialized tensor is the
+    device-memory ceiling). Blocks are the largest divisor of ``nao`` under
+    ~16M elements, so the loop has no ragged tail.
+    """
+    nao, _, naux = T.shape
+    rows = max(1, (1 << 24) // max(1, nao * naux))
+    k = max(d for d in range(1, min(nao, rows) + 1) if nao % d == 0)
+
+    def body(i, T):
+        blk = jax.lax.dynamic_slice_in_dim(T, i * k, k, axis=0)
+        return jax.lax.dynamic_update_slice_in_dim(
+            T, jnp.einsum("mnP,Px->mnx", blk, L), i * k, axis=0)
+
+    return jax.lax.fori_loop(0, nao // k, body, T)
 
 
 # ---------------------------------------------------------------------------
@@ -1008,6 +1062,103 @@ class DFCoulomb(CoulombTerm):
                 raw, KK = _rik_materialized(t3, vsym, Ct)
                 e = e + e_pref * raw
                 grads[s] = grads[s] + 4.0 * e_pref * (KK @ Ct) * scale
+        return e, tuple(grads)
+
+
+def _rik_whitened(B, Cocc):
+    """``(raw exchange, kernel KK)`` from a whitened tensor: ``_rik_materialized``
+    with the metric already folded in (``KK = Σ_x G_x G_xᵀ``, ``G_x = B_x C``)."""
+    G = jnp.einsum("mlx,li->xmi", B, Cocc)
+    KK = jnp.einsum("xmi,xni->mn", G, G)
+    return jnp.vdot(Cocc, KK @ Cocc), KK
+
+
+class WhitenedDFCoulomb(CoulombTerm):
+    """Materialized density fitting on the whitened tensor ``B = Lᵀ T``.
+
+    The same functional as :class:`DFCoulomb` (``L Lᵀ = V⁺`` exactly, see
+    :func:`_metric_factor`) with the metric folded in once per geometry:
+
+    * RI-J is ``½ |B·p|²`` and its potential ``Bᵀ(B·p)``, symmetric by
+      construction (the rounding asymmetry of ``V⁺γ`` cannot arise);
+    * RI-K never multiplies by ``V⁺``. Through the orbitals it is
+      ``Σ_x |D_x|²`` with ``D_x = Cᵀ B_x C`` and gradient ``4 Σ_x (B_x C) D_x``,
+      at ``nao² nocc naux`` for the half transform and ``nao nocc² naux``
+      after it, with no ``nao x nao`` kernel formed.
+
+    Results agree with :class:`DFCoulomb` to the documented density-fitting
+    floor (a reordered contraction against the jkfit metric's kept band), not
+    to machine precision.
+
+    Built only where the geometry is concrete (an eager ``KS``): the factor
+    is not differentiated, so a ``KS`` rebuilt at traced coordinates (forces,
+    the batched solvers) keeps :class:`DFCoulomb` and its ``_metric_pinv``
+    derivative. ``B``'s individual aux rows are gauge-dependent; consumers use
+    it only through ``Σ_x B_x ⊗ B_x``.
+    """
+
+    B: Float[Array, "nao nao naux"]
+    hf_coeff: float = eqx.field(static=True)
+    B_lr: Float[Array, "nao nao naux"] | None = None
+    hf_coeff_lr: float = eqx.field(static=True, default=0.0)
+
+    def _exchanges(self):
+        return tuple((ax, Bt) for ax, Bt in ((self.hf_coeff, self.B),
+                                             (self.hf_coeff_lr, self.B_lr))
+                     if ax != 0.0)
+
+    def energy(self, P, S, nocc):
+        gamma = jnp.einsum("mnx,mn->x", self.B, jnp.sum(P, axis=0))
+        e = 0.5 * jnp.dot(gamma, gamma)
+        for ax, Bt in self._exchanges():
+            e = e + _exchange_quadratic(
+                lambda Q, Bt=Bt: jnp.einsum("mlx,nsx,ls->mn", Bt, Bt, Q),
+                P, ax)
+        return e
+
+    def energy_and_potential(self, P, S, nocc, idempotent=True):
+        if not idempotent:
+            return super().energy_and_potential(P, S, nocc, idempotent)
+        gamma = jnp.einsum("mnx,mn->x", self.B, jnp.sum(P, axis=0))
+        e = 0.5 * jnp.dot(gamma, gamma)
+        V = jnp.broadcast_to(jnp.einsum("mnx,x->mn", self.B, gamma), P.shape)
+        nspin = P.shape[0]
+        dscale = 0.5 if nspin == 1 else 1.0
+        for ax, Bt in self._exchanges():
+            e_pref = -ax if nspin == 1 else -0.5 * ax
+            for sigma, n in enumerate(nocc):
+                if n == 0:
+                    continue
+                # stop_gradient: see DFCoulomb.energy_and_potential
+                C = jax.lax.stop_gradient(
+                    _rik_occ_orbitals(P[sigma], S, n, dscale))
+                raw, KK = _rik_whitened(Bt, C)
+                e = e + e_pref * raw
+                V = V.at[sigma].add(-ax * KK)
+        return e, V
+
+    def energy_and_grad_orbitals(self, Cs, ws, S, nocc):
+        """See :meth:`DFCoulomb.energy_and_grad_orbitals`; here RI-K needs no
+        kernel: ``raw = Σ_x |D_x|²``, ``d raw / dC = 4 Σ_x G_x D_x``."""
+        nspin = len(Cs)
+        w_full = 2.0 if nspin == 1 else 1.0
+        P = jnp.stack([(C * w) @ C.T for C, w in zip(Cs, ws)])
+        gamma = jnp.einsum("mnx,mn->x", self.B, jnp.sum(P, axis=0))
+        e = 0.5 * jnp.dot(gamma, gamma)
+        J = jnp.einsum("mnx,x->mn", self.B, gamma)
+        grads = [2.0 * (J @ C) * w for C, w in zip(Cs, ws)]
+        for ax, Bt in self._exchanges():
+            e_pref = -ax if nspin == 1 else -0.5 * ax
+            for s, (C, w) in enumerate(zip(Cs, ws)):
+                if C.shape[1] == 0:
+                    continue
+                scale = jnp.sqrt(w / w_full)
+                Ct = C * scale
+                G = jnp.einsum("mlx,li->xmi", Bt, Ct)          # (naux, nao, no)
+                D = jnp.einsum("mi,xmj->xij", Ct, G)           # (naux, no, no)
+                e = e + e_pref * jnp.sum(D * D)
+                grads[s] = grads[s] + 4.0 * e_pref * jnp.einsum(
+                    "xmi,xij->mj", G, D) * scale
         return e, tuple(grads)
 
 
@@ -1925,6 +2076,9 @@ def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                 int2c_inv_lr=int2c_inv_lr, hf_coeff_lr=hf_coeff_lr,
                 omega=omega, slab_plans=slab_plans,
             )
+        if int2c_inv is None:      # whitened in _build_integrals
+            return WhitenedDFCoulomb(B=int3c, hf_coeff=hf_coeff, B_lr=int3c_lr,
+                                     hf_coeff_lr=hf_coeff_lr)
         return DFCoulomb(
             int3c=int3c, int2c_inv=int2c_inv, hf_coeff=hf_coeff,
             int3c_lr=int3c_lr, int2c_inv_lr=int2c_inv_lr,

@@ -48,14 +48,14 @@ from jax import lax
 
 from dftax.ks.energy import KS
 from dftax.ks.guess import GuessSpec, density_from_guess
-from dftax.ks.scf import KSResult, canonical_orthonormalizer
+from dftax.ks.scf import KSResult, _fock_stacked, canonical_orthonormalizer
 
 # Terms of the rotation series (_series). ||kappa kappa^T|| stays below
 # KAPPA_RESET**2 = 4 between resets, where 16 terms leave 4**16/32! ~ 2e-26.
 N_SERIES = 16
 KAPPA_RESET = 2.0
 
-_GUESS, _FRESH, _TRIAL = 0, 1, 2
+_GUESS, _FRESH, _TRIAL, _RESET = 0, 1, 2, 3
 
 
 def _series(X, n=N_SERIES):
@@ -150,7 +150,7 @@ def _lbfgs_direction(g, H0, Sh, Yh, rho, count, head, m):
 
 @eqx.filter_jit
 def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
-               m, verbose):
+               m, verbose, orbital_xc=True):
     S = ks.S
     nocc = ks.nocc
     nspin = len(nocc)
@@ -164,25 +164,45 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
     def rotate(Co, Cv, kappa):
         return tuple(_occupied(a, b, k) for a, b, k in zip(Co, Cv, kappa))
 
-    def evaluate(P, Co, Cv, kappa):
-        """Energy, Fock and d E / d kappa at ``kappa`` (P given)."""
+    def full_eval(args):
+        """Energy, d E / d kappa, d E / d C_o and the Fock, through the
+        density matrix. The guess and the reference resets need the Fock."""
+        P, Co, Cv, kappa = args
         e, F = ks.energy_and_fock(P)
         Cos, vjp = jax.vjp(lambda k: rotate(Co, Cv, k), kappa)
-        (g,) = vjp(tuple(2.0 * w * F[s] @ Cos[s] for s in range(nspin)))
-        return e, F, g
+        dC = tuple(2.0 * w * F[s] @ Cos[s] for s in range(nspin))
+        (g,) = vjp(dC)
+        return e, g, dC, F
 
-    def precond(F, Co, Cv):
-        out = []
-        for s in range(nspin):
-            eo = jnp.sum(Co[s] * (F[s] @ Co[s]), axis=0)
-            ev = jnp.sum(Cv[s] * (F[s] @ Cv[s]), axis=0)
-            gap = jnp.maximum(ev[None, :] - eo[:, None], gap_floor)
-            out.append(1.0 / (2.0 * w * gap))
-        return tuple(out)
+    def orbital_eval(args):
+        """The same through the orbitals, which never forms the XC potential
+        (KS.energy_and_grad_orbitals); the Fock is not built."""
+        P, Co, Cv, kappa = args
+        Cos, vjp = jax.vjp(lambda k: rotate(Co, Cv, k), kappa)
+        e, dC = ks.energy_and_grad_orbitals(Cos)
+        (g,) = vjp(dC)
+        return e, g, dC, jnp.zeros_like(P)
 
-    def commutator(F, P):
-        err = X.T @ (F @ P @ S - S @ P @ F) @ X
-        return jnp.linalg.norm(err)
+    def precond(eo, ev):
+        return tuple(1.0 / (2.0 * w * jnp.maximum(
+            v[None, :] - o[:, None], gap_floor)) for o, v in zip(eo, ev))
+
+    def commutator(dC, Cos):
+        # ||X^T (F P S - S P F) X|| from dE/dC_o = 2 w F C_o alone:
+        # (1/sqrt 2) ||X^T (G - S C_o (C_o^T G))|| per channel, the Fock
+        # never formed (see the identity in tests/unit/test_gdm.py)
+        sq = 0.0
+        for G, C in zip(dC, Cos):
+            r = X.T @ (G - S @ (C @ (C.T @ G)))
+            sq = sq + 0.5 * jnp.sum(r * r)
+        return jnp.sqrt(sq)
+
+    def new_reference(F, Cos, canonical):
+        """(Co, Cv, e_o, e_v) per channel from a Fock: its aufbau eigenvectors
+        at the guess, the pseudo-canonical frame of Cos at a reset."""
+        out = [(_canonical(F[s], X, nocc[s]) if canonical
+                else _reference(F[s], Cos[s], S, X)) for s in range(nspin)]
+        return tuple(tuple(o[i] for o in out) for i in range(4))
 
     zeros_k = tuple(jnp.zeros((n, nmo - n), dt) for n in nocc)
     zeros_o = tuple(jnp.zeros((S.shape[0], n), dt) for n in nocc)
@@ -190,8 +210,10 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
     state0 = dict(
         it=jnp.asarray(0), mode=jnp.asarray(_GUESS),
         Co=zeros_o, Cv=zeros_v, kappa=zeros_k, d=zeros_k,
+        eo=tuple(jnp.zeros(n, dt) for n in nocc),
+        ev=tuple(jnp.zeros(nmo - n, dt) for n in nocc),
         alpha=jnp.asarray(0.0, dt), E=jnp.asarray(jnp.inf, dt), g=zeros_k,
-        F=jnp.zeros_like(P0), P=P0,
+        P=P0,
         Sh=tuple(jnp.zeros((m,) + k.shape, dt) for k in zeros_k),
         Yh=tuple(jnp.zeros((m,) + k.shape, dt) for k in zeros_k),
         rho=jnp.zeros(m, dt), count=jnp.asarray(0), head=jnp.asarray(0),
@@ -209,18 +231,61 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
                         for k, d in zip(st["kappa"], st["d"]))
         Cos_t = rotate(st["Co"], st["Cv"], kappa_t)
         P_t = jnp.where(mode == _GUESS, st["P"], density(Cos_t))
-        e_t, F_t, g_t = evaluate(P_t, st["Co"], st["Cv"], kappa_t)
+        args = (P_t, st["Co"], st["Cv"], kappa_t)
+        if orbital_xc:          # one call site each; the Fock only when needed
+            e_t, g_t, dC_t, F_t = lax.cond(
+                (mode == _GUESS) | (mode == _RESET), full_eval, orbital_eval,
+                args)
+        else:
+            e_t, g_t, dC_t, F_t = full_eval(args)
 
         # --- the guess evaluation only builds the first reference ----------
         def from_guess(st):
-            Co, Cv = [], []
-            for s in range(nspin):
-                a, b, _, _ = _canonical(F_t[s], X, nocc[s])
-                Co.append(a)
-                Cv.append(b)
-            return dict(st, Co=tuple(Co), Cv=tuple(Cv), kappa=zeros_k,
+            Co, Cv, eo, ev = new_reference(F_t, Cos_t, canonical=True)
+            return dict(st, Co=Co, Cv=Cv, eo=eo, ev=ev, kappa=zeros_k,
                         d=zeros_k, alpha=jnp.asarray(0.0, dt),
                         mode=jnp.asarray(_FRESH))
+
+        def accept_point(st, fresh, stalled, kappa_t, g_t, dC_t, Cos_t):
+            """Take the evaluated point as the new base and step from it."""
+            s_k = tuple(a - b for a, b in zip(kappa_t, st["kappa"]))
+            y_k = tuple(a - b for a, b in zip(g_t, st["g"]))
+            sy = _tdot(s_k, y_k)
+            good = (~fresh) & ~stalled & (sy > 1e-12 * jnp.sqrt(
+                _tdot(s_k, s_k) * _tdot(y_k, y_k)))
+            head = st["head"]
+            Sh = tuple(jnp.where(good, h.at[head].set(v), h)
+                       for h, v in zip(st["Sh"], s_k))
+            Yh = tuple(jnp.where(good, h.at[head].set(v), h)
+                       for h, v in zip(st["Yh"], y_k))
+            rho = jnp.where(good, st["rho"].at[head].set(1.0 / sy),
+                            st["rho"])
+            count = jnp.where(good, jnp.minimum(st["count"] + 1, m),
+                              st["count"])
+            head = jnp.where(good, (head + 1) % m, head)
+            H0 = precond(st["eo"], st["ev"])
+            d = _lbfgs_direction(g_t, H0, Sh, Yh, rho, count, head, m)
+            # keep the step a rotation of bounded size
+            big = jnp.max(jnp.asarray([jnp.max(jnp.abs(x)) for x in d]))
+            d = tuple(x * jnp.minimum(1.0, max_step / big) for x in d)
+            # a non-descent direction (stale curvature): fall back to the
+            # preconditioned gradient and drop the history
+            bad = _tdot(d, g_t) >= 0.0
+            d = tuple(jnp.where(bad, -h * gi, di)
+                      for h, gi, di in zip(H0, g_t, d))
+            count = jnp.where(bad | stalled, 0, count)
+            de = jnp.where(fresh, st["de"], e_t - st["E"])
+            derr = commutator(dC_t, Cos_t)
+            noise = 1e-10 * jnp.abs(e_t) + 1e-12
+            # the energy test cannot be tighter than the energy's own floor
+            # (it grows with the molecule: 3.5e-8 Ha on coronene, above the
+            # default e_tol); the commutator carries the rest
+            conv = ((~fresh) & (jnp.abs(de) < jnp.maximum(e_tol, noise))
+                    & (derr < d_tol))
+            return dict(st, kappa=kappa_t, E=e_t, g=g_t, P=density(Cos_t),
+                        d=d, alpha=jnp.asarray(1.0, dt), Sh=Sh, Yh=Yh,
+                        rho=rho, count=count, head=head, de=de, derr=derr,
+                        converged=conv, mode=jnp.asarray(_TRIAL))
 
         # --- a point is evaluated: accept it, or shrink the step ----------
         def line_search(st):
@@ -232,46 +297,6 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
             stalled = ~accept & (st["alpha"] < 1e-4)     # give up shrinking
             accept = accept | stalled
 
-            def take(st):
-                s_k = tuple(a - b for a, b in zip(kappa_t, st["kappa"]))
-                y_k = tuple(a - b for a, b in zip(g_t, st["g"]))
-                sy = _tdot(s_k, y_k)
-                good = (~fresh) & ~stalled & (sy > 1e-12 * jnp.sqrt(
-                    _tdot(s_k, s_k) * _tdot(y_k, y_k)))
-                head = st["head"]
-                Sh = tuple(jnp.where(good, h.at[head].set(v), h)
-                           for h, v in zip(st["Sh"], s_k))
-                Yh = tuple(jnp.where(good, h.at[head].set(v), h)
-                           for h, v in zip(st["Yh"], y_k))
-                rho = jnp.where(good, st["rho"].at[head].set(1.0 / sy),
-                                st["rho"])
-                count = jnp.where(good, jnp.minimum(st["count"] + 1, m),
-                                  st["count"])
-                head = jnp.where(good, (head + 1) % m, head)
-                H0 = precond(F_t, st["Co"], st["Cv"])
-                d = _lbfgs_direction(g_t, H0, Sh, Yh, rho, count, head, m)
-                # keep the step a rotation of bounded size
-                big = jnp.max(jnp.asarray([jnp.max(jnp.abs(x)) for x in d]))
-                d = tuple(x * jnp.minimum(1.0, max_step / big) for x in d)
-                # a non-descent direction (stale curvature): fall back to
-                # the preconditioned gradient and drop the history
-                bad = _tdot(d, g_t) >= 0.0
-                d = tuple(jnp.where(bad, -h * gi, di)
-                          for h, gi, di in zip(H0, g_t, d))
-                count = jnp.where(bad | stalled, 0, count)
-                de = jnp.where(fresh, st["de"], e_t - st["E"])
-                derr = commutator(F_t, P_t)
-                # the energy test cannot be tighter than the energy's own
-                # floor (it grows with the molecule: 3.5e-8 Ha on coronene,
-                # above the default e_tol); the commutator carries the rest
-                conv = ((~fresh) & (jnp.abs(de) < jnp.maximum(e_tol, noise))
-                        & (derr < d_tol))
-                return dict(st, kappa=kappa_t, E=e_t, g=g_t, F=F_t, P=P_t,
-                            d=d, alpha=jnp.asarray(1.0, dt), Sh=Sh, Yh=Yh,
-                            rho=rho, count=count, head=head, de=de,
-                            derr=derr, converged=conv,
-                            mode=jnp.asarray(_TRIAL))
-
             def shrink(st):
                 # minimizer of the quadratic through E(0), E'(0), E(alpha),
                 # kept inside [0.1, 0.5] alpha
@@ -282,30 +307,37 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
                 a_new = jnp.clip(a_q, 0.1 * a, 0.5 * a)
                 return dict(st, alpha=a_new, rejects=st["rejects"] + 1)
 
-            st = lax.cond(accept, take, shrink, st)
-
-            # move the reference once kappa is large: the accepted orbitals
-            # become the new pseudo-canonical reference at kappa = 0
+            st = lax.cond(
+                accept,
+                lambda st: accept_point(st, fresh, stalled, kappa_t, g_t,
+                                        dC_t, Cos_t),
+                shrink, st)
+            # move the reference once kappa is large: the next evaluation, at
+            # the same point, builds the Fock for the new frame
             knorm = jnp.sqrt(_tdot(st["kappa"], st["kappa"]))
-
-            def reset(st):
-                Cos = rotate(st["Co"], st["Cv"], st["kappa"])
-                Co, Cv = [], []
-                for s in range(nspin):
-                    a, b, _, _ = _reference(st["F"][s], Cos[s], S, X)
-                    Co.append(a)
-                    Cv.append(b)
-                # same density, so the same energy; one fresh evaluation
-                # rebuilds the gradient in the new frame
-                return dict(st, Co=tuple(Co), Cv=tuple(Cv), kappa=zeros_k,
-                            d=zeros_k, alpha=jnp.asarray(0.0, dt),
-                            count=jnp.asarray(0), mode=jnp.asarray(_FRESH),
-                            resets=st["resets"] + 1)
-
             do_reset = accept & (knorm > KAPPA_RESET) & ~st["converged"]
-            return lax.cond(do_reset, reset, lambda s: s, st)
+            return lax.cond(
+                do_reset,
+                lambda st: dict(st, d=zeros_k, alpha=jnp.asarray(0.0, dt),
+                                mode=jnp.asarray(_RESET)),
+                lambda st: st, st)
 
-        st = lax.cond(mode == _GUESS, from_guess, line_search, st)
+        # --- a reset: the current orbitals, made pseudo-canonical, become
+        # the reference at kappa = 0; the same evaluation gives the gradient
+        # there (first order: d C_o = -C_v dk^T), so it is taken as a fresh
+        # point without a second evaluation
+        def reset(st):
+            Co, Cv, eo, ev = new_reference(F_t, Cos_t, canonical=False)
+            dC0 = tuple(2.0 * w * F_t[s] @ Co[s] for s in range(nspin))
+            g0 = tuple(-(G.T @ V) for G, V in zip(dC0, Cv))
+            st = dict(st, Co=Co, Cv=Cv, eo=eo, ev=ev, kappa=zeros_k,
+                      g=zeros_k, count=jnp.asarray(0),
+                      resets=st["resets"] + 1)
+            return accept_point(st, jnp.asarray(True), jnp.asarray(False),
+                                zeros_k, g0, dC0, Co)
+
+        branch = jnp.where(mode == _GUESS, 0, jnp.where(mode == _RESET, 2, 1))
+        st = lax.switch(branch, [from_guess, line_search, reset], st)
         if verbose:
             jax.debug.print(
                 "  gdm {it}: E={e:.10f} dE={de:+.2e} |[F,P]|={derr:.2e} "
@@ -315,9 +347,8 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
         return dict(st, it=st["it"] + 1)
 
     final = lax.while_loop(cond, body, state0)
-    eps, Cp = jnp.linalg.eigh(X.T @ final["F"] @ X)      # forward only
-    return (final["E"], final["P"], X @ Cp, eps, final["converged"],
-            final["it"], final["resets"], final["rejects"])
+    return (final["E"], final["P"], final["converged"], final["it"],
+            final["resets"], final["rejects"])
 
 
 def gdm(
@@ -331,6 +362,7 @@ def gdm(
     gap_floor: float = 0.05,
     lindep_thresh: float = 1e-7,
     guess: GuessSpec | jax.Array | None = None,
+    orbital_xc: bool = True,
     verbose: bool = False,
 ) -> KSResult:
     """Minimize the KS energy over orbital rotations (restricted and
@@ -351,17 +383,26 @@ def gdm(
             aufbau order.
         lindep_thresh: overlap-eigenvalue cutoff for the orthonormalizer.
         guess: as for :func:`~dftax.ks.scf.scf`.
+        orbital_xc: evaluate through the occupied orbitals
+            (:meth:`~dftax.ks.energy.KS.energy_and_grad_orbitals`), building
+            the Fock only at the guess and at reference resets; ``False``
+            builds it at every evaluation.
         verbose: print every energy evaluation.
 
     ``n_iter`` of the result counts energy evaluations, the unit that costs.
     """
     X = canonical_orthonormalizer(ks.S, lindep_thresh)
     P0 = density_from_guess(ks, guess, X)
-    e, P, C, eps, converged, n_iter, _resets, _rejects = _gdm_solve(
+    e, P, converged, n_iter, _resets, _rejects = _gdm_solve(
         ks, X, P0, jnp.asarray(max_iter), jnp.asarray(e_tol),
         jnp.asarray(d_tol), jnp.asarray(max_step), jnp.asarray(gap_floor),
-        history, verbose,
+        history, verbose, orbital_xc,
     )
+    # canonical orbitals of the converged density, for parity with scf
+    # (forward only; P is the authoritative result)
+    F = _fock_stacked(ks, P)
+    eps, Cp = jnp.linalg.eigh(X.T @ F @ X)
+    C = X @ Cp
     result = KSResult(
         e_tot=float(e),
         e_elec=float(e) - float(ks.e_nn) - float(ks.e_disp),

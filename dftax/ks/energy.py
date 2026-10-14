@@ -803,6 +803,32 @@ class KS(eqx.Module):
         F = 0.5 * (g + g.transpose(0, 2, 1))
         return e_rest + e_xc + self.e_nn + self.e_disp, F
 
+    def energy_and_grad_orbitals(self, Cs, idempotent: bool = True):
+        """``(E_total, ∂E/∂C_σ)`` for the occupied orbitals of each channel.
+
+        The density is ``P_σ = w C_σ C_σᵀ`` (``w = 2`` closed shell, ``1`` per
+        spin channel), so ``∂E/∂C_σ = 2w F_σ C_σ`` with ``F = sym(∂E/∂P)``.
+        The one-electron and two-electron parts take that route, through
+        their (cheap) potentials; the XC part, almost all of an iteration,
+        comes straight from the orbitals
+        (:meth:`~dftax.ks.terms.XCTerm.energy_and_grad_orbitals`), which never
+        forms the ``nao x nao`` XC potential. What a direct minimizer
+        (:func:`~dftax.ks.gdm.gdm`) needs, and nothing more.
+        """
+        nspin = len(Cs)
+        w = 2.0 if nspin == 1 else 1.0
+        P = jnp.stack([w * (C @ C.T) for C in Cs])
+        e1 = jnp.sum(jnp.sum(P, axis=0) * self.hcore)
+        e_2e, g_2e = self.coulomb.energy_and_potential(
+            P, self.S, self.nocc, idempotent)
+        e_xc, g_xc = self.xc_term.energy_and_grad_orbitals(Cs, w)
+        grads = tuple(
+            2.0 * w * (self.hcore + 0.5 * (g_2e[s] + g_2e[s].T)) @ Cs[s]
+            + g_xc[s]
+            for s in range(nspin)
+        )
+        return e1 + e_2e + e_xc + self.e_nn + self.e_disp, grads
+
     def density(
         self, P: Float[Array, "nspin nao nao"]
     ) -> tuple[Float[Array, "ng"], Float[Array, "ng 3"]]:

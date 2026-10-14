@@ -372,7 +372,7 @@ def clear_plan_cache() -> None:
     _PLAN_CACHE.clear()
 
 
-def _plan_eri3c_uncached(basis, aux_basis, keep_pairs=None):
+def _plan_eri3c_uncached(basis, aux_basis, keep_pairs=None, tol=None):
     """Static bucket plan for :func:`eri3c_matrix_bucketed`.
 
     Must be called where the basis metadata is concrete (KS.__init__, or a
@@ -398,11 +398,25 @@ def _plan_eri3c_uncached(basis, aux_basis, keep_pairs=None):
     _check_uniform_cart2sph(aux_basis.cart2sph, aux, aux_sph, "auxiliary")
     buckets = defaultdict(lambda: ([], [], [], [], [], []))
     nprims = {}
-    for ia, (la, ra, nca, npa) in enumerate(bra):
-        for jb_off, (lb, rb, ncb, npb) in enumerate(bra[ia:]):
+    for ia, (la0, ra0, _nca, npa0) in enumerate(bra):
+        for jb_off, (lb0, rb0, _ncb, npb0) in enumerate(bra[ia:]):
             if keep_pairs is not None and (ia, ia + jb_off) not in keep_pairs:
                 continue
             ib = ia + jb_off
+            # Orient the pair by shell type, not by position: the kernel
+            # writes both (a, b) and (b, a) blocks either way, and keying on
+            # the position made the class set depend on the atom order (a C-H
+            # pair keyed (C, H) or (H, C) by which atom came first). Canonical,
+            # the classes are a function of the basis and the elements alone:
+            # cubane and bicyclo[2.2.2]octane, both CH, go from 161 / 181
+            # classes (26 of bicyclo's not in cubane) to 100 / 109, at the
+            # same padding budget and slightly less padded work.
+            first = (la0, npa0, ra0, bra_sph[ia])
+            second = (lb0, npb0, rb0, bra_sph[ib])
+            if (lb0, npb0) < (la0, npa0):
+                first, second = second, first
+            la, npa, ra, sa = first
+            lb, npb, rb, sb = second
             for kc, (lc, rc, ncc, npc) in enumerate(aux):
                 # Contraction lengths join the key, so a triple is never padded
                 # to a heavier shell it does not contain; _merge_classes below
@@ -411,7 +425,7 @@ def _plan_eri3c_uncached(basis, aux_basis, keep_pairs=None):
                 key = (la, lb, lc, npa, npb, npc)
                 b = buckets[key]
                 b[0].append(ra); b[1].append(rb); b[2].append(rc)
-                b[3].append(bra_sph[ia]); b[4].append(bra_sph[ib])
+                b[3].append(sa); b[4].append(sb)
                 b[5].append(aux_sph[kc])
                 nprims[key] = (npa, npb, npc)
 
@@ -424,7 +438,8 @@ def _plan_eri3c_uncached(basis, aux_basis, keep_pairs=None):
     # them where merging did not put them back together, each carrying the
     # primitive counts its own members need, so every consumer unpacks exactly
     # as before.
-    for (la, lb, lc), npr, rows in _merge_classes(buckets, nprims, 3, 6):
+    for (la, lb, lc), npr, rows in _merge_classes(buckets, nprims, 3, 6,
+                                                  tol):
         rows_a, rows_b, rows_c, sph_a, sph_b, sph_c = rows
         nca = (la + 1) * (la + 2) // 2
         ncb = (lb + 1) * (lb + 2) // 2
@@ -443,11 +458,14 @@ def _plan_eri3c_uncached(basis, aux_basis, keep_pairs=None):
     return Plan((nao, naux, nao_sph, naux_sph, tuple(classes)))
 
 
-def plan_eri3c(basis, aux_basis, keep_pairs=None):
-    """Memoized on basis structure; see :func:`_plan_cached`."""
+def plan_eri3c(basis, aux_basis, keep_pairs=None, tol=None):
+    """Memoized on basis structure; see :func:`_plan_cached`. ``tol`` is the
+    padding budget of :func:`_merge_padded_buckets` (``None``: ``_PAD_TOL``;
+    ``0``: no merging, so every class is one exact contraction pattern)."""
     key = (("eri3c", static_fingerprint(basis), static_fingerprint(aux_basis),
-            _keep_key(keep_pairs)))
-    return _plan_cached(key, lambda: _plan_eri3c_uncached(basis, aux_basis, keep_pairs))
+            _keep_key(keep_pairs), tol))
+    return _plan_cached(
+        key, lambda: _plan_eri3c_uncached(basis, aux_basis, keep_pairs, tol))
 
 
 
@@ -710,7 +728,7 @@ def _compiled_class_kernel(la, lb, lc, anga, angb, angc, omega, chunk_size):
 # Phase 2: the traced build (jnp gathers only; jit/grad-safe)
 # ---------------------------------------------------------------------------
 
-def _plan_pairs_uncached(basis):
+def _plan_pairs_uncached(basis, tol=None):
     """Static bra-pair plan for :func:`nuclear_attraction_bucketed`.
 
     Same contract as :func:`plan_eri3c`: python ints only, computed where the
@@ -724,8 +742,11 @@ def _plan_pairs_uncached(basis):
     bra, ang = _shells(basis.angular, basis.exponents)
     buckets = defaultdict(lambda: ([], []))
     nprims = {}
-    for ia, (la, ra, nca, npa) in enumerate(bra):
-        for lb, rb, ncb, npb in bra[ia:]:
+    for ia, (la0, ra0, _nca, npa0) in enumerate(bra):
+        for lb0, rb0, _ncb, npb0 in bra[ia:]:
+            # Oriented by shell type, not position (see _plan_eri3c_uncached).
+            (la, npa, ra), (lb, npb, rb) = sorted(
+                ((la0, npa0, ra0), (lb0, npb0, rb0)), key=lambda t: t[:2])
             # Contraction lengths join the key, merged back below where the
             # padding is cheap; see plan_eri3c / _merge_padded_buckets.
             key = (la, lb, npa, npb)
@@ -740,7 +761,7 @@ def _plan_pairs_uncached(basis):
     classes = []
     # Same tuple shape as before; consumers are unaffected.
     for (la, lb), npr, (rows_a, rows_b) in _merge_classes(buckets, nprims,
-                                                          2, 2):
+                                                          2, 2, tol):
         nca = (la + 1) * (la + 2) // 2
         ncb = (lb + 1) * (lb + 2) // 2
         classes.append((
@@ -751,10 +772,11 @@ def _plan_pairs_uncached(basis):
     return Plan((int(np.asarray(basis.angular).shape[0]), tuple(classes)))
 
 
-def plan_pairs(basis):
-    """Memoized on basis structure; see :func:`_plan_cached`."""
-    key = (("pairs", static_fingerprint(basis)))
-    return _plan_cached(key, lambda: _plan_pairs_uncached(basis))
+def plan_pairs(basis, tol=None):
+    """Memoized on basis structure; see :func:`_plan_cached` and, for
+    ``tol``, :func:`plan_eri3c`."""
+    key = (("pairs", static_fingerprint(basis), tol))
+    return _plan_cached(key, lambda: _plan_pairs_uncached(basis, tol))
 
 
 

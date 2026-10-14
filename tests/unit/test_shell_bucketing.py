@@ -29,8 +29,8 @@ from dftax.basis.loader import build_basis_data
 import dftax.integrals.eri3c_bucketed as bucketed
 from dftax.integrals.eri3c_bucketed import (
     _PAD_TOL, _shells, eri2c_matrix_bucketed, eri3c_matrix_bucketed,
-    nuclear_attraction_bucketed, overlap_kinetic_bucketed, plan_eri3c,
-    plan_pairs,
+    expand_eri3c, nuclear_attraction_bucketed, overlap_kinetic_bucketed,
+    plan_eri3c, plan_pairs,
 )
 from dftax.system.molecule import Molecule
 
@@ -128,7 +128,7 @@ def test_eri3c_classes_do_not_pad_primitive_counts(exact_buckets):
     """Same for the 3-center plan, over both the orbital and auxiliary legs."""
     basis, aux = _basis(THIOL), _basis(THIOL, "def2-universal-jkfit")
     npr, npr_aux = _nprim_by_row(basis), _nprim_by_row(aux)
-    for c in plan_eri3c(basis, aux)[4]:
+    for c in expand_eri3c(plan_eri3c(basis, aux))[4]:
         rows_a, rows_b, rows_c, (npa, npb, npc) = c[6], c[7], c[8], c[9]
         assert {npr[r] for r in rows_a} == {npa}
         assert {npr[r] for r in rows_b} == {npb}
@@ -141,7 +141,7 @@ def test_sulfur_does_not_resize_the_first_row_kernels():
     contraction lengths; the shipped plan cuts the emitted primitive work
     several-fold, which is what the build's peak scratch tracks."""
     basis, aux = _basis(THIOL), _basis(THIOL, "def2-universal-jkfit")
-    pairs, three = plan_pairs(basis), plan_eri3c(basis, aux)
+    pairs, three = plan_pairs(basis), expand_eri3c(plan_eri3c(basis, aux))
     old_pairs, old_three = _coarsen_pairs(pairs), _coarsen_eri3c(three)
 
     # More classes, each sized nearer to its own members -- the trade.
@@ -157,10 +157,10 @@ def test_merge_stays_inside_its_padding_budget(monkeypatch):
     compile time without silently reintroducing the sulfur blow-up."""
     basis, aux = _basis(THIOL), _basis(THIOL, "def2-universal-jkfit")
     shipped = (_pair_work(plan_pairs(basis)[1]),
-               _eri3c_work(plan_eri3c(basis, aux)[4]))
+               _eri3c_work(expand_eri3c(plan_eri3c(basis, aux))[4]))
     monkeypatch.setattr(bucketed, "_PAD_TOL", 0.0)
     exact = (_pair_work(plan_pairs(basis)[1]),
-             _eri3c_work(plan_eri3c(basis, aux)[4]))
+             _eri3c_work(expand_eri3c(plan_eri3c(basis, aux))[4]))
     for got, floor in zip(shipped, exact):
         assert floor <= got <= floor * (1.0 + _PAD_TOL)
 
@@ -214,9 +214,9 @@ def test_finer_eri3c_buckets_leave_the_integrals_alone():
     hundred extra shells of compile for no extra coverage.
     """
     basis = _basis(THIOL)
-    three = plan_eri3c(basis, basis)
+    three = plan_eri3c(basis, basis)       # factored; coarsened from rows
     _agrees(lambda p: eri3c_matrix_bucketed(basis, basis, plan=p),
-            three, _coarsen_eri3c(three))
+            three, _coarsen_eri3c(expand_eri3c(three)))
 
 
 COORDS3 = np.array([[0.0, 0.0, 0.0], [1.5, 0.1, 0.0], [-0.4, 1.4, 0.2]])
@@ -296,3 +296,52 @@ class TestBucketedEri4c:
             )
             new = np.asarray(eri4c_matrix(b, omega=omega))
             assert np.abs(new - ref).max() < 1e-12
+
+
+# ---------------------------------------------------------------------------
+# Factored 3-center plans: a class is (bra pairs) x (aux shells)
+# ---------------------------------------------------------------------------
+
+
+def test_factored_plan_holds_every_triple_once():
+    """Expanded, the factored plan is every kept bra shell pair (canonically
+    oriented) times every aux shell, each exactly once."""
+    basis, aux = _basis(THIOL), _basis(THIOL, "def2-universal-jkfit")
+    bra, _ = _shells(basis.angular, basis.exponents)
+    shells_aux, _ = _shells(aux.angular, aux.exponents)
+    seen = []
+    for c in expand_eri3c(plan_eri3c(basis, aux))[4]:
+        seen.extend(zip((min(a, b) for a, b in zip(c[6], c[7])),
+                        (max(a, b) for a, b in zip(c[6], c[7])), c[8]))
+    want = [(bra[i][1], bra[j][1], k[1]) for i in range(len(bra))
+            for j in range(i, len(bra)) for k in shells_aux]
+    assert sorted(seen) == sorted(want)
+
+
+def test_factored_plan_is_linear_in_pairs_and_aux_shells():
+    """The plan stores pairs and aux shells, not their product: its row
+    literals stay within a small multiple of (pairs + aux shells) per class
+    pairing, where the expanded plan holds one row per triple."""
+    basis, aux = _basis(THIOL), _basis(THIOL, "def2-universal-jkfit")
+    plan = plan_eri3c(basis, aux)
+
+    def rows(c):
+        if len(c) == 8:
+            return sum(4 * len(p[0]) + 2 * len(a[0]) for p, a in c[6])
+        return 6 * len(c[6])
+
+    factored = sum(rows(c) for c in plan[4])
+    expanded = sum(rows(c) for c in expand_eri3c(plan)[4])
+    assert factored * 20 < expanded
+
+
+@pytest.mark.float64
+def test_factored_build_is_the_expanded_build():
+    """Broadcasting the factors in the graph writes exactly the tensor the
+    triple-by-triple rows write: same triples, same order, bit for bit."""
+    basis = _basis(THIOL, "sto-3g")
+    aux = _basis(THIOL, "6-31g")
+    plan = plan_eri3c(basis, aux)
+    np.testing.assert_array_equal(
+        eri3c_matrix_bucketed(basis, aux, plan=plan),
+        eri3c_matrix_bucketed(basis, aux, plan=expand_eri3c(plan)))

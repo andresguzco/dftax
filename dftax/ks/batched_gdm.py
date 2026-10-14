@@ -31,7 +31,7 @@ re-anchors with the closed-form rotation (:func:`~dftax.ks.gdm.rotate_full`),
 which needs neither a Fock nor an eigendecomposition.
 
 Scope: closed and open shells (mixed lists are solved as one batch per spin
-type), pure and hybrid functionals (range-separated ones included), on the
+type and functional), pure and hybrid functionals (range-separated ones included), on the
 materialized density-fitting and AO-grid backends (what ``KS`` picks for
 small and mid-size molecules). The exchange takes the orbitals with their
 occupations, so empty padded slots carry none. VV10 would need its grid
@@ -376,9 +376,9 @@ def gdm_batched(kss, *, max_iter: int = 200, e_tol: float = 1e-8,
 
     Args:
         kss: built :class:`~dftax.ks.energy.KS` objects (materialized DF and
-            grid; see the module doc). Closed and open shells may be mixed:
-            they are solved as one batch per spin type, results in input
-            order.
+            grid; see the module doc). Closed and open shells, and different
+            functionals, may be mixed: they are solved as one batch per spin
+            type and functional, results in input order.
         bucket: the padded sizes, for a batch of one spin type; default the
             smallest that fits each group. Passing a fixed bucket lets batches
             of similar molecules share one compiled program.
@@ -387,11 +387,17 @@ def gdm_batched(kss, *, max_iter: int = 200, e_tol: float = 1e-8,
         The tolerances and step controls are those of :func:`~dftax.ks.gdm.gdm`.
     """
     kss = list(kss)
-    groups: dict[int, list[int]] = {}
+    # one batch per spin type and functional: both are static metadata of
+    # the padded system (the functional object, its exact-exchange
+    # fractions), and systems that differ in them cannot be stacked
+    groups: dict[tuple, list[int]] = {}
     for i, ks in enumerate(kss):
-        groups.setdefault(len(ks.nocc), []).append(i)
+        key = (len(ks.nocc), ks.xc_term.xc, float(ks.coulomb.hf_coeff),
+               float(ks.coulomb.hf_coeff_lr))
+        groups.setdefault(key, []).append(i)
     if bucket is not None and len(groups) > 1:
-        raise ValueError("a fixed bucket needs a batch of one spin type.")
+        raise ValueError("a fixed bucket needs a batch of one spin type and "
+                         "one functional.")
     n = len(kss)
     e, conv, it = np.zeros(n), np.zeros(n, bool), np.zeros(n, int)
     P = [None] * n

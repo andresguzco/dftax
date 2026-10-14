@@ -70,7 +70,10 @@ def main():
         @eqx.filter_jit
         def via_density(xt, C):
             e, V = xt.energy_and_potential((C @ C.T)[None])
-            return e, 2.0 * V[0] @ C                    # dE/dC
+            # dE/dP is not symmetric for a GGA (the gradient term pairs ao
+            # with dao), so dE/dC is (V + V^T) C, as KS.energy_and_fock's
+            # symmetrized F gives
+            return e, (V[0] + V[0].T) @ C
 
         def e_orb(C, xt):
             psi = xt.ao @ C                             # (ng, nocc)

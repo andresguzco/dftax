@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--repeat", type=int, default=20)
     args = ap.parse_args()
 
+    import equinox as eqx
     import jax
     import jax.numpy as jnp
 
@@ -59,28 +60,31 @@ def main():
         xt = ks.xc_term
         X = canonical_orthonormalizer(ks.S)
         P0 = density_from_guess(ks, minao(), X)
-        _, F = jax.jit(ks.energy_and_fock)(P0)
+        _, F = eqx.filter_jit(lambda k, P: k.energy_and_fock(P))(ks, P0)
         _, Cp = jnp.linalg.eigh(X.T @ F[0] @ X)
         nocc = ks.nocc[0]
         C = (X @ Cp)[:, :nocc] * jnp.sqrt(2.0)          # P = C C^T
 
-        @jax.jit
-        def via_density(C):
+        # the term is an argument, not a closure: closed over, its AO arrays
+        # would be baked into the program as constants
+        @eqx.filter_jit
+        def via_density(xt, C):
             e, V = xt.energy_and_potential((C @ C.T)[None])
             return e, 2.0 * V[0] @ C                    # dE/dC
 
-        def e_orb(C):
+        def e_orb(C, xt):
             psi = xt.ao @ C                             # (ng, nocc)
             dpsi = jnp.einsum("gmx,mi->gix", xt.dao, C)
             rho = jnp.sum(psi * psi, axis=1)
             grad = 2.0 * jnp.einsum("gi,gix->gx", psi, dpsi)
             return xc_energy(xt.xc, rho, xt.weights, grad_rho=grad)
 
-        via_orbitals = jax.jit(jax.value_and_grad(e_orb))
-        e1, g1 = via_density(C)
-        e2, g2 = via_orbitals(C)
-        t1 = timed(via_density, C)
-        t2 = timed(via_orbitals, C)
+        via_orbitals = eqx.filter_jit(
+            lambda xt, C: jax.value_and_grad(e_orb)(C, xt))
+        e1, g1 = via_density(xt, C)
+        e2, g2 = via_orbitals(xt, C)
+        t1 = timed(via_density, xt, C)
+        t2 = timed(via_orbitals, xt, C)
         print(f"{name:17s} ng {xt.weights.shape[0]} nao {C.shape[0]} nocc "
               f"{nocc}: density-matrix {t1:6.2f} ms  orbitals {t2:6.2f} ms  "
               f"x{t1 / t2:.2f}  |dE| {abs(float(e1 - e2)):.1e}  "

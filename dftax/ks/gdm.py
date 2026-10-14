@@ -48,7 +48,7 @@ from jax import lax
 
 from dftax.ks.energy import KS
 from dftax.ks.guess import GuessSpec, density_from_guess
-from dftax.ks.scf import KSResult, _fock_stacked, canonical_orthonormalizer
+from dftax.ks.scf import KSResult, canonical_orthonormalizer
 
 # Terms of the rotation series (_series). ||kappa kappa^T|| stays below
 # KAPPA_RESET**2 = 4 between resets, where 16 terms leave 4**16/32! ~ 2e-26.
@@ -356,6 +356,9 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
             final["resets"], final["rejects"])
 
 
+_energy_and_fock = eqx.filter_jit(lambda ks, P: ks.energy_and_fock(P))
+
+
 def gdm(
     ks: KS,
     *,
@@ -404,8 +407,10 @@ def gdm(
         history, verbose, orbital_xc,
     )
     # canonical orbitals of the converged density, for parity with scf
-    # (forward only; P is the authoritative result)
-    F = _fock_stacked(ks, P)
+    # (forward only; P is the authoritative result). energy_and_fock, not
+    # _fock_stacked: the latter is reverse mode through KS.electronic, whose
+    # hybrid exchange is the dense density-route contraction
+    _, F = _energy_and_fock(ks, P)
     eps, Cp = jnp.linalg.eigh(X.T @ F @ X)
     C = X @ Cp
     result = KSResult(

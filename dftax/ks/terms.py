@@ -974,9 +974,12 @@ class DFCoulomb(CoulombTerm):
         does there and an empty one (a padded slot, see
         :mod:`dftax.ks.batched_gdm`) not at all. That is what makes padded
         hybrids correct, and it removes the ``nao^3`` eigendecomposition the
-        density route pays on every evaluation. The exchange derivative is
-        reverse mode through the orbital contraction, which has no
-        eigendecomposition in it.
+        density route pays on every evaluation.
+
+        The exchange derivative is closed form too: the raw term
+        ``vdot(C, KK C)`` is quartic in ``C`` through ``KK = G V⁻¹ Gᵀ``,
+        ``G = T C``, and with a symmetric metric its gradient is ``4 KK C``,
+        so the kernel the energy already builds gives it with no reverse pass.
         """
         nspin = len(Cs)
         w_full = 2.0 if nspin == 1 else 1.0
@@ -988,25 +991,23 @@ class DFCoulomb(CoulombTerm):
         J = jnp.einsum("mnP,P->mn", self.int3c, Vg)
         grads = [2.0 * (J @ C) * w for C, w in zip(Cs, ws)]
 
-        def exchange(cs):
-            out = 0.0
-            for ax, t3, vinv in ((self.hf_coeff, self.int3c, self.int2c_inv),
-                                 (self.hf_coeff_lr, self.int3c_lr,
-                                  self.int2c_inv_lr)):
-                if ax == 0.0:
+        for ax, t3, vinv in ((self.hf_coeff, self.int3c, self.int2c_inv),
+                             (self.hf_coeff_lr, self.int3c_lr,
+                              self.int2c_inv_lr)):
+            if ax == 0.0:
+                continue
+            e_pref = -ax if nspin == 1 else -0.5 * ax
+            # symmetrized as in energy_and_potential: _metric_pinv is
+            # symmetric only to rounding, and 4 KK C assumes it exactly
+            vsym = 0.5 * (vinv + vinv.T)
+            for s, (C, w) in enumerate(zip(Cs, ws)):
+                if C.shape[1] == 0:
                     continue
-                e_pref = -ax if nspin == 1 else -0.5 * ax
-                for C, w in zip(cs, ws):
-                    if C.shape[1] == 0:
-                        continue
-                    Ct = C * jnp.sqrt(w / w_full)
-                    out = out + e_pref * _rik_materialized(t3, vinv, Ct)[0]
-            return out
-
-        if self.hf_coeff != 0.0 or self.hf_coeff_lr != 0.0:
-            e_x, g_x = jax.value_and_grad(exchange)(tuple(Cs))
-            e = e + e_x
-            grads = [g + gx for g, gx in zip(grads, g_x)]
+                scale = jnp.sqrt(w / w_full)
+                Ct = C * scale
+                raw, KK = _rik_materialized(t3, vsym, Ct)
+                e = e + e_pref * raw
+                grads[s] = grads[s] + 4.0 * e_pref * (KK @ Ct) * scale
         return e, tuple(grads)
 
 

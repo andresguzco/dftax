@@ -73,6 +73,7 @@ def test_tiled_geometry_gradient_matches_bucketed():
 
 
 @pytest.mark.float64
+@pytest.mark.slow
 def test_shared_classes_ask_for_identical_kernels():
     """The whole point: a class two molecules share is one compiled program.
 
@@ -100,6 +101,7 @@ def test_tile_size_is_a_bounded_power_of_two():
 
 
 @pytest.mark.float64
+@pytest.mark.slow
 @pytest.mark.parametrize("spherical", [True, False])
 def test_tiled_two_index_builds_match_bucketed(spherical):
     from dftax.integrals.eri3c_bucketed import (
@@ -126,6 +128,7 @@ def test_tiled_two_index_builds_match_bucketed(spherical):
 
 
 @pytest.mark.float64
+@pytest.mark.slow
 def test_tiled_ks_build_matches_default(monkeypatch):
     """The whole DF build on the tiled engine, through a range-separated
     hybrid so the attenuated tensors are covered: same energy and Fock."""

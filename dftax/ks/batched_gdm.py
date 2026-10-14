@@ -180,8 +180,8 @@ def _solve_one(ks: PaddedKS, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
     def evaluate(Co, Cv, k):
         Cos, vjp = jax.vjp(lambda kk: (_occupied(Co, Cv, kk),), k)
         e, dC = ks.energy_and_grad_orbitals(Cos)
-        (g,) = vjp(dC)
-        return e, g[0], dC[0], Cos[0]
+        (g,) = vjp(dC)                  # the cotangent of k itself
+        return e, g, dC[0], Cos[0]
 
     def commutator(G, Co):
         r = X.T @ (G - S @ (Co @ (Co.T @ G)))

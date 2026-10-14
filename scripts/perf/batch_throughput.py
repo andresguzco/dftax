@@ -15,8 +15,10 @@ difference against ``scf``.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
+import resource
 import sys
 import time
 import warnings
@@ -60,6 +62,8 @@ def distorted(atom: str, rng, sigma: float) -> str:
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--copies", type=int, default=4)
+    ap.add_argument("--mols", nargs="*", default=None,
+                    help="a subset of the molecule names (default all)")
     ap.add_argument("--basis", default="6-31g")
     ap.add_argument("--sigma", type=float, default=0.03)
     ap.add_argument("--out", default=None)
@@ -77,7 +81,9 @@ def main():
     rng = np.random.default_rng(0)
     names, kss = [], []
     t0 = time.perf_counter()
-    for name, atom in MOLECULES.items():
+    chosen = {k: v for k, v in MOLECULES.items()
+              if args.mols is None or k in args.mols}
+    for name, atom in chosen.items():
         for c in range(args.copies):
             geo = atom if c == 0 else distorted(atom, rng, args.sigma)
             kss.append(KS(Molecule.from_xyz(geo, args.basis), PBE(),
@@ -86,6 +92,20 @@ def main():
     jax.block_until_ready([ks.S for ks in kss])
     build_s = time.perf_counter() - t0
     n = len(kss)
+
+    def host_gib():
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20
+
+    def release():
+        # the compiled builds and solves are held by jit caches; one process
+        # holding a dozen molecules' worth of them ran a 32 GB host out of
+        # memory, and each arm recompiles on its first pass anyway
+        jax.clear_caches()
+        gc.collect()
+
+    release()
+    print(f"built {n} systems in {build_s:.1f} s, host peak {host_gib():.1f} "
+          f"GiB", flush=True)
 
     def timed(fn):
         t0 = time.perf_counter()
@@ -97,12 +117,17 @@ def main():
     seq_scf = lambda: [scf(ks) for ks in kss]                    # noqa: E731
     seq_gdm = lambda: [gdm(ks) for ks in kss]                    # noqa: E731
     batched = lambda: gdm_batched(kss)                           # noqa: E731
-    _, cold_scf = timed(seq_scf)
-    _, cold_gdm = timed(seq_gdm)
-    _, cold_batch = timed(batched)
-    r_scf, t_scf = timed(seq_scf)
-    r_gdm, t_gdm = timed(seq_gdm)
-    r_b, t_b = timed(batched)
+    def arm(fn, label):
+        _, cold = timed(fn)
+        res, warm = timed(fn)
+        print(f"  {label}: first pass {cold:.1f} s, warm {warm:.2f} s, host "
+              f"peak {host_gib():.1f} GiB", flush=True)
+        release()
+        return res, warm, cold
+
+    r_scf, t_scf, cold_scf = arm(seq_scf, "sequential scf")
+    r_gdm, t_gdm, cold_gdm = arm(seq_gdm, "sequential gdm")
+    r_b, t_b, cold_batch = arm(batched, "batched gdm")
 
     e_scf = np.array([r.e_tot for r in r_scf])
     de_gdm = np.max(np.abs(np.array([r.e_tot for r in r_gdm]) - e_scf))

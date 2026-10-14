@@ -75,7 +75,7 @@ class DFSpec:
     screen: float | str | None = "auto"
     spherical: bool | None = None
     whiten: bool | None = None
-    packed: bool = False
+    packed: bool | str = "auto"
 
 
 def exact(*, screen: float | None = None, stream: bool = False) -> ExactSpec:
@@ -102,7 +102,7 @@ def df(
     screen: float | str | None = "auto",
     spherical: bool | None = None,
     whiten: bool | None = None,
-    packed: bool = False,
+    packed: bool | str = "auto",
 ) -> DFSpec:
     """Density-fitted (RI) Coulomb/exchange with the given auxiliary basis.
 
@@ -149,9 +149,12 @@ def df(
             whitens; ``True`` asserts it and raises where it cannot apply.
         packed: store the whitened tensor packed over the kept bra shell
             pairs, ``(naux, npair)`` (:class:`PackedDFCoulomb`): about half
-            the memory before screening. Opt-in while the batched solvers
-            learn to pad it; where whitening does not apply (traced builds)
-            the build stays square.
+            the memory before screening and only the kept pairs with it, at
+            the price of unpacking one aux block per exchange evaluation.
+            ``"auto"`` (default) packs where that pays: when pair screening
+            is on (``screen``) or when the square tensor would miss the
+            device budget and the packed one fits; ``True`` / ``False``
+            force it. Traced builds (no whitening) stay square.
 
     Example:
         ```python
@@ -170,7 +173,7 @@ def df(
             "df(whiten=True, chunk=<int>) is not supported: the streamed "
             "backend never materializes the tensor it would whiten."
         )
-    if packed and (whiten is False or isinstance(chunk, int)):
+    if packed is True and (whiten is False or isinstance(chunk, int)):
         raise ValueError(
             "df(packed=True) stores the whitened materialized tensor; it "
             "needs whiten=None or True and a materialized chunk."

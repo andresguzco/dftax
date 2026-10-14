@@ -212,3 +212,20 @@ def test_df_screen_auto_is_size_gated():
             == DF_SCREEN_AUTO_CUTOFF)
     assert resolve_df_screen(None, 500) is None
     assert resolve_df_screen(1e-8, 3) == 1e-8
+
+
+@pytest.mark.float64
+def test_packing_is_size_and_budget_gated(monkeypatch):
+    """packed="auto": square below the screening gate; packed when only the
+    packed tensor fits the budget (or screening is on)."""
+    import dftax.ks.energy as energy_mod
+
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    sq = KS(mol, PBE()).coulomb
+    assert isinstance(sq, WhitenedDFCoulomb)
+    assert isinstance(KS(mol, PBE(), coulomb=df(screen=1e-12)).coulomb,
+                      PackedDFCoulomb)
+    nao, naux = sq.B.shape[0], sq.B.shape[2]
+    budget = (nao * (nao + 1) // 2) * naux + 1      # packed fits, square not
+    monkeypatch.setattr(energy_mod, "_df_materialize_budget", lambda: budget)
+    assert isinstance(KS(mol, PBE()).coulomb, PackedDFCoulomb)

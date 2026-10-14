@@ -368,8 +368,15 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
     naux = (aux.cart2sph.shape[1] if aux.cart2sph is not None
             else aux.centers.shape[0])
     chunk = spec.chunk
-    if chunk == "auto":
-        chunk = _resolve_df_chunk(chunk, nao, naux, sharded, spec.packed)
+    packed = spec.packed
+    if chunk == "auto" and packed == "auto":
+        chunk = _resolve_df_chunk(chunk, nao, naux, sharded, False)
+        if chunk is not None and not sharded and _resolve_df_chunk(
+                "auto", nao, naux, sharded, True) is None:
+            # the square tensor misses the budget, the packed one fits
+            chunk, packed = None, True
+    elif chunk == "auto":
+        chunk = _resolve_df_chunk(chunk, nao, naux, sharded, packed is True)
     if chunk is not None and aux.cart2sph is not None:
         if prebuilt:
             raise NotImplementedError(
@@ -385,7 +392,7 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
             "df(spherical=True) with a prebuilt cartesian BasisData; build "
             "it with build_basis_data(..., spherical=True)."
         )
-    return dataclasses.replace(spec, auxbasis=aux, chunk=chunk)
+    return dataclasses.replace(spec, auxbasis=aux, chunk=chunk, packed=packed)
 
 
 def _resolve_screening(spec, basis):
@@ -623,6 +630,11 @@ class KS(eqx.Module):
             # n_atom from the shape: static even at traced coordinates
             spec = dataclasses.replace(spec, screen=resolve_df_screen(
                 spec.screen, int(coords.shape[0])))
+            # packing pays where screening drops pairs (and where only the
+            # packed tensor fits, resolved with the budget above)
+            if spec.packed == "auto":
+                spec = dataclasses.replace(spec,
+                                           packed=spec.screen is not None)
         quartets, qof, pairs = _resolve_screening(spec, basis)
         aux_basis = spec.auxbasis if is_df else None
         # Whitening folds the metric into the materialized tensor

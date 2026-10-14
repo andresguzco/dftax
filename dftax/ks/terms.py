@@ -1299,18 +1299,21 @@ class XCTerm(eqx.Module):
         """
         return jax.value_and_grad(self.energy)(P)
 
-    def energy_and_grad_orbitals(self, Cs, w: float):
-        """``(E_xc, ∂E_xc/∂C_σ)`` for ``P_σ = w C_σ C_σᵀ``, one ``C`` per channel.
+    def energy_and_grad_orbitals(self, Cs, ws):
+        """``(E_xc, ∂E_xc/∂C_σ)`` for ``P_σ = C_σ diag(w_σ) C_σᵀ``.
 
-        What a direct minimizer needs: the energy and its derivative with
-        respect to the occupied coefficients. This default goes through the
-        density matrix, ``w (V_σ + V_σᵀ) C_σ`` (``V = ∂E/∂P`` is not symmetric
-        for a GGA, whose gradient term pairs AO values with their
-        derivatives); :class:`GridXC` goes through the orbitals instead.
+        One ``C`` and one occupation vector ``w`` per channel (``w = 2`` per
+        orbital for a closed shell, ``1`` per spin channel; zero for a padded
+        slot). What a direct minimizer needs: the energy and its derivative
+        with respect to the occupied coefficients. This default goes through
+        the density matrix, ``(V_σ + V_σᵀ) C_σ diag(w_σ)`` (``V = ∂E/∂P`` is
+        not symmetric for a GGA, whose gradient term pairs AO values with
+        their derivatives); :class:`GridXC` goes through the orbitals instead.
         """
-        P = jnp.stack([w * (C @ C.T) for C in Cs])
+        P = jnp.stack([(C * w) @ C.T for C, w in zip(Cs, ws)])
         e, V = self.energy_and_potential(P)
-        return e, tuple(w * (V[s] + V[s].T) @ C for s, C in enumerate(Cs))
+        return e, tuple(((V[s] + V[s].T) @ C) * w
+                        for s, (C, w) in enumerate(zip(Cs, ws)))
 
 
 class GridXC(XCTerm):
@@ -1381,11 +1384,11 @@ class GridXC(XCTerm):
             return self._energy_closed(*chans[0])
         return self._energy_spin(*chans)
 
-    def energy_and_grad_orbitals(self, Cs, w: float):
-        scale = jnp.sqrt(w)
+    def energy_and_grad_orbitals(self, Cs, ws):
+        scales = tuple(jnp.sqrt(w) for w in ws)
         return jax.value_and_grad(
             lambda cs: self.energy_from_orbitals(
-                tuple(scale * c for c in cs)))(tuple(Cs))
+                tuple(c * sc for c, sc in zip(cs, scales))))(tuple(Cs))
 
     def _energy_closed(self, rho, grad_rho, tau):
         if self.xc.xc_type == "MGGA":

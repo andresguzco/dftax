@@ -154,12 +154,12 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
     S = ks.S
     nocc = ks.nocc
     nspin = len(nocc)
-    w = 2.0 if nspin == 1 else 1.0
+    occ = ks.occupations()          # per-orbital weights, one vector a channel
     nmo = X.shape[1]
     dt = P0.dtype
 
     def density(Cos):
-        return jnp.stack([w * (C @ C.T) for C in Cos])
+        return jnp.stack([(C * f) @ C.T for C, f in zip(Cos, occ)])
 
     def rotate(Co, Cv, kappa):
         return tuple(_occupied(a, b, k) for a, b, k in zip(Co, Cv, kappa))
@@ -170,7 +170,7 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
         P, Co, Cv, kappa = args
         e, F = ks.energy_and_fock(P)
         Cos, vjp = jax.vjp(lambda k: rotate(Co, Cv, k), kappa)
-        dC = tuple(2.0 * w * F[s] @ Cos[s] for s in range(nspin))
+        dC = tuple(2.0 * (F[s] @ Cos[s]) * occ[s] for s in range(nspin))
         (g,) = vjp(dC)
         return e, g, dC, F
 
@@ -184,8 +184,13 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
         return e, g, dC, jnp.zeros_like(P)
 
     def precond(eo, ev):
-        return tuple(1.0 / (2.0 * w * jnp.maximum(
-            v[None, :] - o[:, None], gap_floor)) for o, v in zip(eo, ev))
+        # 1 / (2 w_i (e_a - e_i)); an empty slot (w_i = 0) has no curvature
+        # and no gradient, so it gets no step
+        return tuple(jnp.where(
+            f[:, None] > 0.0,
+            1.0 / (2.0 * jnp.maximum(f[:, None], 1e-30)
+                   * jnp.maximum(v[None, :] - o[:, None], gap_floor)),
+            0.0) for o, v, f in zip(eo, ev, occ))
 
     def commutator(dC, Cos):
         # ||X^T (F P S - S P F) X|| from dE/dC_o = 2 w F C_o alone:
@@ -328,7 +333,7 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
         # point without a second evaluation
         def reset(st):
             Co, Cv, eo, ev = new_reference(F_t, Cos_t, canonical=False)
-            dC0 = tuple(2.0 * w * F_t[s] @ Co[s] for s in range(nspin))
+            dC0 = tuple(2.0 * (F_t[s] @ Co[s]) * occ[s] for s in range(nspin))
             g0 = tuple(-(G.T @ V) for G, V in zip(dC0, Cv))
             st = dict(st, Co=Co, Cv=Cv, eo=eo, ev=ev, kappa=zeros_k,
                       g=zeros_k, count=jnp.asarray(0),

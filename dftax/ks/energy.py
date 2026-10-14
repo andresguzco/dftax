@@ -829,8 +829,9 @@ class KS(eqx.Module):
     def energy_and_grad_orbitals(self, Cs, idempotent: bool = True):
         """``(E_total, ∂E/∂C_σ)`` for the occupied orbitals of each channel.
 
-        The density is ``P_σ = w C_σ C_σᵀ`` (``w = 2`` closed shell, ``1`` per
-        spin channel), so ``∂E/∂C_σ = 2w F_σ C_σ`` with ``F = sym(∂E/∂P)``.
+        The density is ``P_σ = C_σ diag(w_σ) C_σᵀ`` with the occupations of
+        :meth:`occupations` (``2`` closed shell, ``1`` per spin channel), so
+        ``∂E/∂C_σ = 2 F_σ C_σ diag(w_σ)`` with ``F = sym(∂E/∂P)``.
         The one-electron and two-electron parts take that route, through
         their (cheap) potentials; the XC part, almost all of an iteration,
         comes straight from the orbitals
@@ -838,19 +839,25 @@ class KS(eqx.Module):
         forms the ``nao x nao`` XC potential. What a direct minimizer
         (:func:`~dftax.ks.gdm.gdm`) needs, and nothing more.
         """
-        nspin = len(Cs)
-        w = 2.0 if nspin == 1 else 1.0
-        P = jnp.stack([w * (C @ C.T) for C in Cs])
+        ws = self.occupations()
+        P = jnp.stack([(C * w) @ C.T for C, w in zip(Cs, ws)])
         e1 = jnp.sum(jnp.sum(P, axis=0) * self.hcore)
         e_2e, g_2e = self.coulomb.energy_and_potential(
             P, self.S, self.nocc, idempotent)
-        e_xc, g_xc = self.xc_term.energy_and_grad_orbitals(Cs, w)
+        e_xc, g_xc = self.xc_term.energy_and_grad_orbitals(Cs, ws)
         grads = tuple(
-            2.0 * w * (self.hcore + 0.5 * (g_2e[s] + g_2e[s].T)) @ Cs[s]
+            2.0 * ((self.hcore + 0.5 * (g_2e[s] + g_2e[s].T)) @ C) * w
             + g_xc[s]
-            for s in range(nspin)
+            for s, (C, w) in enumerate(zip(Cs, ws))
         )
         return e1 + e_2e + e_xc + self.e_nn + self.e_disp, grads
+
+    def occupations(self):
+        """Occupation of each channel's occupied orbitals: 2 each for a
+        closed shell, 1 each per spin channel. A padded system
+        (:mod:`dftax.ks.batched_gdm`) gives its padding slots 0."""
+        w = 2.0 if len(self.nocc) == 1 else 1.0
+        return tuple(jnp.full((n,), w) for n in self.nocc)
 
     def density(
         self, P: Float[Array, "nspin nao nao"]

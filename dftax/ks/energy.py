@@ -62,7 +62,8 @@ from dftax.integrals import (
     eri2c_matrix,
 )
 from dftax.integrals.eri3c_bucketed import (
-    _shell_pair_keep, overlap_kinetic_bucketed, plan_eri3c, plan_pairs,
+    _shell_pair_keep, eri3c_packed, overlap_kinetic_bucketed, plan_eri3c,
+    plan_pairs,
 )
 from dftax.integrals.eri4c import (
     eri4c_matrix,
@@ -88,6 +89,7 @@ from dftax.ks.terms import (
     _metric_factor,
     _metric_pinv,  # noqa: F401  (re-exported; also used by _build_integrals)
     _whiten,
+    _whiten_packed,
     df,
     exact,
 )
@@ -417,7 +419,7 @@ def _build_integrals(
     basis, coords, charges, grid_coords, aux_basis, materialize_ao, materialize_int3c,
     eri_quartets=None, eri_qof=None, stream_exact=False, omega=None,
     eri3c_plan=None, pair_plan=None, aux_pair_plan=None, eri4c_plan=None,
-    whiten=False,
+    whiten=False, packed=False,
 ):
     """Build all integral arrays in one jitted pass.
 
@@ -430,7 +432,9 @@ def _build_integrals(
     orbit map for the exact ERI. Composes with grad (used by forces), where jit
     is traced inline. ``whiten`` (static, materialized DF only) returns the
     whitened ``B = Lᵀ T`` tensors in the 3-center slots and ``None`` for the
-    metric inverses (see :class:`~dftax.ks.terms.WhitenedDFCoulomb`).
+    metric inverses (see :class:`~dftax.ks.terms.WhitenedDFCoulomb`); with
+    ``packed`` too, they are packed ``(naux, npair)`` over the plan's kept
+    shell pairs (:class:`~dftax.ks.terms.PackedDFCoulomb`).
     """
     # One bucketed pass builds both (shared OS tables per shell pair); the
     # public overlap_matrix / kinetic_matrix wrappers stay for direct users.
@@ -458,8 +462,11 @@ def _build_integrals(
             )
     else:
         # int3c (nao²×naux) is the big DF tensor; skip it when streaming RI-J.
-        int3c = (eri3c_matrix(basis, aux_basis, plan=eri3c_plan)
-                 if materialize_int3c else None)
+        build3 = ((lambda **kw: eri3c_packed(basis, aux_basis, **kw))
+                  if packed else
+                  (lambda **kw: eri3c_matrix(basis, aux_basis, **kw)))
+        whiten3 = _whiten_packed if packed else _whiten
+        int3c = build3(plan=eri3c_plan) if materialize_int3c else None
         int2c = eri2c_matrix(aux_basis, plan=aux_pair_plan)  # (naux, naux)
         # Symmetric pseudo-inverse of the Coulomb metric, dropping near-null
         # directions (both aux spans; see the measured studies in the
@@ -468,7 +475,7 @@ def _build_integrals(
         # spherical form; the 1e-7 relative cutoff keeps the inverse
         # well-conditioned at sub-mHa RI cost.
         if whiten:
-            int3c = _whiten(int3c, _metric_factor(int2c))
+            int3c = whiten3(int3c, _metric_factor(int2c))
             int2c_inv = None
         else:
             int2c_inv = _metric_pinv(int2c)
@@ -483,12 +490,11 @@ def _build_integrals(
             # The attenuated 3-center is only materialized alongside the
             # full-range one; the streamed backend recomputes its elements on
             # the fly and needs just the (small) attenuated metric inverse.
-            int3c_lr = (eri3c_matrix(basis, aux_basis, omega=omega,
-                                     plan=eri3c_plan)
+            int3c_lr = (build3(omega=omega, plan=eri3c_plan)
                         if materialize_int3c else None)
             int2c_lr = eri2c_matrix(aux_basis, omega=omega, plan=aux_pair_plan)
             if whiten:
-                int3c_lr = _whiten(int3c_lr, _metric_factor(int2c_lr))
+                int3c_lr = whiten3(int3c_lr, _metric_factor(int2c_lr))
             else:
                 int2c_inv_lr = _metric_pinv(int2c_lr)
 
@@ -690,6 +696,7 @@ class KS(eqx.Module):
             quartets, qof, (not is_df) and spec.stream,
             omega if hf_lr != 0.0 else None,
             eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan, whiten,
+            whiten and spec.packed,
         )
         # Dispersion is P-independent: a scalar of the (traced) coordinates,
         # mirroring e_nn, so the rebuilt energies in forces/batched carry its
@@ -741,7 +748,7 @@ class KS(eqx.Module):
                 spec, basis, eri, int3c, int2c_inv, pairs, float(xc.hf_coeff),
                 eri_lr, int3c_lr, int2c_inv_lr, hf_lr, omega,
                 devices=devices if shard_df else None,
-                slab_plans=slab_plans,
+                slab_plans=slab_plans, packed_plan=eri3c_plan,
             )
         if devices is not None:
             # Pad the quadrature to the mesh and lay it out sharded; the AO

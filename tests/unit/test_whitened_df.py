@@ -15,7 +15,7 @@ import pytest
 
 from dftax import KS, Molecule, becke, forces, gdm, scf
 from dftax.energy.xc import PBE, PBE0, CAMB3LYP
-from dftax.ks import DFCoulomb, WhitenedDFCoulomb, df
+from dftax.ks import DFCoulomb, PackedDFCoulomb, WhitenedDFCoulomb, df
 from dftax.ks.batched_gdm import gdm_batched
 from dftax.ks.terms import _metric_factor, _metric_pinv, _whiten
 
@@ -148,3 +148,52 @@ def test_solvers_and_forces_on_the_whitened_term():
                 coulomb=df(chunk=None, whiten=False))
     f1 = forces(mol, PBE0(), r1, grid=becke(35, 50), coulomb=df(chunk=None))
     np.testing.assert_allclose(np.asarray(f1), np.asarray(f0), atol=1e-6)
+
+
+@pytest.mark.float64
+@pytest.mark.parametrize("xc, geom, spin", [
+    (PBE0, WATER, None), (CAMB3LYP, WATER, None), (PBE0, OH, 1),
+])
+def test_packed_is_the_square_whitened_term(xc, geom, spin):
+    """Packing changes the storage, not the contractions: energy, Fock and
+    orbital gradient agree with the square whitened term to rounding, the
+    Fock is exactly symmetric, and the closed-form gradient is autodiff's."""
+    mol = Molecule.from_xyz(geom, "6-31g*", spin=spin or 0)
+    kw = dict(grid=becke(35, 50), spin=spin)
+    sq = KS(mol, xc(), coulomb=df(chunk=None), **kw)
+    pk = KS(mol, xc(), coulomb=df(chunk=None, packed=True), **kw)
+    assert isinstance(pk.coulomb, PackedDFCoulomb)
+    assert pk.coulomb.B.size < 0.7 * sq.coulomb.B.size
+    Cs, P = _orbitals(sq)
+    (e0, F0), (e1, F1) = sq.energy_and_fock(P), pk.energy_and_fock(P)
+    assert abs(float(e0 - e1)) < 1e-12
+    np.testing.assert_allclose(F1, F0, atol=1e-12)
+    np.testing.assert_array_equal(F1, F1.transpose(0, 2, 1))
+    (e0, g0), (e1, g1) = (sq.energy_and_grad_orbitals(Cs),
+                          pk.energy_and_grad_orbitals(Cs))
+    assert abs(float(e0 - e1)) < 1e-12
+    w = 2.0 if len(Cs) == 1 else 1.0
+    gad = jax.grad(lambda cs: pk.total(
+        jnp.stack([w * c @ c.T for c in cs])))(Cs)
+    for a, b, c in zip(g1, g0, gad):
+        np.testing.assert_allclose(a, b, atol=1e-12)
+        np.testing.assert_allclose(a, c, atol=1e-11)
+
+
+def test_packed_needs_the_whitened_materialized_build():
+    with pytest.raises(ValueError, match="packed=True"):
+        df(packed=True, whiten=False)
+    with pytest.raises(ValueError, match="packed=True"):
+        df(packed=True, chunk=64)
+
+
+@pytest.mark.float64
+@pytest.mark.slow
+def test_solvers_on_the_packed_term():
+    sq = KS(Molecule.from_xyz(WATER, "6-31g"), PBE0(), grid=becke(35, 50))
+    pk = KS(Molecule.from_xyz(WATER, "6-31g"), PBE0(), grid=becke(35, 50),
+            coulomb=df(chunk=None, packed=True))
+    r0, r1, g = scf(sq), scf(pk), gdm(pk)
+    assert r0.converged and r1.converged and g.converged
+    assert abs(r0.e_tot - r1.e_tot) < 1e-9
+    assert abs(g.e_tot - r0.e_tot) < 1e-8

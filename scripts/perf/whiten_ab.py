@@ -1,4 +1,4 @@
-"""Whitened DF tensor against the plain one: build, memory, evaluations, solves.
+"""Plain, whitened and packed DF tensors: build, memory, evaluations, solves.
 
     source scripts/perf/env.sh
     python scripts/perf/whiten_ab.py --mol cubane bicyclo --xc PBE PBE0
@@ -49,7 +49,8 @@ def child(mol_name, basis, xc_name, whiten, repeat):
 
     mol = Molecule.from_xyz(read_xyz(mol_name), basis)
     xc = getattr(xcmod, xc_name)()
-    spec = df(chunk=None, whiten=whiten)
+    spec = (df(chunk=None, packed=True) if whiten == "packed"
+            else df(chunk=None, whiten=whiten == "1"))
     t0 = time.perf_counter()
     ks = KS(mol, xc, coulomb=spec)
     jax.block_until_ready(ks)
@@ -91,12 +92,12 @@ def main():
     args = ap.parse_args()
     if args.child:
         m, x, w = args.child.split(",")
-        print(json.dumps(child(m, args.basis, x, w == "1", args.repeat)))
+        print(json.dumps(child(m, args.basis, x, w, args.repeat)))
         return
     rows = []
     for m in args.mol:
         for x in args.xc:
-            for w in (0, 1):
+            for w in ("0", "1", "packed"):
                 out = subprocess.run(
                     [sys.executable, __file__, "--child", f"{m},{x},{w}",
                      "--basis", args.basis, "--repeat", str(args.repeat)],

@@ -79,19 +79,28 @@ def main():
 
     warnings.simplefilter("ignore")
     rng = np.random.default_rng(0)
-    names, kss = [], []
+    names, kss, geos = [], [], []
     t0 = time.perf_counter()
     chosen = {k: v for k, v in MOLECULES.items()
               if args.mols is None or k in args.mols}
     for name, atom in chosen.items():
         for c in range(args.copies):
             geo = atom if c == 0 else distorted(atom, rng, args.sigma)
+            geos.append(geo)
             kss.append(KS(Molecule.from_xyz(geo, args.basis), PBE(),
                           grid=becke(chunk=None)))
             names.append(name)
     jax.block_until_ready([ks.S for ks in kss])
     build_s = time.perf_counter() - t0
     n = len(kss)
+    # the builds again, warm (every shape compiled): what a dataset run pays
+    # per molecule once its molecule types have been seen
+    t0 = time.perf_counter()
+    rebuilt = [KS(Molecule.from_xyz(geo, args.basis), PBE(),
+                  grid=becke(chunk=None)) for geo in geos]
+    jax.block_until_ready([ks.S for ks in rebuilt])
+    build_warm_s = time.perf_counter() - t0
+    del rebuilt
 
     def host_gib():
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20
@@ -104,8 +113,8 @@ def main():
         gc.collect()
 
     release()
-    print(f"built {n} systems in {build_s:.1f} s, host peak {host_gib():.1f} "
-          f"GiB", flush=True)
+    print(f"built {n} systems in {build_s:.1f} s (warm rebuild "
+          f"{build_warm_s:.2f} s), host peak {host_gib():.1f} GiB", flush=True)
 
     def timed(fn):
         t0 = time.perf_counter()
@@ -133,6 +142,7 @@ def main():
     de_gdm = np.max(np.abs(np.array([r.e_tot for r in r_gdm]) - e_scf))
     de_b = np.max(np.abs(r_b.e_tot - e_scf))
     row = dict(sha=git_sha(), basis=args.basis, n=n, build_s=build_s,
+               build_warm_s=build_warm_s,
                seq_scf_s=t_scf, seq_gdm_s=t_gdm, batched_s=t_b,
                cold_seq_scf_s=cold_scf, cold_seq_gdm_s=cold_gdm,
                cold_batched_s=cold_batch,
@@ -149,6 +159,8 @@ def main():
         print(f"  {label:15s} warm {t:7.2f} s  ({n / t:7.1f} mol/s)  "
               f"first pass {cold:7.2f} s  converged {conv}/{n}")
     print(f"  max |E - E_scf|: gdm {de_gdm:.1e}, batched {de_b:.1e}")
+    print(f"  warm build + solve: scf {(build_warm_s + t_scf) / n * 1e3:.1f} "
+          f"ms/mol, batched gdm {(build_warm_s + t_b) / n * 1e3:.1f} ms/mol")
     if args.out:
         with open(args.out, "a") as fh:
             fh.write(json.dumps(row) + "\n")

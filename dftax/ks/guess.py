@@ -543,10 +543,12 @@ class SAPGuess(eqx.Module):
     exps: Float[Array, "natom kmax"]
     coefs: Float[Array, "natom kmax"]
     symbols: tuple[str, ...] = eqx.field(static=True)
-    n_radial: int = eqx.field(static=True)
-    lebedev: int = eqx.field(static=True)
+    n_radial: int | str = eqx.field(static=True)
+    lebedev: int | str = eqx.field(static=True)
     prune: str | None = eqx.field(static=True)
     r_max: float | None = eqx.field(static=True)
+    radial: str = eqx.field(static=True)
+    radii_adjust: str | None = eqx.field(static=True)
 
 
 def _superposition_density(symbols, basis, atom_coords, block_fn):
@@ -603,7 +605,8 @@ def _resolve_guess(spec, symbols, basis, atom_coords):
         return SAPGuess(
             exps=jnp.asarray(exps), coefs=jnp.asarray(coefs),
             symbols=tuple(symbols), n_radial=g.n_radial, lebedev=g.lebedev,
-            prune=g.prune, r_max=g.r_max,
+            prune=g.prune, r_max=g.r_max, radial=g.radial,
+            radii_adjust=g.radii_adjust,
         )
     raise TypeError(f"unknown guess spec: {spec!r}")
 
@@ -640,6 +643,7 @@ def _initial_density(resolved, ks, X):
             list(resolved.symbols), ks.atom_coords,
             resolved.n_radial, resolved.lebedev,
             resolved.prune, resolved.r_max,
+            resolved.radial, resolved.radii_adjust,
         )
         V = _sap_matrix(
             ks.basis, ks.atom_coords, resolved.exps, resolved.coefs, gc, gw

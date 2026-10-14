@@ -136,7 +136,7 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
     xc_chunk = _resolve_chunk(
         grid.chunk,
         becke_grid_size(symbols, grid.n_radial, grid.lebedev, grid.prune,
-                        grid.r_max),
+                        grid.r_max, grid.radial),
         nao_final,
     )
 
@@ -156,7 +156,7 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
             spec = df(aux_b, chunk=df_chunk)
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune,
-            grid.r_max,
+            grid.r_max, grid.radial, grid.radii_adjust,
         )
         ks = KS(
             System(basis=basis, coords=coords, charges=charges, nelec=nelec,

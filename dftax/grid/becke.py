@@ -1,8 +1,9 @@
-"""Becke radial quadrature, Bragg-Slater radii, and fuzzy-Voronoi partition.
+"""Radial quadratures, Bragg-Slater radii, and the fuzzy-Voronoi partition.
 
-The radial scheme and Bragg radii are coordinate-independent constants; the
-fuzzy-Voronoi partition is written in JAX so it is differentiable w.r.t. nuclear
-coordinates (needed for analytic forces)."""
+Two radial schemes (Becke's and Treutler-Ahlrichs' M4) and the atomic radii
+are coordinate-independent constants; the fuzzy-Voronoi partition is written
+in JAX so it is differentiable w.r.t. nuclear coordinates (needed for analytic
+forces)."""
 
 from __future__ import annotations
 
@@ -50,6 +51,36 @@ def bragg_radius(Z: int) -> float:
     return float(BRAGG_BOHR[Z])
 
 
+# Treutler-Ahlrichs radial size parameter xi (Bohr), indexed by Z (index 0 is
+# a placeholder "ghost"). H-Kr from Treutler & Ahlrichs, JCP 102, 346 (1995);
+# Rb-Xe from Psi4. The same table as PySCF's ``radi._treutler_ahlrichs_xi``.
+TREUTLER_XI = np.array(
+    [
+        1.0,
+        0.8, 0.9,
+        1.8, 1.4, 1.3, 1.1, 0.9, 0.9, 0.9, 0.9,
+        1.4, 1.3, 1.3, 1.2, 1.1, 1.0, 1.0, 1.0,
+        1.5, 1.4,
+        1.3, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.1, 1.1, 1.1,
+        1.1, 1.0, 0.9, 0.9, 0.9, 0.9,
+        2.0, 1.7,
+        1.5, 1.5, 1.35, 1.35, 1.25, 1.2, 1.25, 1.3, 1.5, 1.5,
+        1.3, 1.2, 1.2, 1.15, 1.15, 1.15,
+    ],
+    dtype=np.float64,
+)
+
+
+def treutler_xi(Z: int) -> float:
+    """Treutler-Ahlrichs radial size parameter (Bohr) for atomic number ``Z``."""
+    if not 0 < Z < len(TREUTLER_XI):
+        raise ValueError(
+            f"Treutler xi is tabulated up to Xe (Z={len(TREUTLER_XI) - 1}); "
+            f"got Z={Z}."
+        )
+    return float(TREUTLER_XI[Z])
+
+
 def becke_radial(n: int, scale: float) -> tuple[np.ndarray, np.ndarray]:
     """Becke radial quadrature for ``∫₀^∞ f(r) r² dr ≈ Σ w_i f(r_i)``.
 
@@ -68,27 +99,75 @@ def becke_radial(n: int, scale: float) -> tuple[np.ndarray, np.ndarray]:
     return r, w
 
 
-def becke_partition(points, coords, Zs):
+def treutler_radial(n: int, xi: float) -> tuple[np.ndarray, np.ndarray]:
+    """Treutler-Ahlrichs M4 radial quadrature for ``∫₀^∞ f(r) r² dr``.
+
+    The same second-kind Gauss-Chebyshev nodes as :func:`becke_radial`, mapped
+    by ``r = (xi/ln 2) (1+x)^0.6 ln(2/(1-x))`` (mapping M4 of JCP 102, 346
+    (1995), with alpha = 0.6). It puts fewer points in the far tail than
+    Becke's mapping, so a coarse grid spends more of them where the density is.
+
+    Args:
+        n: number of radial points.
+        xi: radial size parameter (Bohr), :func:`treutler_xi` per element.
+    """
+    i = np.arange(1, n + 1)
+    theta = i * np.pi / (n + 1)
+    x = np.cos(theta)
+    c = xi / np.log(2.0)
+    log_term = np.log((1.0 - x) / 2.0)
+    r = -c * (1.0 + x) ** 0.6 * log_term
+    drdx = c * (1.0 + x) ** 0.6 * (-0.6 / (1.0 + x) * log_term + 1.0 / (1.0 - x))
+    w = (np.pi / (n + 1)) * np.sin(theta) * r**2 * drdx
+    return r, w
+
+
+def _size_adjustment(Zs, radii_adjust: str | None) -> np.ndarray:
+    """Heteronuclear cell-size parameters ``a_AB`` (antisymmetric, natom²).
+
+    Becke 1988, App. A: ``a = u / (u² - 1)`` with ``u = (chi-1)/(chi+1)``.
+    ``"becke"`` takes ``chi`` as the Bragg-radius ratio and bounds ``|a|`` by
+    0.45; ``"treutler"`` takes the square root of that ratio (JCP 102, 346)
+    and bounds ``|a|`` by 1/2, as PySCF does; ``None`` leaves the cells
+    unadjusted.
+    """
+    n_atom = len(Zs)
+    if radii_adjust is None:
+        return np.zeros((n_atom, n_atom))
+    bragg = np.asarray([bragg_radius(Z) for Z in Zs])
+    chi = bragg[:, None] / bragg[None, :]
+    if radii_adjust == "becke":
+        bound = 0.45
+    elif radii_adjust == "treutler":
+        chi = np.sqrt(chi)
+        bound = 0.5
+    else:
+        raise ValueError(
+            f"unknown radii_adjust {radii_adjust!r}; use 'becke', 'treutler' or None."
+        )
+    u = (chi - 1.0) / (chi + 1.0)
+    return np.clip(u / (u * u - 1.0), -bound, bound)
+
+
+def becke_partition(points, coords, Zs, radii_adjust: str | None = "becke"):
     """Unnormalized Becke cell functions ``P_A(point)``, shape (n_grid, n_atom).
 
     Vectorized JAX (differentiable w.r.t. ``coords``); includes the heteronuclear
-    Bragg-radii size adjustment (Becke 1988, App. A). Points are processed in
-    budget-derived chunks so the per-point ``(chunk, A, B)`` transient stays
-    bounded for large molecules (checkpointed, so the backward pass used by the
-    forces rematerializes each chunk instead of storing them all).
+    size adjustment selected by ``radii_adjust`` (see :func:`_size_adjustment`).
+    Points are processed in budget-derived chunks so the per-point
+    ``(chunk, A, B)`` transient stays bounded for large molecules
+    (checkpointed, so the backward pass used by the forces rematerializes each
+    chunk instead of storing them all).
     """
     coords = jnp.asarray(coords)
     n_atom = coords.shape[0]
-    bragg = jnp.asarray([bragg_radius(Z) for Z in Zs])
 
     # Pair quantities, computed once (natom²).
     dAB = coords[:, None, :] - coords[None, :, :]
     # +eye makes the diagonal sqrt(1) with a finite (zero) gradient; the
     # diagonal entries are masked out of the product below.
     RAB = jnp.sqrt(jnp.sum(dAB * dAB, axis=2) + jnp.eye(n_atom))
-    chi = bragg[:, None] / bragg[None, :]
-    u = (chi - 1.0) / (chi + 1.0)
-    a = jnp.clip(u / (u * u - 1.0), -0.45, 0.45)
+    a = jnp.asarray(_size_adjustment(Zs, radii_adjust))
     eye = jnp.eye(n_atom, dtype=bool)
 
     def cell(p):

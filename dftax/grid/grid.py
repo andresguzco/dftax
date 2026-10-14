@@ -13,6 +13,11 @@ order (~3x fewer points at unchanged chemical accuracy). Pruning is
 constants, never on the coordinates, so grid shapes are static under
 ``jit``/``vmap`` (the batched solver and the forces rebuild the grid with
 traced coordinates).
+
+The radial mapping (Becke or Treutler-Ahlrichs M4), the cell-size adjustment
+of the partition, and the per-element shell counts are spec choices; with
+``radial="treutler", radii_adjust="treutler", n_radial="pyscf",
+lebedev="pyscf"`` the grid is PySCF's default (level 3) ``Grids``.
 """
 
 from __future__ import annotations
@@ -26,7 +31,9 @@ import jax.numpy as jnp
 
 from dftax.system.molecule import symbol_to_Z
 from dftax.grid.lebedev import lebedev_grid
-from dftax.grid.becke import becke_radial, becke_partition, bragg_radius
+from dftax.grid.becke import (
+    becke_partition, becke_radial, bragg_radius, treutler_radial, treutler_xi,
+)
 
 
 # Atom count from which screen="auto" switches per-block screening on. Below
@@ -39,8 +46,10 @@ SCREEN_AUTO_CUTOFF = 1e-10
 class Becke:
     """Native Becke grid spec (see :func:`becke`)."""
 
-    n_radial: int = 75
-    lebedev: int = 302
+    n_radial: int | str = 75
+    lebedev: int | str = 302
+    radial: str = "becke"
+    radii_adjust: str | None = "becke"
     chunk: int | str | None = "auto"
     prune: str | None = "nwchem"
     r_max: float | None = 45.0
@@ -60,9 +69,11 @@ class Points:
 
 
 def becke(
-    n_radial: int = 75,
-    lebedev: int = 302,
+    n_radial: int | str = 75,
+    lebedev: int | str = 302,
     *,
+    radial: str = "becke",
+    radii_adjust: str | None = "becke",
     chunk: int | str | None = "auto",
     prune: str | None = "nwchem",
     r_max: float | None = 45.0,
@@ -75,11 +86,23 @@ def becke(
     angular grids pruned per radial region (the dftax default quadrature).
 
     Args:
-        n_radial: Becke-mapped Chebyshev radial shells per atom.
+        n_radial: Chebyshev radial shells per atom: an int for every element,
+            or ``"pyscf"`` for PySCF's level-3 count per period (50 for H-He,
+            75 for Li-Ne, 80 for Na-Ar, 90 for K-Kr, 95 for Rb-Xe).
         lebedev: maximum Lebedev angular points per shell (a vendored order;
-            see :func:`~dftax.grid.lebedev.available_lebedev`). With pruning
-            this is the bonding-region order; core and tail shells use coarser
-            grids.
+            see :func:`~dftax.grid.lebedev.available_lebedev`), or ``"pyscf"``
+            for PySCF's level-3 order per period (302 through Ne, 434 beyond).
+            With pruning this is the bonding-region order; core and tail
+            shells use coarser grids.
+        radial: radial mapping of the Chebyshev nodes: ``"becke"`` (default;
+            ``r = R (1+x)/(1-x)`` with half the Bragg radius as ``R``) or
+            ``"treutler"`` (Treutler-Ahlrichs M4 with their per-element
+            ``xi``, PySCF's default). Treutler's mapping spends fewer shells
+            in the far tail, so it converges faster in ``n_radial``.
+        radii_adjust: heteronuclear cell-size adjustment of the Becke
+            partition: ``"becke"`` (default; Bragg-radius ratio, Becke 1988),
+            ``"treutler"`` (square root of that ratio, PySCF's default) or
+            ``None`` for unadjusted cells.
         chunk: XC-integral streaming. ``"auto"`` (default) materializes the AO
             grid values when they fit a memory budget and streams over grid
             chunks otherwise; ``None`` forces the materialized AO grid; an int
@@ -108,7 +131,8 @@ def becke(
             buckets waste less padding and cost more compilations; padding
             everything to a single shape recovers nothing.
     """
-    return Becke(n_radial=n_radial, lebedev=lebedev, chunk=chunk,
+    return Becke(n_radial=n_radial, lebedev=lebedev, radial=radial,
+                 radii_adjust=radii_adjust, chunk=chunk,
                  prune=prune, r_max=r_max, cutoff=cutoff, screen=screen,
                  screen_block=screen_block, screen_buckets=screen_buckets)
 
@@ -162,30 +186,58 @@ def _nwchem_orders(Z: int, rads: np.ndarray, n_ang: int) -> np.ndarray:
         idx = int(hit[0])
         leb_l = np.array([1, 3, idx - 1, idx, idx - 1])
     row = 0 if Z <= 2 else (1 if Z <= 10 else 2)
-    # Note: for odd n_radial the Chebyshev node at x = 0 sits *exactly* on a
-    # region boundary (r = scale, i.e. r/R = 1 for H, 0.5 otherwise) and float
-    # rounding decides its region. Either side is a valid quadrature (the two
-    # orders bracket the same accuracy); the comparison below is kept
-    # verbatim-PySCF rather than special-cased.
+    # Note: for odd n_radial the Becke-mapped Chebyshev node at x = 0 sits
+    # *exactly* on a region boundary (r = scale, i.e. r/R = 1 for H, 0.5
+    # otherwise) and float rounding decides its region. Either side is a
+    # valid quadrature (the two orders bracket the same accuracy); the
+    # comparison below is kept verbatim-PySCF rather than special-cased.
     place = (rads[:, None] / bragg_radius(Z) > _NWCHEM_ALPHAS[row]).sum(axis=1)
     return ladder[leb_l[place]]
 
 
+# PySCF's level-3 grid per period (``gen_grid.RAD_GRIDS[3]`` and
+# ``ANG_ORDER[3]``): H-He, Li-Ne, Na-Ar, K-Kr, Rb-Xe.
+_PYSCF_PERIOD_ENDS = np.array((2, 10, 18, 36))
+_PYSCF_N_RADIAL = (50, 75, 80, 90, 95)
+_PYSCF_LEBEDEV = (302, 302, 434, 434, 434)
+
+
+def _element_counts(Z: int, n_radial: int | str, n_ang: int | str) -> tuple[int, int]:
+    """Resolve the spec's ``(n_radial, lebedev)`` for element ``Z``."""
+    period = int((Z > _PYSCF_PERIOD_ENDS).sum())
+    if n_radial == "pyscf":
+        n_radial = _PYSCF_N_RADIAL[period]
+    elif isinstance(n_radial, str):
+        raise ValueError(f"unknown n_radial {n_radial!r}; use an int or 'pyscf'.")
+    if n_ang == "pyscf":
+        n_ang = _PYSCF_LEBEDEV[period]
+    elif isinstance(n_ang, str):
+        raise ValueError(f"unknown lebedev {n_ang!r}; use an int or 'pyscf'.")
+    return int(n_radial), int(n_ang)
+
+
 @lru_cache(maxsize=None)
 def _atom_shell_blocks(
-    Z: int, n_radial: int, n_ang: int, prune: str | None, r_max: float | None
+    Z: int, n_radial: int | str, n_ang: int | str, prune: str | None,
+    r_max: float | None, radial: str = "becke",
 ) -> tuple[tuple[np.ndarray, np.ndarray, int], ...]:
     """Per-element radial structure: ``(radii, radial_weights, order)`` blocks.
 
     Pure numpy constants (geometry-independent, cached per element/spec):
-    radial nodes from :func:`becke_radial`, tail shells beyond ``r_max``
-    dropped, an angular order per shell from the prune rule, and consecutive
-    shells of equal order grouped into blocks so the assembly stays a few
-    dense outer products per atom.
+    radial nodes from :func:`becke_radial` or :func:`treutler_radial`, tail
+    shells beyond ``r_max`` dropped, an angular order per shell from the
+    prune rule, and consecutive shells of equal order grouped into blocks so
+    the assembly stays a few dense outer products per atom.
     """
-    # Becke uses half the Bragg radius as the radial scale (H excepted).
-    scale = bragg_radius(Z) if Z == 1 else 0.5 * bragg_radius(Z)
-    r, wr = becke_radial(n_radial, scale)
+    n_radial, n_ang = _element_counts(Z, n_radial, n_ang)
+    if radial == "becke":
+        # Becke uses half the Bragg radius as the radial scale (H excepted).
+        scale = bragg_radius(Z) if Z == 1 else 0.5 * bragg_radius(Z)
+        r, wr = becke_radial(n_radial, scale)
+    elif radial == "treutler":
+        r, wr = treutler_radial(n_radial, treutler_xi(Z))
+    else:
+        raise ValueError(f"unknown radial scheme {radial!r}; use 'becke' or 'treutler'.")
     if r_max is not None:
         keep = r <= r_max
         r, wr = r[keep], wr[keep]
@@ -209,10 +261,11 @@ def _atom_shell_blocks(
 
 def becke_grid_size(
     symbols: list[str],
-    n_radial: int = 75,
-    lebedev: int = 302,
+    n_radial: int | str = 75,
+    lebedev: int | str = 302,
     prune: str | None = "nwchem",
     r_max: float | None = 45.0,
+    radial: str = "becke",
 ) -> int:
     """Number of grid points :func:`becke_grid` will emit (static per spec).
 
@@ -225,7 +278,7 @@ def becke_grid_size(
         for s in symbols
         for r, _, order in _atom_shell_blocks(
             symbol_to_Z(s), n_radial, lebedev, prune,
-            None if r_max is None else float(r_max),
+            None if r_max is None else float(r_max), radial,
         )
     )
 
@@ -234,16 +287,19 @@ def becke_grid_size(
 def becke_grid(
     symbols: list[str],
     coords_bohr,
-    n_radial: int = 75,
-    lebedev: int = 302,
+    n_radial: int | str = 75,
+    lebedev: int | str = 302,
     prune: str | None = "nwchem",
     r_max: float | None = 45.0,
+    radial: str = "becke",
+    radii_adjust: str | None = "becke",
 ):
     """Build a molecular quadrature grid (points in Bohr, weights).
 
-    Each atom contributes ``n_radial`` Becke radial shells times a Lebedev
-    angular grid whose order is pruned per radial region (see :func:`becke`);
-    the per-atom grids are merged with Becke's fuzzy-Voronoi partition.
+    Each atom contributes ``n_radial`` radial shells (mapped per ``radial``)
+    times a Lebedev angular grid whose order is pruned per radial region (see
+    :func:`becke`); the per-atom grids are merged with Becke's fuzzy-Voronoi
+    partition, its cells sized per ``radii_adjust``.
 
     Returns ``(coords, weights)`` as JAX arrays of shape ``(n_grid, 3)`` and
     ``(n_grid,)``, differentiable w.r.t. ``coords_bohr``. Shapes depend only
@@ -264,7 +320,9 @@ def becke_grid(
     for A, Z in enumerate(Zs):
         pts_A: list = []
         w_A: list = []
-        for r, wr, order in _atom_shell_blocks(Z, n_radial, lebedev, prune, r_max):
+        for r, wr, order in _atom_shell_blocks(
+            Z, n_radial, lebedev, prune, r_max, radial
+        ):
             ang_pts, ang_w = lebedev_grid(order)         # numpy constants
             ang_pts = jnp.asarray(ang_pts)
             ang_w_full = jnp.asarray(4.0 * np.pi * ang_w)   # full surface weight
@@ -278,7 +336,7 @@ def becke_grid(
         # Fuzzy-Voronoi weights per atom block: the partition transient is
         # bounded by the chunked evaluation inside becke_partition, and doing
         # it per atom block keeps this loop's live set at one atom's grid.
-        P = becke_partition(pts, coords, Zs)             # (ng_A, n_atom)
+        P = becke_partition(pts, coords, Zs, radii_adjust)   # (ng_A, n_atom)
         w_blocks.append(raw_w * P[:, A] / P.sum(axis=1))
         points_blocks.append(pts)
 

@@ -58,4 +58,4 @@ with independent per-device convergence.
 
 Finite-difference Hessians/spectra re-solve at every displacement; the
 benchmark-validated `grid=becke(60, 194)` is usually enough and much cheaper
-than the 75×302 default.
+than the default (75×302 on C-F, 50×302 on H).

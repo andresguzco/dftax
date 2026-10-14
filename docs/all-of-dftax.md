@@ -50,7 +50,9 @@ builder:
   modules; hybrids simply carry exact-exchange coefficients (range-separated
   ones add `omega`, and the engine builds the attenuated integrals on every
   DF backend).
-- **grid**: `becke(n_radial, lebedev, chunk=...)` (default 75×302), an explicit
+- **grid**: `becke(n_radial, lebedev, chunk=...)` (default: PySCF's scheme,
+  Treutler-Ahlrichs radial shells at its level-3 counts, 50 for H and 75 for
+  Li-Ne, times 302 Lebedev points, NWChem-pruned), an explicit
   `(coords, weights)` tuple, or `points(coords, weights, chunk=...)`. A `chunk`
   streams the XC integral (O(chunk·nao) memory).
 - **coulomb**: `df(auxbasis, chunk=..., screen=..., spherical=...)` (the

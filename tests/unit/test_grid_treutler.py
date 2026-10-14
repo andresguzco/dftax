@@ -132,6 +132,16 @@ def test_grid_matches_pyscf_default(name, prune):
 
 
 @pytest.mark.pyscf
+@pytest.mark.parametrize("name", ["water", "methane"])
+def test_default_grid_is_pyscf_default(name):
+    """Through Ne, PySCF's level-3 angular order is the default 302, so the
+    default spec is PySCF's default grid."""
+    mol = Molecule.from_xyz(MOLECULES[name], "sto-3g")
+    syms, X = mol.symbols, np.asarray(mol.atom_coords())
+    _assert_same_grid(becke_grid(syms, X), _pyscf_grid(syms, X, "nwchem"))
+
+
+@pytest.mark.pyscf
 @pytest.mark.parametrize("prune", [None, "nwchem"])
 def test_grid_matches_pyscf_uniform_counts(prune):
     """An explicit ``(75, 302)`` for every element (PySCF's ``atom_grid``)."""

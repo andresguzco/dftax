@@ -15,9 +15,10 @@ constants, never on the coordinates, so grid shapes are static under
 traced coordinates).
 
 The radial mapping (Becke or Treutler-Ahlrichs M4), the cell-size adjustment
-of the partition, and the per-element shell counts are spec choices; with
-``radial="treutler", radii_adjust="treutler", n_radial="pyscf",
-lebedev="pyscf"`` the grid is PySCF's default (level 3) ``Grids``.
+of the partition, and the per-element shell counts are spec choices. The
+default is PySCF's scheme: Treutler's mapping and cell sizes at PySCF's
+level-3 radial counts; with ``lebedev="pyscf"`` as well, the grid is PySCF's
+default ``Grids``.
 """
 
 from __future__ import annotations
@@ -46,10 +47,10 @@ SCREEN_AUTO_CUTOFF = 1e-10
 class Becke:
     """Native Becke grid spec (see :func:`becke`)."""
 
-    n_radial: int | str = 75
+    n_radial: int | str = "pyscf"
     lebedev: int | str = 302
-    radial: str = "becke"
-    radii_adjust: str | None = "becke"
+    radial: str = "treutler"
+    radii_adjust: str | None = "treutler"
     chunk: int | str | None = "auto"
     prune: str | None = "nwchem"
     r_max: float | None = 45.0
@@ -69,11 +70,11 @@ class Points:
 
 
 def becke(
-    n_radial: int | str = 75,
+    n_radial: int | str = "pyscf",
     lebedev: int | str = 302,
     *,
-    radial: str = "becke",
-    radii_adjust: str | None = "becke",
+    radial: str = "treutler",
+    radii_adjust: str | None = "treutler",
     chunk: int | str | None = "auto",
     prune: str | None = "nwchem",
     r_max: float | None = 45.0,
@@ -87,22 +88,22 @@ def becke(
 
     Args:
         n_radial: Chebyshev radial shells per atom: an int for every element,
-            or ``"pyscf"`` for PySCF's level-3 count per period (50 for H-He,
-            75 for Li-Ne, 80 for Na-Ar, 90 for K-Kr, 95 for Rb-Xe).
+            or ``"pyscf"`` (default) for PySCF's level-3 count per period (50
+            for H-He, 75 for Li-Ne, 80 for Na-Ar, 90 for K-Kr, 95 for Rb-Xe).
         lebedev: maximum Lebedev angular points per shell (a vendored order;
             see :func:`~dftax.grid.lebedev.available_lebedev`), or ``"pyscf"``
             for PySCF's level-3 order per period (302 through Ne, 434 beyond).
             With pruning this is the bonding-region order; core and tail
             shells use coarser grids.
-        radial: radial mapping of the Chebyshev nodes: ``"becke"`` (default;
-            ``r = R (1+x)/(1-x)`` with half the Bragg radius as ``R``) or
-            ``"treutler"`` (Treutler-Ahlrichs M4 with their per-element
-            ``xi``, PySCF's default). Treutler's mapping spends fewer shells
-            in the far tail, so it converges faster in ``n_radial``.
+        radial: radial mapping of the Chebyshev nodes: ``"treutler"``
+            (default; Treutler-Ahlrichs M4 with their per-element ``xi``, as
+            in PySCF) or ``"becke"`` (``r = R (1+x)/(1-x)`` with half the
+            Bragg radius as ``R``). Treutler's mapping spends fewer shells in
+            the far tail, so it converges faster in ``n_radial``.
         radii_adjust: heteronuclear cell-size adjustment of the Becke
-            partition: ``"becke"`` (default; Bragg-radius ratio, Becke 1988),
-            ``"treutler"`` (square root of that ratio, PySCF's default) or
-            ``None`` for unadjusted cells.
+            partition: ``"treutler"`` (default; square root of the
+            Bragg-radius ratio, as in PySCF), ``"becke"`` (the ratio itself,
+            Becke 1988) or ``None`` for unadjusted cells.
         chunk: XC-integral streaming. ``"auto"`` (default) materializes the AO
             grid values when they fit a memory budget and streams over grid
             chunks otherwise; ``None`` forces the materialized AO grid; an int
@@ -111,9 +112,10 @@ def becke(
         prune: angular pruning scheme: ``"nwchem"`` (default; the standard
             NWChem/PySCF region rule) or ``None`` for the full
             ``n_radial x lebedev`` product grid (convergence studies).
-        r_max: drop radial shells beyond this radius (Bohr). The Chebyshev
-            mapping otherwise emits tail points at r ~ 10³ Bohr where every
-            basis function underflows. ``None`` keeps all shells.
+        r_max: drop radial shells beyond this radius (Bohr). Becke's mapping
+            otherwise emits tail points at r ~ 10³ Bohr where every basis
+            function underflows; Treutler's ends inside it. ``None`` keeps all
+            shells.
         cutoff: drop grid points whose Becke weight is below this (applied
             only on the eager build path, i.e. the KS constructor; traced
             rebuilds keep static shapes). ``None`` keeps all points.
@@ -219,7 +221,7 @@ def _element_counts(Z: int, n_radial: int | str, n_ang: int | str) -> tuple[int,
 @lru_cache(maxsize=None)
 def _atom_shell_blocks(
     Z: int, n_radial: int | str, n_ang: int | str, prune: str | None,
-    r_max: float | None, radial: str = "becke",
+    r_max: float | None, radial: str,
 ) -> tuple[tuple[np.ndarray, np.ndarray, int], ...]:
     """Per-element radial structure: ``(radii, radial_weights, order)`` blocks.
 
@@ -261,11 +263,11 @@ def _atom_shell_blocks(
 
 def becke_grid_size(
     symbols: list[str],
-    n_radial: int | str = 75,
+    n_radial: int | str = "pyscf",
     lebedev: int | str = 302,
     prune: str | None = "nwchem",
     r_max: float | None = 45.0,
-    radial: str = "becke",
+    radial: str = "treutler",
 ) -> int:
     """Number of grid points :func:`becke_grid` will emit (static per spec).
 
@@ -287,12 +289,12 @@ def becke_grid_size(
 def becke_grid(
     symbols: list[str],
     coords_bohr,
-    n_radial: int | str = 75,
+    n_radial: int | str = "pyscf",
     lebedev: int | str = 302,
     prune: str | None = "nwchem",
     r_max: float | None = 45.0,
-    radial: str = "becke",
-    radii_adjust: str | None = "becke",
+    radial: str = "treutler",
+    radii_adjust: str | None = "treutler",
 ):
     """Build a molecular quadrature grid (points in Bohr, weights).
 

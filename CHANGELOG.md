@@ -4,6 +4,44 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **The default grid is PySCF's scheme.** `becke()` now maps its radial
+  shells with Treutler-Ahlrichs M4 (`radial="treutler"`), sizes the Becke
+  cells with Treutler's adjustment (`radii_adjust="treutler"`) and takes
+  PySCF's level-3 shell counts per element (`n_radial="pyscf"`: 50 for H, 75
+  for Li-Ne, 80 for Na-Ar); still 302 Lebedev points, NWChem-pruned. Through
+  Ne this is PySCF's default `Grids` point for point, up to the
+  negligible-weight points the build drops. On bicyclo[2.2.2]octane /
+  def2-svp / PBE the default grid's error against the converged energy
+  (Treutler cells at (200, 770)) goes from 8.7e-5 Ha to 1.1e-5, with 8% fewer
+  points (225k against 245k after the weight cutoff); at (75, 302) unpruned
+  it goes from 9.3e-5 to 9.5e-6. Energies on the default grid move by about
+  that much (7.6e-5 there). The previous default is `becke(75, 302,
+  radial="becke", radii_adjust="becke")`.
+- **Bragg radii at full precision.** The table held PySCF's values rounded to
+  eight decimals. The old grid moves by ~1e-13 in the parity gate's
+  exact-ERI energies, within its tolerances.
+
+### Added
+- **Grid choices** on `becke(...)` and `becke_grid(...)`: `radial`
+  (`"treutler"` or `"becke"`), `radii_adjust` (`"treutler"`, `"becke"` or
+  `None`), and `"pyscf"` as a value of `n_radial` and `lebedev` for PySCF's
+  level-3 counts per period. With `lebedev="pyscf"` the grid reproduces
+  PySCF's default `Grids`, pruned or not (checked on water, methane, ammonia
+  and H2S: points to 4e-15 Bohr, weights to 1e-13).
+- **`scripts/perf/grid_scheme_bench.py`**: each grid scheme's error against its
+  own converged energy, and point counts per spec.
+
+### Notes
+- Becke's cell-size adjustment converges slowly, and not monotonically, in
+  the angular order: on bicyclo[2.2.2]octane its (200, 770) energy is ~7e-6
+  below the limit that both cell schemes reach at 974 and 1202 points, while
+  Treutler's is within 3e-7 of it at 770 and both radial mappings are
+  converged at 200 shells. Against that limit the old (75, 302) error is
+  9.3e-5 rather than the 8.6e-5 it showed against its own (200, 770).
+
 ## [0.8.1] - 2026-09-21
 
 ### Changed

@@ -202,7 +202,10 @@ class TestDensityFittingForces:
                     coulomb=df(self.AUX, chunk=None, spherical=False))
         Fs = forces(mol, xc, Zs, grid=becke(NR, LEB),
                     coulomb=df(self.AUX, chunk=4))
-        assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-9
+        # 1e-8, as for the hybrid below: the jkfit metric's pseudo-inverse
+        # amplifies rounding by ~1e7, and on an A100 this gap moves between
+        # 1e-11 and 4e-9 with the radial shell count alone.
+        assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-8
 
     def test_streamed_df_forces_hybrid(self):
         """Hybrid streamed forces route exchange through the frozen-orbital
@@ -296,7 +299,8 @@ class TestDensityFittingForces:
         monkeypatch.setattr(energy_mod, "_DF_BUDGET", 0)
         F_auto = forces(mol, xc, Zs, grid=becke(NR, LEB), coulomb=df(self.AUX))
         assert calls                                      # streamed path taken
-        assert float(jnp.max(jnp.abs(F_auto - F_mat))) < 1e-9
+        # 1e-8: the jkfit pseudo-inverse rounding band, as above.
+        assert float(jnp.max(jnp.abs(F_auto - F_mat))) < 1e-8
 
     def test_streamed_screened_forces_match_dense(self):
         """Plan-level Schwarz screening composes with streamed forces: the

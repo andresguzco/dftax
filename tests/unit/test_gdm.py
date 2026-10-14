@@ -65,24 +65,28 @@ def _parity(ks, **kw):
 
 
 @pytest.mark.float64
+@pytest.mark.slow
 def test_gdm_matches_scf_closed_shell():
     mol = Molecule.from_xyz(WATER, "sto-3g")
     _parity(KS(mol, PBE(), grid=becke(35, 50)))
 
 
 @pytest.mark.float64
+@pytest.mark.slow
 def test_gdm_matches_scf_hybrid():
     mol = Molecule.from_xyz(WATER, "6-31g")
     _parity(KS(mol, B3LYP(), grid=becke(35, 50)))
 
 
 @pytest.mark.float64
+@pytest.mark.slow
 def test_gdm_matches_scf_open_shell():
     mol = Molecule.from_xyz("O 0 0 0; H 0 0 0.97", "6-31g", spin=1)
     _parity(KS(mol, PBE(), grid=becke(35, 50), spin=1))
 
 
 @pytest.mark.float64
+@pytest.mark.slow
 def test_gdm_stretched_bond():
     """The cold-start stretched N2 the Newton tests use."""
     mol = Molecule.from_xyz("N 0 0 0; N 0 0 2.0", "sto-3g")

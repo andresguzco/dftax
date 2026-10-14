@@ -61,12 +61,14 @@ _GUESS, _FRESH, _TRIAL = 0, 1, 2
 def _cos_sinc(X, n=N_SERIES):
     """``cos(sqrt(X))`` and ``sinc(sqrt(X))`` for symmetric PSD ``X``, by
     Horner on the two power series in ``-X``."""
+    # 1/(2k)! as python floats: the factorials overflow int64 past k = 10
     eye = jnp.eye(X.shape[0], dtype=X.dtype)
-    c = eye / math.factorial(2 * n)
-    s = eye / math.factorial(2 * n + 1)
+    inv = [1.0 / math.factorial(j) for j in range(2 * n + 2)]
+    c = eye * inv[2 * n]
+    s = eye * inv[2 * n + 1]
     for k in range(n - 1, -1, -1):
-        c = eye / math.factorial(2 * k) - X @ c
-        s = eye / math.factorial(2 * k + 1) - X @ s
+        c = eye * inv[2 * k] - X @ c
+        s = eye * inv[2 * k + 1] - X @ s
     return c, s
 
 

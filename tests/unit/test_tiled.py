@@ -73,7 +73,6 @@ def test_tiled_geometry_gradient_matches_bucketed():
 
 
 @pytest.mark.float64
-@pytest.mark.slow
 def test_shared_classes_ask_for_identical_kernels():
     """The whole point: a class two molecules share is one compiled program.
 

@@ -17,7 +17,7 @@ import jax.numpy as jnp
 
 from dftax import KS, Molecule, becke, scf
 from dftax.energy.xc import B3LYP, PBE
-from dftax.ks.gdm import _occupied, gdm
+from dftax.ks.gdm import _occupied, gdm, rotate_full
 
 WATER = "O 0 0 0; H 0.76 0 0.50; H 0.76 0 -0.50"
 
@@ -38,6 +38,25 @@ def test_rotation_is_the_occupied_block_of_expm():
     got = _occupied(jnp.asarray(C[:, :no]), jnp.asarray(C[:, no:]),
                     jnp.asarray(k))
     np.testing.assert_allclose(got, ref, rtol=0, atol=1e-13)
+
+
+@pytest.mark.float64
+def test_full_rotation_is_expm():
+    """Both blocks, the virtual one through the push-through identities, so
+    newton can rotate without an nmo x nmo matrix exponential."""
+    rng = np.random.default_rng(2)
+    nao, no, nv = 10, 3, 7
+    C = np.linalg.qr(rng.standard_normal((nao, no + nv)))[0]
+    k = rng.standard_normal((no, nv))
+    k *= 1.5 / np.linalg.norm(k)
+    A = np.zeros((no + nv, no + nv))
+    A[:no, no:] = k
+    A[no:, :no] = -k.T
+    ref = C @ scipy.linalg.expm(A)
+    Co, Cv = rotate_full(jnp.asarray(C[:, :no]), jnp.asarray(C[:, no:]),
+                         jnp.asarray(k))
+    np.testing.assert_allclose(Co, ref[:, :no], rtol=0, atol=1e-13)
+    np.testing.assert_allclose(Cv, ref[:, no:], rtol=0, atol=1e-13)
 
 
 @pytest.mark.float64

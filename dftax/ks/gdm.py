@@ -50,7 +50,7 @@ from dftax.ks.energy import KS
 from dftax.ks.guess import GuessSpec, density_from_guess
 from dftax.ks.scf import KSResult, canonical_orthonormalizer
 
-# Terms of the cos/sinc series. ||kappa kappa^T|| stays below
+# Terms of the rotation series (_series). ||kappa kappa^T|| stays below
 # KAPPA_RESET**2 = 4 between resets, where 16 terms leave 4**16/32! ~ 2e-26.
 N_SERIES = 16
 KAPPA_RESET = 2.0
@@ -58,24 +58,42 @@ KAPPA_RESET = 2.0
 _GUESS, _FRESH, _TRIAL = 0, 1, 2
 
 
-def _cos_sinc(X, n=N_SERIES):
-    """``cos(sqrt(X))`` and ``sinc(sqrt(X))`` for symmetric PSD ``X``, by
-    Horner on the two power series in ``-X``."""
+def _series(X, n=N_SERIES):
+    """``cos(sqrt(X))``, ``sinc(sqrt(X))`` and ``(1 - cos(sqrt(X))) / X`` for
+    symmetric PSD ``X``, by Horner on their power series in ``-X``. All three
+    are entire, so all three differentiate at ``X = 0``."""
     # 1/(2k)! as python floats: the factorials overflow int64 past k = 10
     eye = jnp.eye(X.shape[0], dtype=X.dtype)
-    inv = [1.0 / math.factorial(j) for j in range(2 * n + 2)]
+    inv = [1.0 / math.factorial(j) for j in range(2 * n + 3)]
     c = eye * inv[2 * n]
     s = eye * inv[2 * n + 1]
+    g = eye * inv[2 * n + 2]
     for k in range(n - 1, -1, -1):
         c = eye * inv[2 * k] - X @ c
         s = eye * inv[2 * k + 1] - X @ s
-    return c, s
+        g = eye * inv[2 * k + 2] - X @ g
+    return c, s, g
 
 
 def _occupied(Co, Cv, kappa):
     """Occupied orbitals rotated by ``kappa`` (``nocc x nvir``)."""
-    c, s = _cos_sinc(kappa @ kappa.T)
+    c, s, _ = _series(kappa @ kappa.T)
     return Co @ c - Cv @ (kappa.T @ s)
+
+
+def rotate_full(Co, Cv, kappa):
+    """Both blocks of ``[Co Cv] exp([[0, kappa], [-kappa^T, 0]])``.
+
+    The virtual block is ``Co sinc(X) kappa + Cv (I - kappa^T g(X) kappa)``
+    with ``X = kappa kappa^T`` and ``g(X) = (1 - cos sqrt X) / X``: the
+    push-through identities turn every function of the ``nvir x nvir``
+    ``kappa^T kappa`` into one of the ``nocc x nocc`` ``X``, so the whole
+    rotation costs ``O(nao nocc nvir)`` instead of the ``O(nmo^3)`` of
+    ``expm``."""
+    c, s, g = _series(kappa @ kappa.T)
+    Co_new = Co @ c - Cv @ (kappa.T @ s)
+    Cv_new = Cv + Co @ (s @ kappa) - (Cv @ kappa.T) @ (g @ kappa)
+    return Co_new, Cv_new
 
 
 def _tdot(a, b):

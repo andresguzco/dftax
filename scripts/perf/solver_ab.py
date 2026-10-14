@@ -65,6 +65,8 @@ def main():
     ap.add_argument("--xc", nargs="*", default=["PBE"])
     ap.add_argument("--repeat", type=int, default=3)
     ap.add_argument("--max-iter", type=int, default=200)
+    ap.add_argument("--fock-route", action="store_true",
+                    help="also time gdm(orbital_xc=False)")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -84,9 +86,12 @@ def main():
             row = dict(sha=git_sha(), mol=name, basis=basis, xc=xc,
                        spin=spin, nao=int(ks.S.shape[0]))
             out = {}
-            for solver, fn in (
-                    ("scf", lambda: scf(ks, max_iter=args.max_iter)),
-                    ("gdm", lambda: gdm(ks, max_iter=args.max_iter))):
+            arms = [("scf", lambda: scf(ks, max_iter=args.max_iter)),
+                    ("gdm", lambda: gdm(ks, max_iter=args.max_iter))]
+            if args.fock_route:
+                arms.append(("gdm_fock", lambda: gdm(
+                    ks, max_iter=args.max_iter, orbital_xc=False)))
+            for solver, fn in arms:
                 res, cold, warm = solve(fn, args.repeat)
                 out[solver] = res
                 row[solver] = dict(e_tot=res.e_tot, n_iter=res.n_iter,
@@ -95,12 +100,16 @@ def main():
             de = out["gdm"].e_tot - out["scf"].e_tot
             row["de_gdm_minus_scf"] = de
             s, g = row["scf"], row["gdm"]
-            print(f"{name:12s} {xc:5s} nao {row['nao']:4d} | scf "
-                  f"{s['n_iter']:4d} it {s['warm_s']:7.3f} s "
-                  f"{'ok' if s['converged'] else 'NC'} | gdm {g['n_iter']:4d} "
-                  f"it {g['warm_s']:7.3f} s "
-                  f"{'ok' if g['converged'] else 'NC'} | dE {de:+.2e}",
-                  flush=True)
+            line = (f"{name:12s} {xc:5s} nao {row['nao']:4d} | scf "
+                    f"{s['n_iter']:4d} it {s['warm_s']:7.3f} s "
+                    f"{'ok' if s['converged'] else 'NC'} | gdm "
+                    f"{g['n_iter']:4d} it {g['warm_s']:7.3f} s "
+                    f"{'ok' if g['converged'] else 'NC'} | dE {de:+.2e}")
+            if args.fock_route:
+                f = row["gdm_fock"]
+                line += (f" | gdm_fock {f['n_iter']:4d} it {f['warm_s']:7.3f}"
+                         f" s {'ok' if f['converged'] else 'NC'}")
+            print(line, flush=True)
             if args.out:
                 with open(args.out, "a") as fh:
                     fh.write(json.dumps(row) + "\n")

@@ -188,7 +188,7 @@ def _newton_solve(ks: KS, C0, max_iter, g_tol, e_tol, cg_iters, trust0,
     def body(st):
         it, C, e_prev, radius, _ = st
         e0, gnorm, C_new, e_new = step(C, radius)
-        accept = e_new <= e0 + 1e-10 * jnp.abs(e0)        # energy noise floor
+        accept = e_new < e0
         C = jax.tree.map(lambda a, b: jnp.where(accept, b, a), C, C_new)
         radius = jnp.where(accept, jnp.minimum(2.0 * radius, 1.0),
                            0.5 * radius)
@@ -247,7 +247,7 @@ def _newton_solve_shared(ks: KS, C0, mask, max_iter, g_tol, e_tol, cg_iters,
         delta = _steihaug_cg(hvp, g, radius, cg_iters) * mask
         C_new = rotate(C, delta)
         e_new = energy_at(C_new, kappa0)
-        accept = e_new <= e0 + 1e-10 * jnp.abs(e0)        # energy noise floor
+        accept = e_new < e0
         C = jnp.where(accept, C_new, C)
         radius = jnp.where(accept, jnp.minimum(2.0 * radius, 1.0),
                            0.5 * radius)

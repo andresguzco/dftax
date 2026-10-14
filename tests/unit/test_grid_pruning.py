@@ -57,8 +57,8 @@ def test_lebedev_new_orders_match_pyscf(order):
 def test_nwchem_prune_matches_pyscf_rule():
     """Per-shell angular orders equal PySCF's nwchem_prune for the same radial
     nodes. Even n_radial: odd counts place a Chebyshev node exactly on a
-    region boundary, where either side is a valid quadrature and the two
-    libraries' last-bit radii constants may disagree."""
+    region boundary, where either side is a valid quadrature and float
+    rounding picks one."""
     from pyscf.dft import gen_grid
 
     for Z in list(range(1, 37)) + [54]:

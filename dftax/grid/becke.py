@@ -18,20 +18,23 @@ from dftax.utils.vmap import vmap as _chunked_vmap
 # block, so nothing changes there.
 _PARTITION_BUDGET = 2**24
 
-# Bragg-Slater atomic radii in Bohr, indexed by atomic number Z (index 0 is a
-# placeholder "ghost"). Standard values (as used for Becke partitioning).
-BRAGG_BOHR = np.array(
+# Bragg-Slater atomic radii (Slater, JCP 41, 3199 (1964)), the cell sizes of
+# the Becke partition. Tabulated in Angstrom, indexed by atomic number Z (index
+# 0 is a placeholder "ghost"), and converted with PySCF's Bohr radius so the
+# radii, and with them the grids, agree with PySCF's to the last bit.
+_BOHR_ANGSTROM = 0.52917721092
+BRAGG_BOHR = (1.0 / _BOHR_ANGSTROM) * np.array(
     [
-        3.77945036, 0.66140414, 2.64561657, 2.74010288, 1.98421243, 1.60626721,
-        1.32280829, 1.22832198, 1.13383567, 0.94486306, 2.83458919, 3.40150702,
-        2.83458919, 2.36215766, 2.07869874, 1.88972612, 1.88972612, 1.88972612,
-        3.40150702, 4.15739747, 3.40150702, 3.0235618, 2.64561657, 2.55113027,
-        2.64561657, 2.64561657, 2.64561657, 2.55113027, 2.55113027, 2.55113027,
-        2.55113027, 2.45664396, 2.36215766, 2.17318504, 2.17318504, 2.17318504,
-        3.59047964, 4.44085639, 3.77945225, 3.40150702, 2.92907549, 2.74010288,
-        2.74010288, 2.55113027, 2.45664396, 2.55113027, 2.64561657, 3.0235618,
-        2.92907549, 2.92907549, 2.74010288, 2.74010288, 2.64561657, 2.64561657,
-        3.96842486,
+        1.999999,
+        0.35, 1.40,
+        1.45, 1.05, 0.85, 0.70, 0.65, 0.60, 0.50, 1.50,
+        1.80, 1.50, 1.25, 1.10, 1.00, 1.00, 1.00, 1.80,
+        2.20, 1.80,
+        1.60, 1.40, 1.35, 1.40, 1.40, 1.40, 1.35, 1.35, 1.35, 1.35,
+        1.30, 1.25, 1.15, 1.15, 1.15, 1.90,
+        2.35, 2.00,
+        1.80, 1.55, 1.45, 1.45, 1.35, 1.30, 1.35, 1.40, 1.60, 1.55,
+        1.55, 1.45, 1.45, 1.40, 1.40, 2.10,
     ],
     dtype=np.float64,
 )

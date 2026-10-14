@@ -964,6 +964,52 @@ class DFCoulomb(CoulombTerm):
         return e, V
 
 
+    def energy_and_grad_orbitals(self, Cs, ws, S, nocc):
+        """``(E, ∂E/∂C_σ)`` from the occupied orbitals and their occupations.
+
+        RI-J in closed form, as in :meth:`energy_and_potential`. RI-K takes
+        the orbitals as given instead of recovering them from ``P``: each is
+        scaled by ``sqrt(w_i / w_full)`` (``w_full = 2`` closed shell, ``1``
+        per spin channel), so a fully occupied orbital enters exactly as it
+        does there and an empty one (a padded slot, see
+        :mod:`dftax.ks.batched_gdm`) not at all. That is what makes padded
+        hybrids correct, and it removes the ``nao^3`` eigendecomposition the
+        density route pays on every evaluation. The exchange derivative is
+        reverse mode through the orbital contraction, which has no
+        eigendecomposition in it.
+        """
+        nspin = len(Cs)
+        w_full = 2.0 if nspin == 1 else 1.0
+        P = jnp.stack([(C * w) @ C.T for C, w in zip(Cs, ws)])
+        Ptot = jnp.sum(P, axis=0)
+        gamma = jnp.einsum("mnP,mn->P", self.int3c, Ptot)
+        Vg = 0.5 * (self.int2c_inv @ gamma + gamma @ self.int2c_inv)
+        e = 0.5 * jnp.dot(gamma, Vg)
+        J = jnp.einsum("mnP,P->mn", self.int3c, Vg)
+        grads = [2.0 * (J @ C) * w for C, w in zip(Cs, ws)]
+
+        def exchange(cs):
+            out = 0.0
+            for ax, t3, vinv in ((self.hf_coeff, self.int3c, self.int2c_inv),
+                                 (self.hf_coeff_lr, self.int3c_lr,
+                                  self.int2c_inv_lr)):
+                if ax == 0.0:
+                    continue
+                e_pref = -ax if nspin == 1 else -0.5 * ax
+                for C, w in zip(cs, ws):
+                    if C.shape[1] == 0:
+                        continue
+                    Ct = C * jnp.sqrt(w / w_full)
+                    out = out + e_pref * _rik_materialized(t3, vinv, Ct)[0]
+            return out
+
+        if self.hf_coeff != 0.0 or self.hf_coeff_lr != 0.0:
+            e_x, g_x = jax.value_and_grad(exchange)(tuple(Cs))
+            e = e + e_x
+            grads = [g + gx for g, gx in zip(grads, g_x)]
+        return e, tuple(grads)
+
+
 class ShardedDFCoulomb(CoulombTerm):
     """Materialized RI-J with the 3-center tensor sharded over the aux axis.
 

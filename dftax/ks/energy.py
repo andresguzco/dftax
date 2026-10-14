@@ -842,12 +842,19 @@ class KS(eqx.Module):
         ws = self.occupations()
         P = jnp.stack([(C * w) @ C.T for C, w in zip(Cs, ws)])
         e1 = jnp.sum(jnp.sum(P, axis=0) * self.hcore)
-        e_2e, g_2e = self.coulomb.energy_and_potential(
-            P, self.S, self.nocc, idempotent)
+        if hasattr(self.coulomb, "energy_and_grad_orbitals"):
+            # the orbitals straight into the two-electron term: no orbital
+            # recovery from P for the exchange
+            e_2e, g_2e = self.coulomb.energy_and_grad_orbitals(
+                Cs, ws, self.S, self.nocc)
+        else:
+            e_2e, V = self.coulomb.energy_and_potential(
+                P, self.S, self.nocc, idempotent)
+            g_2e = tuple(((V[s] + V[s].T) @ C) * w
+                         for s, (C, w) in enumerate(zip(Cs, ws)))
         e_xc, g_xc = self.xc_term.energy_and_grad_orbitals(Cs, ws)
         grads = tuple(
-            2.0 * ((self.hcore + 0.5 * (g_2e[s] + g_2e[s].T)) @ C) * w
-            + g_xc[s]
+            2.0 * (self.hcore @ C) * w + g_2e[s] + g_xc[s]
             for s, (C, w) in enumerate(zip(Cs, ws))
         )
         return e1 + e_2e + e_xc + self.e_nn + self.e_disp, grads

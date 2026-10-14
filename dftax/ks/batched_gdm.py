@@ -30,10 +30,12 @@ before the loop, the loop evaluates only through the orbitals
 re-anchors with the closed-form rotation (:func:`~dftax.ks.gdm.rotate_full`),
 which needs neither a Fock nor an eigendecomposition.
 
-Scope of this first version: closed-shell pure functionals on the
-materialized density-fitting and AO-grid backends (what ``KS`` picks for
-small and mid-size molecules). Hybrids need the exchange to see occupations,
-and open shells a padded diagonal per spin channel.
+Scope: closed shells, pure and hybrid functionals (range-separated ones
+included), on the materialized density-fitting and AO-grid backends (what
+``KS`` picks for small and mid-size molecules). The exchange takes the
+orbitals with their occupations, so empty padded slots carry none. Open
+shells need a padded diagonal per spin channel, and VV10 its grid
+coordinates.
 """
 
 from __future__ import annotations
@@ -102,8 +104,6 @@ def _check_supported(ks: KS) -> None:
             "gdm_batched needs the materialized DF and AO-grid backends "
             "(df(chunk=None), becke(chunk=None)); got "
             f"{type(ks.coulomb).__name__} / {type(ks.xc_term).__name__}.")
-    if ks.coulomb.hf_coeff != 0.0 or ks.coulomb.hf_coeff_lr != 0.0:
-        raise NotImplementedError("gdm_batched: pure functionals only, so far.")
     if float(getattr(ks.xc_term.xc, "nlc_b", 0.0)) != 0.0:
         raise NotImplementedError("gdm_batched: no VV10, so far.")
 
@@ -126,8 +126,8 @@ def _block(a, shape):
 
 
 @partial(jax.jit, static_argnames=("npad_occ", "nao", "naux", "ng"))
-def _pad_arrays(S, hcore, int3c, int2c_inv, ao, dao, weights, *, npad_occ,
-                nao, naux, ng):
+def _pad_arrays(S, hcore, int3c, int2c_inv, ao, dao, weights, int3c_lr,
+                int2c_inv_lr, *, npad_occ, nao, naux, ng):
     """Every padded array of one molecule in one compiled program: the eager
     version dispatched a dozen ops per molecule and cost 11 ms each (262 ms of
     a 24-molecule batch whose solve takes 85 ms)."""
@@ -135,9 +135,12 @@ def _pad_arrays(S, hcore, int3c, int2c_inv, ao, dao, weights, *, npad_occ,
     S_p = _block(S, (nao, nao)).at[n:, n:].set(jnp.eye(nao - n))
     diag = jnp.where(jnp.arange(nao - n) < npad_occ, -PAD, PAD)
     hcore_p = _block(hcore, (nao, nao)).at[n:, n:].set(jnp.diag(diag))
+    lr = (None if int3c_lr is None else
+          (_block(int3c_lr, (nao, nao, naux)),
+           _block(int2c_inv_lr, (naux, naux))))
     return (S_p, hcore_p, _block(int3c, (nao, nao, naux)),
             _block(int2c_inv, (naux, naux)), _block(ao, (ng, nao)),
-            _block(dao, (ng, nao, 3)), _block(weights, (ng,)))
+            _block(dao, (ng, nao, 3)), _block(weights, (ng,)), lr)
 
 
 def pad_ks(ks: KS, b: Bucket) -> PaddedKS:
@@ -145,13 +148,21 @@ def pad_ks(ks: KS, b: Bucket) -> PaddedKS:
     _check_supported(ks)
     npad_occ = b.nocc - ks.nocc[0]
     c, x = ks.coulomb, ks.xc_term
-    S, hcore, int3c, int2c_inv, ao, dao, weights = _pad_arrays(
+    S, hcore, int3c, int2c_inv, ao, dao, weights, lr = _pad_arrays(
         ks.S, ks.hcore, c.int3c, c.int2c_inv, x.ao, x.dao, x.weights,
+        c.int3c_lr, c.int2c_inv_lr,
         npad_occ=npad_occ, nao=b.nao, naux=b.naux, ng=b.ng)
     occ = jnp.concatenate([jnp.zeros(npad_occ), jnp.full(ks.nocc[0], 2.0)])
+    # hybrids: the exchange takes the orbitals with their occupations
+    # (DFCoulomb.energy_and_grad_orbitals), so the empty padded slots drop out
+    coulomb = DFCoulomb(
+        int3c=int3c, int2c_inv=int2c_inv, hf_coeff=c.hf_coeff,
+        int3c_lr=None if lr is None else lr[0],
+        int2c_inv_lr=None if lr is None else lr[1],
+        hf_coeff_lr=c.hf_coeff_lr)
     return PaddedKS(
         S=S, hcore=hcore, e_nn=ks.e_nn, e_disp=ks.e_disp,
-        coulomb=DFCoulomb(int3c=int3c, int2c_inv=int2c_inv, hf_coeff=0.0),
+        coulomb=coulomb,
         xc_term=GridXC(ao=ao, dao=dao, weights=weights, xc=x.xc, coords=None),
         occ=occ, nocc=(b.nocc,))
 

@@ -12,8 +12,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from dftax import KS, Molecule, becke, gdm, scf
-from dftax.energy.xc import LDA, PBE, R2SCAN
+from dftax import KS, Molecule, becke, df, gdm, scf
+from dftax.energy.xc import LDA, PBE, R2SCAN, functional
 from dftax.ks.scf import canonical_orthonormalizer
 
 WATER = "O 0 0 0; H 0.76 0 0.50; H 0.76 0 -0.50"
@@ -82,3 +82,22 @@ def test_gdm_orbital_route_matches_fock_route(atoms, spin):
     assert r0.converged and r1.converged and r2.converged
     assert abs(r1.e_tot - r0.e_tot) < 1e-7
     assert abs(r2.e_tot - r0.e_tot) < 1e-7
+
+
+@pytest.mark.float64
+@pytest.mark.parametrize("name", ["pbe0", "cam-b3lyp"])
+@pytest.mark.parametrize("atoms,spin", [(WATER, 0), (OH, 1)])
+def test_hybrid_orbital_route_is_the_chain_rule(name, atoms, spin):
+    """The DF exchange from the orbitals (no orbital recovery from P) against
+    energy_and_fock, global and range-separated."""
+    mol = Molecule.from_xyz(atoms, "6-31g*", spin=spin)
+    ks = KS(mol, functional(name), grid=becke(35, 50),
+            coulomb=df(chunk=None), spin=spin if spin else None)
+    Cs, _ = _orbitals(ks, seed=5)
+    w = 2.0 if len(Cs) == 1 else 1.0
+    P = jnp.stack([w * C @ C.T for C in Cs])
+    e_ref, F = ks.energy_and_fock(P)
+    e, grads = ks.energy_and_grad_orbitals(Cs)
+    assert abs(float(e - e_ref)) < 1e-10
+    for s, (C, G) in enumerate(zip(Cs, grads)):
+        np.testing.assert_allclose(G, 2.0 * w * F[s] @ C, rtol=0, atol=1e-9)

@@ -52,9 +52,19 @@ def test_batch_of_different_molecules_matches_scf():
         assert abs(float(res.e_tot[i]) - r.e_tot) < 1e-7, name
 
 
+@pytest.mark.float64
+@pytest.mark.slow
+def test_batched_hybrid_matches_scf():
+    """Hybrid exchange sees the occupations, so padded slots stay empty."""
+    kss = [_ks(n, xc=B3LYP) for n in ("water", "hf", "methane")]
+    res = gdm_batched(kss)
+    for i, ks in enumerate(kss):
+        r = scf(ks)
+        assert bool(res.converged[i])
+        assert abs(float(res.e_tot[i]) - r.e_tot) < 1e-7
+
+
 def test_rejects_what_it_does_not_pad_yet():
-    with pytest.raises(NotImplementedError, match="pure functionals"):
-        gdm_batched([_ks("water", "sto-3g", B3LYP)])
     open_shell = KS(Molecule.from_xyz("O 0 0 0; H 0 0 0.97", "sto-3g",
                                       spin=1), PBE(), grid=becke(35, 50),
                     spin=1)

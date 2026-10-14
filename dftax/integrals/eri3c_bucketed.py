@@ -1235,35 +1235,47 @@ def _packed_layout(plan, spherical):
         for (_ra, _rb, sa, sb), _aux in c[6]:
             for a, b in zip(sa, sb):
                 pairs[(a, b)] = (c[0], c[1])
-    offsets, rows, cols, weight = {}, [], [], []
+    keys = sorted(pairs)
+    a_all = np.fromiter((k[0] for k in keys), dtype=np.int64, count=len(keys))
+    b_all = np.fromiter((k[1] for k in keys), dtype=np.int64, count=len(keys))
+    na_all = np.fromiter((_width(pairs[k][0], spherical) for k in keys),
+                         dtype=np.int64, count=len(keys))
+    nb_all = np.fromiter((_width(pairs[k][1], spherical) for k in keys),
+                         dtype=np.int64, count=len(keys))
+    starts = np.concatenate([[0], np.cumsum(na_all * nb_all)])
+    off = int(starts[-1])
+    offsets = dict(zip(keys, (int(x) for x in starts[:-1])))
     pos = np.full((nao_sph, nao_sph), -1, dtype=np.int64)
-    off = 0
-    for (a, b) in sorted(pairs):
-        la, lb = pairs[(a, b)]
-        na, nb = _width(la, spherical), _width(lb, spherical)
-        offsets[(a, b)] = off
+    rows = np.empty(off, dtype=np.int64)
+    cols = np.empty(off, dtype=np.int64)
+    weight = np.empty(off)
+    # one vectorized fill per block shape (na, nb, diagonal or not)
+    shape_key = np.stack([na_all, nb_all, (a_all == b_all)], axis=1)
+    for na, nb, diag in np.unique(shape_key, axis=0):
+        sel = np.nonzero((shape_key == (na, nb, diag)).all(axis=1))[0]
         ii, jj = np.meshgrid(np.arange(na), np.arange(nb), indexing="ij")
-        if a == b:
+        if diag:
             # read only the upper triangle of a diagonal block, so unpacked
             # slices (and J) are exactly symmetric; the lower one is stored
             # (the kernel writes whole blocks) but carries weight 0
-            idx = off + np.minimum(ii, jj) * nb + np.maximum(ii, jj)
+            loc = np.minimum(ii, jj) * nb + np.maximum(ii, jj)
             w = np.where(ii < jj, 2.0, np.where(ii == jj, 1.0, 0.0))
         else:
-            idx = off + ii * nb + jj
+            loc = ii * nb + jj
             w = np.full((na, nb), 2.0)
-        pos[a + ii, b + jj] = idx
-        pos[b + jj, a + ii] = idx
-        rows.append((a + ii).ravel())
-        cols.append((b + jj).ravel())
-        weight.append(w.ravel())
-        off += na * nb
+        o = starts[sel][:, None, None]
+        r = a_all[sel][:, None, None] + ii[None]
+        c = b_all[sel][:, None, None] + jj[None]
+        pos[r, c] = o + loc[None]
+        pos[c, r] = o + loc[None]
+        flat = (o + (ii * nb + jj)[None]).reshape(-1)
+        rows[flat] = r.reshape(-1)
+        cols[flat] = c.reshape(-1)
+        weight[flat] = np.broadcast_to(w, r.shape).reshape(-1)
     pos[pos < 0] = off                   # screened pairs read the zero slot
     return PackedLayout(
         npair=off, nao=nao_sph, offsets=offsets, pos=pos.astype(_IDX),
-        rows=np.concatenate(rows).astype(_IDX),
-        cols=np.concatenate(cols).astype(_IDX),
-        weight=np.concatenate(weight))
+        rows=rows.astype(_IDX), cols=cols.astype(_IDX), weight=weight)
 
 
 def eri3c_packed(basis, aux_basis, omega=None, plan=None, chunk=4096):
@@ -1281,6 +1293,18 @@ def eri3c_packed(basis, aux_basis, omega=None, plan=None, chunk=4096):
     layout = packed_layout(plan, basis.cart2sph is not None)
     _nao_cart, _naux_cart, _nao_sph, naux_sph, classes = plan
     out = jnp.zeros((naux_sph, layout.npair), dtype=basis.centers.dtype)
+    # one offset array per pair factor: a pair group is shared by every aux
+    # group it meets, so look its pairs up once, not once per class
+    pair_offs = {}
+
+    def offsets(psa, psb):
+        key = id(psa)
+        if key not in pair_offs:
+            pair_offs[key] = np.fromiter(
+                (layout.offsets[(a, b)] for a, b in zip(psa, psb)),
+                dtype=_IDX, count=len(psa))
+        return pair_offs[key]
+
     for cls in classes:
         ra, rb, rc, _sa, _sb, sc, nprims, rep = _class_rows(cls)
         vals = _class_block(basis, aux_basis, cls, ra, rb, rc, nprims, rep,
@@ -1289,8 +1313,7 @@ def eri3c_packed(basis, aux_basis, omega=None, plan=None, chunk=4096):
         # packed offset of each triple's pair, broadcast like the rows
         offs = []
         for (_ra, _rb, psa, psb), (rcs, _sc) in cls[6]:
-            o = np.asarray([layout.offsets[(a, b)] for a, b in zip(psa, psb)],
-                           dtype=_IDX)
+            o = offsets(psa, psb)
             offs.append(jnp.broadcast_to(jnp.asarray(o)[:, None],
                                          (len(o), len(rcs))).reshape(-1))
         off = offs[0] if len(offs) == 1 else jnp.concatenate(offs)

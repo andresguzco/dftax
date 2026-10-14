@@ -261,7 +261,11 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
                 count = jnp.where(bad | stalled, 0, count)
                 de = jnp.where(fresh, st["de"], e_t - st["E"])
                 derr = commutator(F_t, P_t)
-                conv = (~fresh) & (jnp.abs(de) < e_tol) & (derr < d_tol)
+                # the energy test cannot be tighter than the energy's own
+                # floor (it grows with the molecule: 3.5e-8 Ha on coronene,
+                # above the default e_tol); the commutator carries the rest
+                conv = ((~fresh) & (jnp.abs(de) < jnp.maximum(e_tol, noise))
+                        & (derr < d_tol))
                 return dict(st, kappa=kappa_t, E=e_t, g=g_t, F=F_t, P=P_t,
                             d=d, alpha=jnp.asarray(1.0, dt), Sh=Sh, Yh=Yh,
                             rho=rho, count=count, head=head, de=de,

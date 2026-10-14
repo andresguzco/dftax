@@ -210,7 +210,8 @@ def _df_materialize_budget() -> int:
     return max(_DF_BUDGET, int(_DF_POOL_FRACTION * limit) // 8)
 
 
-def _resolve_df_chunk(chunk, nao: int, naux: int, sharded: bool):
+def _resolve_df_chunk(chunk, nao: int, naux: int, sharded: bool,
+                      packed: bool = False):
     """Resolve a DF spec's chunk policy to a concrete value.
 
     ``"auto"``: materialize the (nao², naux) tensor when it fits the
@@ -218,11 +219,13 @@ def _resolve_df_chunk(chunk, nao: int, naux: int, sharded: bool):
     calculation is mesh-sharded (the aux-sharded backend holds per-device
     slabs, which is already the capacity path); otherwise stream over
     auxiliary chunks. ``None`` forces materialized; an int streams with
-    exactly that chunk.
+    exactly that chunk. ``packed`` prices the packed tensor (one triangle of
+    the pairs, before screening) instead of the square one.
     """
     if chunk != "auto":
         return chunk
-    if sharded or nao * nao * naux <= _df_materialize_budget():
+    npair = nao * (nao + 1) // 2 if packed else nao * nao
+    if sharded or npair * naux <= _df_materialize_budget():
         return None
     return max(8, _DF_CHUNK_BUDGET // (nao * nao))
 
@@ -365,7 +368,7 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
             else aux.centers.shape[0])
     chunk = spec.chunk
     if chunk == "auto":
-        chunk = _resolve_df_chunk(chunk, nao, naux, sharded)
+        chunk = _resolve_df_chunk(chunk, nao, naux, sharded, spec.packed)
     if chunk is not None and aux.cart2sph is not None:
         if prebuilt:
             raise NotImplementedError(

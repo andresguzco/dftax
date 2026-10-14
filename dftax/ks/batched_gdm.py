@@ -56,7 +56,9 @@ from dftax.ks.gdm import (
 )
 from dftax.ks.guess import density_from_guess
 from dftax.ks.scf import canonical_orthonormalizer
-from dftax.ks.terms import DFCoulomb, GridXC, WhitenedDFCoulomb
+from dftax.ks.terms import (
+    DFCoulomb, GridXC, PackedDFCoulomb, WhitenedDFCoulomb,
+)
 
 PAD = 1.0e3          # Ha; the padded one-electron diagonal, far from any level
 
@@ -75,7 +77,7 @@ class PaddedKS(eqx.Module):
     hcore: Float[Array, "nao nao"]
     e_nn: Scalar
     e_disp: Scalar
-    coulomb: DFCoulomb | WhitenedDFCoulomb
+    coulomb: DFCoulomb | WhitenedDFCoulomb | PackedDFCoulomb
     xc_term: GridXC
     occ: tuple
     guess_shift: Float[Array, "nspin nao"]
@@ -96,10 +98,12 @@ class Bucket:
     naux: int
     ng: int
     nocc: tuple[int, ...]
+    npair: int = 0             # packed DF only: the packed pair count
 
 
 def _check_supported(ks: KS) -> None:
-    if not isinstance(ks.coulomb, (DFCoulomb, WhitenedDFCoulomb)) or \
+    if not isinstance(ks.coulomb, (DFCoulomb, WhitenedDFCoulomb,
+                                   PackedDFCoulomb)) or \
             not isinstance(ks.xc_term, GridXC):
         raise NotImplementedError(
             "gdm_batched needs the materialized DF and AO-grid backends "
@@ -113,9 +117,29 @@ def _tensors(c):
     """``(3-center, metric inverse, long-range 3-center, its inverse)`` of a
     materialized DF term; a whitened term has the metric folded in (``None``
     inverses) and is padded the same way, zero aux columns being inert."""
+    if isinstance(c, PackedDFCoulomb):
+        return None, None, None, None          # padded by _pad_packed
     if isinstance(c, WhitenedDFCoulomb):
         return c.B, None, c.B_lr, None
     return c.int3c, c.int2c_inv, c.int3c_lr, c.int2c_inv_lr
+
+
+def _naux(c):
+    if isinstance(c, PackedDFCoulomb):
+        return int(c.B.shape[0])
+    return int(_tensors(c)[0].shape[2])
+
+
+@partial(jax.jit, static_argnames=("nao", "naux", "npair"))
+def _pad_packed(B, pos, rows, cols, weight, B_lr, *, nao, naux, npair):
+    """A packed term's arrays at the bucket sizes. Padded aux rows and pair
+    columns are zero; padded AOs, like the molecule's own screened pairs,
+    read a zero column through ``pos``; padded packed entries weigh 0."""
+    n = pos.shape[0]
+    pos_p = jnp.full((nao, nao), npair, pos.dtype).at[:n, :n].set(pos)
+    lr = None if B_lr is None else _block(B_lr, (naux, npair))
+    return (_block(B, (naux, npair)), pos_p, _block(rows, (npair,)),
+            _block(cols, (npair,)), _block(weight, (npair,)), lr)
 
 
 def bucket_for(kss) -> Bucket:
@@ -132,9 +156,11 @@ def bucket_for(kss) -> Bucket:
     nocc = tuple(max(ks.nocc[s] for ks in kss) for s in range(nspin))
     nao = max(int(ks.S.shape[0]) + max(nocc[s] - ks.nocc[s]
                                        for s in range(nspin)) for ks in kss)
-    naux = max(int(_tensors(ks.coulomb)[0].shape[2]) for ks in kss)
+    naux = max(_naux(ks.coulomb) for ks in kss)
     ng = max(int(ks.xc_term.weights.shape[0]) for ks in kss)
-    return Bucket(nao=nao, naux=naux, ng=ng, nocc=nocc)
+    npair = max((int(ks.coulomb.B.shape[1]) for ks in kss
+                 if isinstance(ks.coulomb, PackedDFCoulomb)), default=0)
+    return Bucket(nao=nao, naux=naux, ng=ng, nocc=nocc, npair=npair)
 
 
 def _block(a, shape):
@@ -194,7 +220,16 @@ def pad_ks(ks: KS, b: Bucket) -> PaddedKS:
         shift[s, n:n + empty[s]] = -2.0 * PAD
     # hybrids: the exchange takes the orbitals with their occupations
     # (DFCoulomb.energy_and_grad_orbitals), so the empty padded slots drop out
-    if isinstance(c, WhitenedDFCoulomb):
+    if isinstance(c, PackedDFCoulomb):
+        if b.npair < c.B.shape[1]:
+            raise ValueError(f"bucket npair {b.npair} < {c.B.shape[1]}.")
+        Bp, pos, rows, cols, wt, Blr = _pad_packed(
+            c.B, c.pos, c.rows, c.cols, c.weight, c.B_lr, nao=b.nao,
+            naux=b.naux, npair=b.npair)
+        coulomb = PackedDFCoulomb(
+            B=Bp, pos=pos, rows=rows, cols=cols, weight=wt,
+            hf_coeff=c.hf_coeff, B_lr=Blr, hf_coeff_lr=c.hf_coeff_lr)
+    elif isinstance(c, WhitenedDFCoulomb):
         coulomb = WhitenedDFCoulomb(
             B=int3c, hf_coeff=c.hf_coeff, B_lr=None if lr is None else lr[0],
             hf_coeff_lr=c.hf_coeff_lr)

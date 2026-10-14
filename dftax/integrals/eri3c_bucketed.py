@@ -294,20 +294,9 @@ def _shell_pair_keep(basis, thresh):
     is conservative w.r.t. the per-AO test. Geometry-only, host-side; for
     extended systems the survivors are O(N).
     """
-    from dftax.integrals.eri4c import schwarz_diagonal
+    from dftax.integrals.eri4c import shell_pair_schwarz
 
-    shells, _ = _shells(basis.angular, basis.exponents)
-    nao = int(np.asarray(basis.angular).shape[0])
-    row_shell = np.empty(nao, dtype=np.int64)
-    for si, (_l, row0, ncomp, _np) in enumerate(shells):
-        row_shell[row0:row0 + ncomp] = si
-    Q = np.asarray(schwarz_diagonal(basis))              # √(μν|μν), tril μ>=ν
-    pa, pb = np.tril_indices(nao)
-    lo = np.minimum(row_shell[pa], row_shell[pb])
-    hi = np.maximum(row_shell[pa], row_shell[pb])
-    ns = len(shells)
-    Qsh = np.zeros((ns, ns))
-    np.maximum.at(Qsh, (hi, lo), Q)                      # max over components
+    Qsh = np.tril(shell_pair_schwarz(basis))             # [hi, lo]
     qmax = float(Qsh.max()) if Qsh.size else 0.0
     hi_idx, lo_idx = np.nonzero(Qsh >= thresh * qmax)
     return {(int(a), int(b)) for b, a in zip(hi_idx, lo_idx)}  # (ia<=ib)

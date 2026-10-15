@@ -42,6 +42,7 @@ The Coulomb/exchange backend is a value from :func:`~dftax.ks.terms.exact` /
 from __future__ import annotations
 
 import dataclasses
+import os
 import warnings
 from dataclasses import dataclass
 
@@ -435,6 +436,18 @@ def ao_on_grid(
 
 
 @eqx.filter_jit
+def _jit_metric_factor(aux_basis, aux_pair_plan, omega):
+    """``L`` with ``L Lᵀ = V⁺`` for the (attenuated, with ``omega``) metric."""
+    from dftax.integrals import eri2c_matrix
+
+    return _metric_factor(eri2c_matrix(aux_basis, omega=omega,
+                                       plan=aux_pair_plan))
+
+
+_jit_whiten = jax.jit(_whiten, donate_argnums=0)
+
+
+@eqx.filter_jit
 def _build_integrals(
     basis, coords, charges, grid_coords, aux_basis, materialize_ao, materialize_int3c,
     eri_quartets=None, eri_qof=None, stream_exact=False, omega=None,
@@ -728,17 +741,37 @@ class KS(eqx.Module):
             if aux_basis is None and not spec.stream and quartets is None
             else None
         )
+        # Shared class programs for the 3-center tensor (opt-in while it is
+        # measured; see dftax.integrals.bucketed): the square whitened path
+        # of an eager build, with the tensor built outside the monolith so a
+        # new molecule reuses every class program an earlier one compiled.
+        bucketed = (os.environ.get("DFTAX_BUCKETED") == "1" and whiten
+                    and not spec.packed)
         (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
          eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(
             basis, coords, charges, grid_coords, aux_basis,
             devices is None and grid_chunk is None,   # sharded AO grid built below
-            (not shard_df) and not (is_df and spec.chunk is not None),
+            (not shard_df) and not (is_df and spec.chunk is not None)
+            and not bucketed,
             quartets, qof, (not is_df) and spec.stream,
             (omega if hf_lr != 0.0
              and not isinstance(spec, ExternalCoulombSpec) else None),
-            eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan, whiten,
-            whiten and spec.packed,
+            eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan,
+            whiten and not bucketed, whiten and spec.packed,
         )
+        if bucketed:
+            from dftax.integrals.bucketed import eri3c_square
+
+            plan0 = plan_eri3c(basis, aux_basis, keep_pairs=screen_keep,
+                               tol=0.0)
+            L = _jit_metric_factor(aux_basis, aux_pair_plan, None)
+            int3c = _jit_whiten(eri3c_square(basis, aux_basis, plan0), L)
+            int2c_inv = None
+            if hf_lr != 0.0:
+                L_lr = _jit_metric_factor(aux_basis, aux_pair_plan, omega)
+                int3c_lr = _jit_whiten(
+                    eri3c_square(basis, aux_basis, plan0, omega=omega), L_lr)
+                int2c_inv_lr = None
         # Dispersion is P-independent: a scalar of the (traced) coordinates,
         # mirroring e_nn, so the rebuilt energies in forces/batched carry its
         # gradient automatically. Atomic numbers come from the charges (works

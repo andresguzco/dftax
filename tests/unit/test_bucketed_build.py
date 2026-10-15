@@ -56,9 +56,44 @@ def test_class_programs_are_shared_across_molecules():
 
 
 @pytest.mark.float64
-def test_ks_with_bucketed_build_matches(monkeypatch):
+@pytest.mark.parametrize("spherical", [True, False])
+def test_pair_integrals_are_the_bucketed_build(spherical):
+    from dftax.integrals.bucketed import pairs_host
+    from dftax.integrals.eri3c_bucketed import (
+        eri2c_matrix_bucketed, nuclear_attraction_bucketed,
+        overlap_kinetic_bucketed, plan_pairs,
+    )
+
+    basis, aux = _bases(WATER, spherical)
     mol = Molecule.from_xyz(WATER, "6-31g*")
-    e_ref = float(KS(mol, PBE()).coulomb.B.sum())
+    coords, charges = mol.atom_coords(), mol.atom_charges()
+    pp = plan_pairs(basis, tol=0.0)
+    S, T = pairs_host("st", basis, pp)
+    S0, T0 = overlap_kinetic_bucketed(basis)
+    (V,) = pairs_host("nuc", basis, pp, atom_coords=coords,
+                      atom_charges=charges)
+    V0 = nuclear_attraction_bucketed(basis, coords, charges)
+    (M,) = pairs_host("eri2c", aux, plan_pairs(aux, tol=0.0))
+    M0 = eri2c_matrix_bucketed(aux)
+    for a, b in ((S, S0), (T, T0), (V, V0), (M, M0)):
+        np.testing.assert_allclose(a, b, rtol=0, atol=1e-12)
+
+
+@pytest.mark.float64
+def test_ks_with_shared_programs_matches(monkeypatch):
+    """The whole eager build from shared class programs: the same KS, to
+    rounding, as the per-molecule build (energy and Fock at a fixed
+    density)."""
+    import jax.numpy as jnp
+
+    mol = Molecule.from_xyz(WATER, "6-31g*")
+    ref = KS(mol, PBE())
     monkeypatch.setenv("DFTAX_BUCKETED", "1")
     ks = KS(mol, PBE())
-    assert abs(float(ks.coulomb.B.sum()) - e_ref) < 1e-9
+    for a, b in ((ks.S, ref.S), (ks.hcore, ref.hcore)):
+        np.testing.assert_allclose(a, b, rtol=0, atol=1e-11)
+    n = ref.nocc[0]
+    s, U = jnp.linalg.eigh(ref.S)
+    C = (U / jnp.sqrt(s)) @ U.T
+    P = (2.0 * C[:, :n] @ C[:, :n].T)[None]
+    assert abs(float(ks.total(P) - ref.total(P))) < 1e-9

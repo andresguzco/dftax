@@ -435,16 +435,40 @@ def ao_on_grid(
     return jax.vmap(lambda r: eval_gto_and_grad(basis, r))(coords)
 
 
-@eqx.filter_jit
-def _jit_metric_factor(aux_basis, aux_pair_plan, omega):
-    """``L`` with ``L Lᵀ = V⁺`` for the (attenuated, with ``omega``) metric."""
-    from dftax.integrals import eri2c_matrix
-
-    return _metric_factor(eri2c_matrix(aux_basis, omega=omega,
-                                       plan=aux_pair_plan))
-
-
+_jit_metric_factor = jax.jit(_metric_factor)
 _jit_whiten = jax.jit(_whiten, donate_argnums=0)
+_jit_ao_on_grid = jax.jit(lambda basis, coords: ao_on_grid(basis, coords))
+
+
+def _build_integrals_shared(basis, coords, charges, grid_coords, aux_basis,
+                            materialize_ao, keep_pairs, omega):
+    """:func:`_build_integrals`'s outputs for an eager whitened square build,
+    from shared class programs (:mod:`dftax.integrals.bucketed`): the
+    one-electron integrals, the metric and the 3-center tensor are assembled
+    from per-class programs that recur across molecules, so none of them is
+    compiled per molecule. Only the AO grid, the metric factor and the
+    whitening are small per-molecule programs."""
+    from dftax.integrals.bucketed import eri3c_square, pairs_host
+    from dftax.integrals.eri3c_bucketed import plan_eri3c, plan_pairs
+
+    pp = plan_pairs(basis, tol=0.0)
+    S, T = pairs_host("st", basis, pp)
+    (V,) = pairs_host("nuc", basis, pp, atom_coords=coords,
+                      atom_charges=charges)
+    ap = plan_pairs(aux_basis, tol=0.0)
+    plan0 = plan_eri3c(basis, aux_basis, keep_pairs=keep_pairs, tol=0.0)
+
+    def whitened(om):
+        (int2c,) = pairs_host("eri2c", aux_basis, ap, omega=om)
+        return _jit_whiten(eri3c_square(basis, aux_basis, plan0, omega=om),
+                           _jit_metric_factor(int2c))
+
+    int3c = whitened(None)
+    int3c_lr = None if omega is None else whitened(omega)
+    ao, dao = (_jit_ao_on_grid(basis, grid_coords) if materialize_ao
+               else (None, None))
+    e_nn = nuclear_repulsion(coords, charges)
+    return (S, T + V, ao, dao, e_nn, None, int3c, None, None, int3c_lr, None)
 
 
 @eqx.filter_jit
@@ -741,37 +765,31 @@ class KS(eqx.Module):
             if aux_basis is None and not spec.stream and quartets is None
             else None
         )
-        # Shared class programs for the 3-center tensor (opt-in while it is
-        # measured; see dftax.integrals.bucketed): the square whitened path
-        # of an eager build, with the tensor built outside the monolith so a
-        # new molecule reuses every class program an earlier one compiled.
+        # Shared class programs (opt-in while it is measured; see
+        # dftax.integrals.bucketed): an eager whitened square build takes its
+        # one-electron integrals, metric and 3-center tensor from per-class
+        # programs that every molecule with the same shell classes reuses,
+        # and skips the per-molecule _build_integrals program altogether.
         bucketed = (os.environ.get("DFTAX_BUCKETED") == "1" and whiten
-                    and not spec.packed)
-        (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
-         eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(
-            basis, coords, charges, grid_coords, aux_basis,
-            devices is None and grid_chunk is None,   # sharded AO grid built below
-            (not shard_df) and not (is_df and spec.chunk is not None)
-            and not bucketed,
-            quartets, qof, (not is_df) and spec.stream,
-            (omega if hf_lr != 0.0
-             and not isinstance(spec, ExternalCoulombSpec) else None),
-            eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan,
-            whiten and not bucketed, whiten and spec.packed,
-        )
+                    and not spec.packed and devices is None)
         if bucketed:
-            from dftax.integrals.bucketed import eri3c_square
-
-            plan0 = plan_eri3c(basis, aux_basis, keep_pairs=screen_keep,
-                               tol=0.0)
-            L = _jit_metric_factor(aux_basis, aux_pair_plan, None)
-            int3c = _jit_whiten(eri3c_square(basis, aux_basis, plan0), L)
-            int2c_inv = None
-            if hf_lr != 0.0:
-                L_lr = _jit_metric_factor(aux_basis, aux_pair_plan, omega)
-                int3c_lr = _jit_whiten(
-                    eri3c_square(basis, aux_basis, plan0, omega=omega), L_lr)
-                int2c_inv_lr = None
+            (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
+             eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals_shared(
+                basis, coords, charges, grid_coords, aux_basis,
+                grid_chunk is None, screen_keep,
+                omega if hf_lr != 0.0 else None)
+        else:
+            (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
+             eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(
+                basis, coords, charges, grid_coords, aux_basis,
+                devices is None and grid_chunk is None,  # sharded AO grid below
+                (not shard_df) and not (is_df and spec.chunk is not None),
+                quartets, qof, (not is_df) and spec.stream,
+                (omega if hf_lr != 0.0
+                 and not isinstance(spec, ExternalCoulombSpec) else None),
+                eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan, whiten,
+                whiten and spec.packed,
+            )
         # Dispersion is P-independent: a scalar of the (traced) coordinates,
         # mirroring e_nn, so the rebuilt energies in forces/batched carry its
         # gradient automatically. Atomic numbers come from the charges (works

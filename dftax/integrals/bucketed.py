@@ -215,6 +215,101 @@ def _scatter_drop(out, starts, vals):
                        mode=lax.GatherScatterMode.FILL_OR_DROP)
 
 
+# ---------------------------------------------------------------------------
+# Two-index integrals: overlap + kinetic, nuclear attraction, the aux metric
+# ---------------------------------------------------------------------------
+#
+# The same fixed tiles over the pair classes of plan_pairs(tol=0). The nuclear
+# attraction runs one nucleus per row (pair x nucleus), so the atom count
+# never enters a program's shape; the host sums each pair's rows.
+
+PAIR_WORK = 3.2e7
+
+
+def _pair_cost(kind, la, lb, nprims) -> int:
+    mt = max(la + lb + 1, 2)
+    base = nprims[0] * nprims[1] * _ncart(la) * _ncart(lb)
+    return base * (3 * (la + 1) * (lb + 3) if kind == "st" else mt ** 3)
+
+
+def pair_tile(kind, la, lb, nprims) -> int:
+    t = PAIR_WORK / max(1, _pair_cost(kind, la, lb, nprims))
+    return int(min(max(2 ** int(math.floor(math.log2(max(t, 1.0)))), 64),
+                   8192))
+
+
+@lru_cache(maxsize=4096)
+def pair_program(kind, la, lb, anga, angb, omega, nprims):
+    """The jitted program of one pair class at its fixed tile."""
+    from dftax.integrals.eri3c_bucketed import (
+        _make_eri2c_kernel, _make_pair_kernel, _make_st_kernel,
+    )
+
+    if kind == "st":
+        one = _make_st_kernel(la, lb, anga, angb)
+        kern = jax.vmap(lambda *a: jnp.stack(one(*a)))
+    elif kind == "eri2c":
+        kern = jax.vmap(_make_eri2c_kernel(la, lb, anga, angb, omega))
+    else:                                    # "nuc": one nucleus per row
+        one = _make_pair_kernel(la, lb, anga, angb)
+        kern = jax.vmap(lambda A, B, ea, eb, ca, cb, C, Z:
+                        one(A, B, ea, eb, ca, cb, C[None], Z[None]))
+    return jax.jit(kern)
+
+
+def pairs_host(kind, basis, plan, omega=None, atom_coords=None,
+               atom_charges=None):
+    """A two-index matrix (``(S, T)`` for ``"st"``) from fixed pair tiles,
+    assembled on the host, in the basis's final components."""
+    nao_c, classes = plan
+    cen, exps, coefs = _host(basis)
+    if kind == "nuc":
+        ac = np.asarray(atom_coords)
+        az = np.asarray(atom_charges, dtype=np.float64)
+    nout = 2 if kind == "st" else 1
+    out = np.zeros((nout, nao_c, nao_c))
+    pending = []
+    for (la, lb, anga, angb, ra, rb, nprims) in classes:
+        npa, npb = nprims
+        fn = pair_program(kind, la, lb, anga, angb, omega, nprims)
+        tile = pair_tile(kind, la, lb, nprims)
+        ra, rb = np.asarray(ra, np.int64), np.asarray(rb, np.int64)
+        npair = ra.shape[0]
+        reps = ac.shape[0] if kind == "nuc" else 1
+        rows = np.arange(npair * reps)
+        pr, ak = rows // reps, rows % reps
+        pad = -len(rows) % tile
+        pr = np.concatenate([pr, np.zeros(pad, np.int64)])
+        ak = np.concatenate([ak, np.zeros(pad, np.int64)])
+        tiles = []
+        for t0 in range(0, len(pr), tile):
+            a, b = ra[pr[t0:t0 + tile]], rb[pr[t0:t0 + tile]]
+            args = [cen[a], cen[b], exps[a][:, :npa], exps[b][:, :npb],
+                    _rows(coefs, a, _ncart(la))[:, :, :npa],
+                    _rows(coefs, b, _ncart(lb))[:, :, :npb]]
+            if kind == "nuc":
+                k = ak[t0:t0 + tile]
+                args += [ac[k], az[k]]
+            tiles.append(fn(*args))
+        pending.append((la, lb, ra, rb, npair, reps, tiles))
+    for la, lb, ra, rb, npair, reps, tiles in pending:
+        v = np.concatenate([np.asarray(t) for t in tiles])[:npair * reps]
+        if kind == "nuc":
+            v = v.reshape((npair, reps) + v.shape[1:]).sum(1)
+        if kind != "st":
+            v = v[:, None]                       # (n, 1, a, b)
+        ia = ra[:, None] + np.arange(_ncart(la))
+        ib = rb[:, None] + np.arange(_ncart(lb))
+        I, J = ia[:, :, None], ib[:, None, :]
+        for i in range(nout):
+            out[i][I, J] = v[:, i]
+            out[i][J, I] = v[:, i]
+    if basis.cart2sph is not None:
+        c2s = np.asarray(basis.cart2sph)
+        out = np.stack([c2s.T @ o @ c2s for o in out])
+    return tuple(jnp.asarray(o) for o in out)
+
+
 def eri3c_square(basis, aux_basis, plan, omega=None):
     """The ``(nao, nao, naux)`` 3-center tensor from shared class programs;
     the same values as

@@ -118,6 +118,15 @@ def _steihaug_cg(hvp, g, radius, maxiter, scale=None, forcing=None):
     return p
 
 
+def _noise(e):
+    """The energy's floating-point floor, ``1e-10 |E| + 1e-12`` Ha: below it,
+    energy differences are rounding (grid sums, DF contractions, and the GEMM
+    algorithm XLA's autotuner picks), so no acceptance or convergence test may
+    resolve them. The same floor :func:`~dftax.ks.gdm.gdm` and
+    :func:`~dftax.ks.scf.scf` use."""
+    return 1e-10 * jnp.abs(e) + 1e-12
+
+
 def _rotate(C, kappa, nocc):
     """Apply ``C exp(K)`` per channel; K holds the occ-virt block of kappa.
     Closed form (:func:`dftax.ks.gdm.rotate_full`), not ``expm``: the rotation
@@ -188,12 +197,21 @@ def _newton_solve(ks: KS, C0, max_iter, g_tol, e_tol, cg_iters, trust0,
     def body(st):
         it, C, e_prev, radius, _ = st
         e0, gnorm, C_new, e_new = step(C, radius)
-        accept = e_new < e0
+        # Accept a step unless it raises the energy past the energy's own
+        # floating-point floor, and never ask the energy test for less than
+        # that floor (see _NOISE). A strict decrease test collapsed the trust
+        # region here: near convergence a Newton step lowers E by ~g^2/lambda,
+        # down at the rounding noise that GEMM autotuning moves from run to
+        # run, so steps were rejected at random, every rejection halved the
+        # radius, and the solve stalled at the answer.
+        noise = _noise(e0)
+        accept = e_new < e0 + noise
         C = jax.tree.map(lambda a, b: jnp.where(accept, b, a), C, C_new)
         radius = jnp.where(accept, jnp.minimum(2.0 * radius, 1.0),
                            0.5 * radius)
         e = jnp.where(accept, e_new, e0)
-        converged = (gnorm < g_tol) & (jnp.abs(e - e_prev) < e_tol)
+        converged = ((gnorm < g_tol)
+                     & (jnp.abs(e - e_prev) < jnp.maximum(e_tol, noise)))
         if verbose:
             jax.debug.print(
                 "  newton {it}: E={e:.10f} |g|={g:.2e} r={r:.2e} ok={a}",
@@ -247,12 +265,14 @@ def _newton_solve_shared(ks: KS, C0, mask, max_iter, g_tol, e_tol, cg_iters,
         delta = _steihaug_cg(hvp, g, radius, cg_iters) * mask
         C_new = rotate(C, delta)
         e_new = energy_at(C_new, kappa0)
-        accept = e_new < e0
+        noise = _noise(e0)                    # see _newton_solve
+        accept = e_new < e0 + noise
         C = jnp.where(accept, C_new, C)
         radius = jnp.where(accept, jnp.minimum(2.0 * radius, 1.0),
                            0.5 * radius)
         e = jnp.where(accept, e_new, e0)
-        converged = (gnorm < g_tol) & (jnp.abs(e - e_prev) < e_tol)
+        converged = ((gnorm < g_tol)
+                     & (jnp.abs(e - e_prev) < jnp.maximum(e_tol, noise)))
         if verbose:
             jax.debug.print(
                 "  roks {it}: E={e:.10f} |g|={g:.2e} r={r:.2e} ok={a}",

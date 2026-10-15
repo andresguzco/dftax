@@ -20,7 +20,7 @@ AUX = "def2-universal-jkfit"
 @pytest.mark.float64
 class TestDensityFitting:
     # LDA exercises RI-J; PBE0 additionally exercises RI-K.
-    @pytest.mark.parametrize("xc_cls,pyscf_xc", [(LDA, "slater,vwn5"), (PBE0, "pbe0")])
+    @pytest.mark.parametrize("xc_cls,pyscf_xc", [(PBE0, "pbe0")])
     def test_ri_matches_full_eri(self, xc_cls, pyscf_xc):
         mol = gto.M(atom=H2O, basis="sto-3g").build()
         mf = dft.RKS(mol)

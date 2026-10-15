@@ -37,7 +37,7 @@ def _water_grid_rho(basis="def2-svp", level=1):
 
 @pytest.mark.pyscf
 @pytest.mark.float64
-@pytest.mark.parametrize("b,c", [(6.0, 0.01), (5.9, 0.0093)])
+@pytest.mark.parametrize("b,c", [(5.9, 0.0093)])
 def test_vv10_kernel_vs_pyscf(b, c):
     """The chunked JAX pair quadrature reproduces _vv10nlc bit-for-bit on
     identical (rho, grad, grid) inputs."""

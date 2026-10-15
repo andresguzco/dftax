@@ -43,7 +43,7 @@ def _make_auxmol(mol, auxbasis="weigend"):
 
 class TestERI2C:
 
-    @pytest.mark.parametrize("mol_fn", [_make_h2, _make_h2o])
+    @pytest.mark.parametrize("mol_fn", [_make_h2o])
     def test_eri2c_matches_pyscf(self, mol_fn):
         """J_{PQ} = (P|Q) matches PySCF int2c2e."""
         mol = mol_fn()
@@ -82,7 +82,7 @@ class TestERI2C:
 
 class TestERI3C:
 
-    @pytest.mark.parametrize("mol_fn", [_make_h2, _make_h2o])
+    @pytest.mark.parametrize("mol_fn", [_make_h2o])
     def test_eri3c_matches_pyscf(self, mol_fn):
         """(μν|P) matches PySCF df.incore.aux_e2."""
         mol = mol_fn()

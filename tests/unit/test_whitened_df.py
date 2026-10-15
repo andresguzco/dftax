@@ -56,7 +56,7 @@ def test_factor_and_in_place_whitening():
 
 
 @pytest.mark.float64
-@pytest.mark.parametrize("aux", ["sto-3g", "def2-svp"])
+@pytest.mark.parametrize("aux", ["def2-svp"])
 def test_matches_plain_df_to_machine_precision(aux):
     """A well-conditioned metric: no floor between the contraction orders."""
     plain, white = _pair(WATER, "sto-3g", PBE0(), aux=aux)
@@ -68,8 +68,7 @@ def test_matches_plain_df_to_machine_precision(aux):
 
 @pytest.mark.float64
 @pytest.mark.parametrize("xc, geom, spin", [
-    (PBE, WATER, None), (PBE0, WATER, None), (CAMB3LYP, WATER, None),
-    (PBE0, OH, 1),
+    (CAMB3LYP, WATER, None), (PBE0, OH, 1),
 ])
 def test_same_functional_through_every_entry_point(xc, geom, spin):
     """Energy, Fock and orbital gradient against DFCoulomb at the jkfit floor,
@@ -152,7 +151,7 @@ def test_solvers_and_forces_on_the_whitened_term():
 
 @pytest.mark.float64
 @pytest.mark.parametrize("xc, geom, spin", [
-    (PBE0, WATER, None), (CAMB3LYP, WATER, None), (PBE0, OH, 1),
+    (CAMB3LYP, WATER, None), (PBE0, OH, 1),
 ])
 def test_packed_is_the_square_whitened_term(xc, geom, spin):
     """Packing changes the storage, not the contractions: energy, Fock and

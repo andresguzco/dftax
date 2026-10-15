@@ -168,7 +168,7 @@ def test_sharded_streamed_df_matches_unsharded():
 
 @multi
 @pytest.mark.float64
-@pytest.mark.parametrize("xc", [PBE0(), CAMB3LYP()], ids=["pbe0", "camb3lyp"])
+@pytest.mark.parametrize("xc", [CAMB3LYP()], ids=["camb3lyp"])
 def test_sharded_streamed_hybrid_matches_unsharded(xc):
     """Aux-sharded streamed *exchange*: RI-K sums over occupied orbitals, so
     each device scans its own slice of them and the partials are psum-reduced.

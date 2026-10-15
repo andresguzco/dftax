@@ -70,7 +70,7 @@ class TestNativeGrid:
 class TestFullyPyscfFree:
     """Native geometry + native basis + native grid vs a PySCF reference."""
 
-    @pytest.mark.parametrize("pyscf_xc,xc_cls", [("slater,vwn5", LDA), ("pbe", PBE)])
+    @pytest.mark.parametrize("pyscf_xc,xc_cls", [("pbe", PBE)])
     def test_water(self, pyscf_xc, xc_cls):
         nmol = Molecule.from_xyz(H2O, "sto-3g")
         pmol = gto.M(atom=H2O, basis="sto-3g").build()

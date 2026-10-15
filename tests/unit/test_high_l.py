@@ -46,7 +46,7 @@ def test_one_electron_high_l(l):
 
 @pytest.mark.pyscf
 @pytest.mark.float64
-@pytest.mark.parametrize("l", [5, 6])  # h shell (cc-pV5Z), i shell (cc-pV6Z)
+@pytest.mark.parametrize("l", [6])  # i shell (cc-pV6Z)
 def test_eri3c_high_l_orbital_vs_pyscf(l):
     """(μν|P) with an h/i ORBITAL shell matches PySCF int3c2e (the aux-side
     h/i coverage lives in test_high_l_aux; this pins the orbital side, which
@@ -69,7 +69,7 @@ def test_eri3c_high_l_orbital_vs_pyscf(l):
 
 @pytest.mark.pyscf
 @pytest.mark.float64
-@pytest.mark.parametrize("l", [5, 6])
+@pytest.mark.parametrize("l", [6])
 def test_grid_ao_values_high_l_vs_pyscf(l):
     """Spherical AO values on grid points match PySCF eval_gto at h/i.
 

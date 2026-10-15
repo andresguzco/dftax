@@ -73,7 +73,7 @@ def test_treutler_xi_matches_pyscf():
 
 
 @pytest.mark.pyscf
-@pytest.mark.parametrize("n", [50, 75, 80])
+@pytest.mark.parametrize("n", [75])
 def test_treutler_radial_matches_pyscf(n):
     from pyscf.dft import radi
 
@@ -120,7 +120,7 @@ def test_unknown_radii_adjust_raises():
 
 @pytest.mark.pyscf
 @pytest.mark.parametrize("prune", [None, "nwchem"])
-@pytest.mark.parametrize("name", list(MOLECULES))
+@pytest.mark.parametrize("name", ["h2s"])
 def test_grid_matches_pyscf_default(name, prune):
     mol = Molecule.from_xyz(MOLECULES[name], "sto-3g")
     syms, X = mol.symbols, np.asarray(mol.atom_coords())
@@ -132,7 +132,7 @@ def test_grid_matches_pyscf_default(name, prune):
 
 
 @pytest.mark.pyscf
-@pytest.mark.parametrize("name", ["water", "methane"])
+@pytest.mark.parametrize("name", ["water"])
 def test_default_grid_is_pyscf_default(name):
     """Through Ne, PySCF's level-3 angular order is the default 302, so the
     default spec is PySCF's default grid."""

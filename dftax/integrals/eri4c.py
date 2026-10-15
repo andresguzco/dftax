@@ -477,6 +477,96 @@ def _compiled_eri4c_kernel(la, lb, lc, ld, anga, angb, angc, angd, omega,
                                 chunk_size=chunk_size))
 
 
+def shell_pair_schwarz(basis: BasisData) -> np.ndarray:
+    """``Q[a, b] = max over components √(μν|μν)``, ``μ ∈ a, ν ∈ b``, for every
+    shell pair (symmetric ``(nshell, nshell)``, cartesian components): the
+    shell-level Schwarz factors of :func:`schwarz_diagonal`, computed from the
+    diagonal quartets ``(ab|ab)`` alone.
+
+    One bucketed class kernel per pair type ``(la, lb, npa, npb)`` evaluates
+    just those quartets, O(shell pairs), instead of the flat element padded
+    to the basis's largest ``l`` over every cartesian pair. Batches are padded
+    to a power of two, so the kernels' shapes, and so their compiled programs,
+    recur across molecules. Host-side; the basis
+    must be concrete.
+    """
+    from collections import defaultdict
+
+    from dftax.integrals.eri3c_bucketed import _IDX, _shells
+
+    shells, ang = _shells(basis.angular, basis.exponents)
+    ns = len(shells)
+    groups = defaultdict(list)
+    for ia in range(ns):
+        for ib in range(ia, ns):
+            a, b = shells[ia], shells[ib]
+            if (b[0], b[3]) < (a[0], a[3]):
+                a, b = b, a
+                groups[(a[0], b[0], a[3], b[3])].append((ib, ia))
+            else:
+                groups[(a[0], b[0], a[3], b[3])].append((ia, ib))
+    cen = basis.centers
+    Q = np.zeros((ns, ns))
+    # Gathers on the host (numpy, no device round trips); only fixed-size
+    # class batches go to the device, so the programs recur across molecules.
+    cen_h = np.asarray(cen)
+    exp_h = np.asarray(basis.exponents)
+    coef_h = np.asarray(basis.coefficients)
+    pending = []
+    for (la, lb, npa, npb), members in sorted(groups.items()):
+        ia = np.asarray([m[0] for m in members])
+        ib = np.asarray([m[1] for m in members])
+        ra = np.asarray([shells[i][1] for i in ia], dtype=_IDX)
+        rb = np.asarray([shells[i][1] for i in ib], dtype=_IDX)
+        nca, ncb = (la + 1) * (la + 2) // 2, (lb + 1) * (lb + 2) // 2
+        anga = tuple(tuple(int(x) for x in ang[ra[0] + i]) for i in range(nca))
+        angb = tuple(tuple(int(x) for x in ang[rb[0] + i]) for i in range(ncb))
+        chunk = _eri4c_class_chunk(la, lb, la, lb, (npa, npb, npa, npb))
+        n = len(members)
+        # pad to a power of two (shapes recur across molecules), not to the
+        # kernel chunk: for cheap s-type classes that chunk is millions of
+        # quartets, and padding a few hundred pairs up to it was most of
+        # the work
+        size = max(64, 1 << (n - 1).bit_length())
+        pad = np.full(size - n, ra[0], dtype=_IDX), np.full(size - n, rb[0],
+                                                             dtype=_IDX)
+        rap, rbp = np.concatenate([ra, pad[0]]), np.concatenate([rb, pad[1]])
+        fn = _schwarz_class(la, lb, anga, angb, min(chunk, size))
+        ca = coef_h[rap[:, None] + np.arange(nca)][:, :, :npa]
+        cb = coef_h[rbp[:, None] + np.arange(ncb)][:, :, :npb]
+        ea, eb = exp_h[rap][:, :npa], exp_h[rbp][:, :npb]
+        # dispatched without waiting: one transfer per class at the end
+        pending.append((ia, ib, n, fn(cen_h[rap], cen_h[rbp], ea, eb,
+                                      ca, cb)))
+    for ia, ib, n, q in pending:
+        q = np.asarray(q)[:n]
+        Q[ia, ib] = q
+        Q[ib, ia] = q
+    return Q
+
+
+@lru_cache(maxsize=1024)
+def _schwarz_class(la, lb, anga, angb, chunk):
+    """One pair class's ``max √(ab|ab)`` per pair, as one jitted program on
+    host-gathered, fixed-size batches: the diagonal quartets and the
+    reduction on the device, one launch and one transfer (they were a dozen
+    eager ops and a synchronizing transfer each, most of the planner's time on
+    a 74-atom molecule). Shapes depend on the class and the batch size only,
+    so the program recurs across molecules."""
+    kern = _compiled_eri4c_kernel(la, lb, la, lb, anga, angb, anga, angb,
+                                  None, chunk)
+
+    @jax.jit
+    def run(A, B, ea, eb, ca, cb):
+        vals = kern(A, B, A, B, ea, eb, ea, eb, ca, cb, ca, cb)
+        # (size, a, b, a, b)
+        diag = jnp.einsum("nijij->nij", vals)
+        return jnp.sqrt(jnp.maximum(diag.reshape(diag.shape[0], -1)
+                                    .max(axis=1), 0.0))
+
+    return run
+
+
 def eri4c_matrix_bucketed(
     basis: BasisData,
     omega: float | None = None,

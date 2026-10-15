@@ -28,6 +28,7 @@ with independent per-device convergence loops and no collectives.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 import equinox as eqx
@@ -151,6 +152,8 @@ def scf_batched(
         else template.centers.shape[0]
     )
     if isinstance(coulomb, DFSpec):
+        if coulomb.screen == "auto":       # batched geometries never screen
+            coulomb = dataclasses.replace(coulomb, screen=None)
         if coulomb.screen is not None:
             raise ValueError(
                 "scf_batched cannot use df(screen=...): Schwarz pair "

@@ -41,6 +41,7 @@ The Coulomb/exchange backend is a value from :func:`~dftax.ks.terms.exact` /
 
 from __future__ import annotations
 
+import dataclasses
 import warnings
 from dataclasses import dataclass
 
@@ -61,7 +62,8 @@ from dftax.integrals import (
     eri2c_matrix,
 )
 from dftax.integrals.eri3c_bucketed import (
-    _shell_pair_keep, overlap_kinetic_bucketed, plan_eri3c, plan_pairs,
+    _shell_pair_keep, eri3c_packed, overlap_kinetic_bucketed, plan_eri3c,
+    plan_pairs,
 )
 from dftax.integrals.eri4c import (
     eri4c_matrix,
@@ -77,6 +79,7 @@ from dftax.ks.terms import (
     CoulombTerm,
     DFSpec,
     ExactSpec,
+    ExternalCoulombSpec,
     GridXC,
     ShardedDFCoulomb,
     ShardedGridXC,
@@ -84,7 +87,11 @@ from dftax.ks.terms import (
     StreamedGridXC,
     XCTerm,
     _make_coulomb,
+    _metric_factor,
     _metric_pinv,  # noqa: F401  (re-exported; also used by _build_integrals)
+    _whiten,
+    _whiten_packed,
+    resolve_df_screen,
     df,
     exact,
 )
@@ -205,7 +212,8 @@ def _df_materialize_budget() -> int:
     return max(_DF_BUDGET, int(_DF_POOL_FRACTION * limit) // 8)
 
 
-def _resolve_df_chunk(chunk, nao: int, naux: int, sharded: bool):
+def _resolve_df_chunk(chunk, nao: int, naux: int, sharded: bool,
+                      packed: bool = False):
     """Resolve a DF spec's chunk policy to a concrete value.
 
     ``"auto"``: materialize the (nao², naux) tensor when it fits the
@@ -213,11 +221,13 @@ def _resolve_df_chunk(chunk, nao: int, naux: int, sharded: bool):
     calculation is mesh-sharded (the aux-sharded backend holds per-device
     slabs, which is already the capacity path); otherwise stream over
     auxiliary chunks. ``None`` forces materialized; an int streams with
-    exactly that chunk.
+    exactly that chunk. ``packed`` prices the packed tensor (one triangle of
+    the pairs, before screening) instead of the square one.
     """
     if chunk != "auto":
         return chunk
-    if sharded or nao * nao * naux <= _df_materialize_budget():
+    npair = nao * (nao + 1) // 2 if packed else nao * nao
+    if sharded or npair * naux <= _df_materialize_budget():
         return None
     return max(8, _DF_CHUNK_BUDGET // (nao * nao))
 
@@ -329,7 +339,7 @@ def _resolve_coulomb(spec, symbols):
 
 
 def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
-                 sharded: bool) -> DFSpec:
+                 sharded: bool, lr_fold: int = 1) -> DFSpec:
     """Pick the auxiliary span, build the basis once, resolve the policy.
 
     The materialized paths (single-device and mesh-sharded) use spherical
@@ -363,8 +373,18 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
     naux = (aux.cart2sph.shape[1] if aux.cart2sph is not None
             else aux.centers.shape[0])
     chunk = spec.chunk
-    if chunk == "auto":
-        chunk = _resolve_df_chunk(chunk, nao, naux, sharded)
+    packed = spec.packed
+    # lr_fold: a range-separated hybrid materializes a second, attenuated
+    # tensor beside the first, so the budget prices both
+    if chunk == "auto" and packed == "auto":
+        chunk = _resolve_df_chunk(chunk, nao, naux * lr_fold, sharded, False)
+        if chunk is not None and not sharded and _resolve_df_chunk(
+                "auto", nao, naux * lr_fold, sharded, True) is None:
+            # the square tensor misses the budget, the packed one fits
+            chunk, packed = None, True
+    elif chunk == "auto":
+        chunk = _resolve_df_chunk(chunk, nao, naux * lr_fold, sharded,
+                                  packed is True)
     if chunk is not None and aux.cart2sph is not None:
         if prebuilt:
             raise NotImplementedError(
@@ -374,14 +394,14 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
         # "auto" fell back to streaming: rebuild and re-price for the
         # (larger) cartesian span.
         aux = build_basis_data(symbols, coords, spec.auxbasis)
-        chunk = _resolve_df_chunk("auto", nao, aux.centers.shape[0], sharded)
+        chunk = _resolve_df_chunk("auto", nao, aux.centers.shape[0] * lr_fold,
+                                  sharded)
     if spec.spherical is True and aux.cart2sph is None:
         raise ValueError(
             "df(spherical=True) with a prebuilt cartesian BasisData; build "
             "it with build_basis_data(..., spherical=True)."
         )
-    return DFSpec(auxbasis=aux, chunk=chunk, screen=spec.screen,
-                  spherical=spec.spherical)
+    return dataclasses.replace(spec, auxbasis=aux, chunk=chunk, packed=packed)
 
 
 def _resolve_screening(spec, basis):
@@ -419,6 +439,7 @@ def _build_integrals(
     basis, coords, charges, grid_coords, aux_basis, materialize_ao, materialize_int3c,
     eri_quartets=None, eri_qof=None, stream_exact=False, omega=None,
     eri3c_plan=None, pair_plan=None, aux_pair_plan=None, eri4c_plan=None,
+    whiten=False, packed=False,
 ):
     """Build all integral arrays in one jitted pass.
 
@@ -429,7 +450,11 @@ def _build_integrals(
     (the XC grid is streamed instead; see ``terms._streamed_e_xc``). ``eri_quartets``/
     ``eri_qof`` optionally supply a pre-screened (Cauchy-Schwarz) quartet list +
     orbit map for the exact ERI. Composes with grad (used by forces), where jit
-    is traced inline.
+    is traced inline. ``whiten`` (static, materialized DF only) returns the
+    whitened ``B = Lᵀ T`` tensors in the 3-center slots and ``None`` for the
+    metric inverses (see :class:`~dftax.ks.terms.WhitenedDFCoulomb`); with
+    ``packed`` too, they are packed ``(naux, npair)`` over the plan's kept
+    shell pairs (:class:`~dftax.ks.terms.PackedDFCoulomb`).
     """
     # One bucketed pass builds both (shared OS tables per shell pair); the
     # public overlap_matrix / kinetic_matrix wrappers stay for direct users.
@@ -457,8 +482,11 @@ def _build_integrals(
             )
     else:
         # int3c (nao²×naux) is the big DF tensor; skip it when streaming RI-J.
-        int3c = (eri3c_matrix(basis, aux_basis, plan=eri3c_plan)
-                 if materialize_int3c else None)
+        build3 = ((lambda **kw: eri3c_packed(basis, aux_basis, **kw))
+                  if packed else
+                  (lambda **kw: eri3c_matrix(basis, aux_basis, **kw)))
+        whiten3 = _whiten_packed if packed else _whiten
+        int3c = build3(plan=eri3c_plan) if materialize_int3c else None
         int2c = eri2c_matrix(aux_basis, plan=aux_pair_plan)  # (naux, naux)
         # Symmetric pseudo-inverse of the Coulomb metric, dropping near-null
         # directions (both aux spans; see the measured studies in the
@@ -466,7 +494,11 @@ def _build_integrals(
         # Cholesky). Standard JK-fitting sets are near-redundant even in
         # spherical form; the 1e-7 relative cutoff keeps the inverse
         # well-conditioned at sub-mHa RI cost.
-        int2c_inv = _metric_pinv(int2c)
+        if whiten:
+            int3c = whiten3(int3c, _metric_factor(int2c))
+            int2c_inv = None
+        else:
+            int2c_inv = _metric_pinv(int2c)
         eri = None
         if omega is not None:
             # The RI treatment of the long-range operator attenuates both the
@@ -478,11 +510,13 @@ def _build_integrals(
             # The attenuated 3-center is only materialized alongside the
             # full-range one; the streamed backend recomputes its elements on
             # the fly and needs just the (small) attenuated metric inverse.
-            int3c_lr = (eri3c_matrix(basis, aux_basis, omega=omega,
-                                     plan=eri3c_plan)
+            int3c_lr = (build3(omega=omega, plan=eri3c_plan)
                         if materialize_int3c else None)
-            int2c_inv_lr = _metric_pinv(
-                eri2c_matrix(aux_basis, omega=omega, plan=aux_pair_plan))
+            int2c_lr = eri2c_matrix(aux_basis, omega=omega, plan=aux_pair_plan)
+            if whiten:
+                int3c_lr = whiten3(int3c_lr, _metric_factor(int2c_lr))
+            else:
+                int2c_inv_lr = _metric_pinv(int2c_lr)
 
     return (S, T + V, ao, dao, e_nn, eri, int3c, int2c_inv,
             eri_lr, int3c_lr, int2c_inv_lr)
@@ -607,9 +641,37 @@ class KS(eqx.Module):
         is_df = isinstance(spec, DFSpec)
         shard_df = devices is not None and is_df
         if is_df:
-            spec = _resolve_aux(spec, symbols, coords, nao_final, shard_df)
+            # A range-separated hybrid materializes a second, attenuated
+            # 3-center tensor beside the first, so price both (as forces
+            # already does); the budget used to see only one.
+            lr_fold = 2 if float(getattr(xc, "hf_coeff_lr", 0.0)) != 0.0 else 1
+            spec = _resolve_aux(spec, symbols, coords, nao_final, shard_df,
+                                lr_fold)
+            # n_atom from the shape: static even at traced coordinates
+            spec = dataclasses.replace(spec, screen=resolve_df_screen(
+                spec.screen, int(coords.shape[0])))
+            # packing pays where screening drops pairs (and where only the
+            # packed tensor fits, resolved with the budget above)
+            if spec.packed == "auto":
+                spec = dataclasses.replace(spec,
+                                           packed=spec.screen is not None)
         quartets, qof, pairs = _resolve_screening(spec, basis)
         aux_basis = spec.auxbasis if is_df else None
+        # Whitening folds the metric into the materialized tensor
+        # (WhitenedDFCoulomb). Its factor carries no geometry derivative, so a
+        # build at traced coordinates (forces, Hessians, scf_batched) keeps
+        # DFCoulomb, whose _metric_pinv jvp does.
+        whiten = False
+        if is_df:
+            whitenable = (spec.chunk is None and not shard_df
+                          and not isinstance(coords, jax.core.Tracer))
+            whiten = whitenable if spec.whiten is None else spec.whiten
+            if whiten and not whitenable:
+                raise ValueError(
+                    "df(whiten=True) needs a single-device materialized build "
+                    "at concrete coordinates (chunk=None, no mesh, outside "
+                    "grad/vmap); use whiten=None to whiten where it applies."
+                )
         # Range-separated hybrids: build the erf(ω·r₁₂)/r₁₂ tensors alongside
         # the Coulomb ones (memory doubles on the materialized backends; the
         # streamed DF backend stores only the attenuated metric and recomputes
@@ -621,7 +683,8 @@ class KS(eqx.Module):
                 f"{type(xc).__name__} sets hf_coeff_lr={hf_lr} but omega=0; "
                 f"a range-separated functional must define its ω."
             )
-        if hf_lr != 0.0 and (not is_df) and spec.stream:
+        if (hf_lr != 0.0 and (not is_df) and spec.stream
+                and not isinstance(spec, ExternalCoulombSpec)):
             raise NotImplementedError(
                 "range-separated hybrids need a materialized backend: use "
                 "exact() or df(chunk=None), not exact(stream=True)."
@@ -671,8 +734,10 @@ class KS(eqx.Module):
             devices is None and grid_chunk is None,   # sharded AO grid built below
             (not shard_df) and not (is_df and spec.chunk is not None),
             quartets, qof, (not is_df) and spec.stream,
-            omega if hf_lr != 0.0 else None,
-            eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan,
+            (omega if hf_lr != 0.0
+             and not isinstance(spec, ExternalCoulombSpec) else None),
+            eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan, whiten,
+            whiten and spec.packed,
         )
         # Dispersion is P-independent: a scalar of the (traced) coordinates,
         # mirroring e_nn, so the rebuilt energies in forces/batched carry its
@@ -724,7 +789,7 @@ class KS(eqx.Module):
                 spec, basis, eri, int3c, int2c_inv, pairs, float(xc.hf_coeff),
                 eri_lr, int3c_lr, int2c_inv_lr, hf_lr, omega,
                 devices=devices if shard_df else None,
-                slab_plans=slab_plans,
+                slab_plans=slab_plans, packed_plan=eri3c_plan,
             )
         if devices is not None:
             # Pad the quadrature to the mesh and lay it out sharded; the AO

@@ -15,6 +15,7 @@ from dftax.grid import becke_grid
 from dftax.ks.scf import _scf_solve, canonical_orthonormalizer
 from dftax.ks.terms import (
     DFCoulomb, ExactCoulomb, StreamedDFCoulomb, StreamedGridXC,
+    WhitenedDFCoulomb,
 )
 from dftax.energy.xc import LDA, PBE
 
@@ -82,7 +83,9 @@ def test_df_backend_and_explicit_grid():
     mol = Molecule.from_xyz(WATER, "sto-3g")
     gc, gw = becke_grid(mol.symbols, mol.atom_coords(), 35, 50)
     ks = KS(mol, PBE(), grid=(gc, gw), coulomb=df(AUX))
-    assert isinstance(ks.coulomb, DFCoulomb)
+    assert isinstance(ks.coulomb, WhitenedDFCoulomb)  # concrete: whitened
+    assert isinstance(KS(mol, PBE(), grid=(gc, gw),
+                         coulomb=df(AUX, whiten=False)).coulomb, DFCoulomb)
     ks_str = KS(mol, PBE(), grid=points(gc, gw, chunk=2000))
     assert isinstance(ks_str.xc_term, StreamedGridXC)
     P = jnp.zeros((1, ks.S.shape[0], ks.S.shape[0]))
@@ -142,10 +145,11 @@ def test_molecule_rejects_inconsistent_spin():
 
 @pytest.mark.float64
 def test_default_coulomb_is_df():
-    """coulomb=None resolves to density fitting (def2-universal-jkfit)."""
+    """coulomb=None resolves to density fitting (def2-universal-jkfit),
+    whitened at a concrete geometry."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     ks = KS(mol, LDA(), grid=becke(35, 50))
-    assert isinstance(ks.coulomb, DFCoulomb)
+    assert isinstance(ks.coulomb, WhitenedDFCoulomb)
 
 
 @pytest.mark.float64
@@ -157,8 +161,11 @@ def test_df_auto_chunk_switches_to_streamed(monkeypatch):
     mol = Molecule.from_xyz(WATER, "sto-3g")
     grid = becke(35, 50)
     # spherical=False: the streamed side below is cartesian; the 1e-9
-    # energy comparison needs both runs in the same fit space.
-    e_mat = scf(KS(mol, LDA(), grid=grid, coulomb=df(spherical=False))).e_tot
+    # energy comparison needs both runs in the same fit space, and
+    # whiten=False the same metric-inverse contraction (whitening reorders it,
+    # which moves energies by the ~1e-9 density-fitting floor).
+    e_mat = scf(KS(mol, LDA(), grid=grid,
+                   coulomb=df(spherical=False, whiten=False))).e_tot
     # Force the streamed branch: patch the resolved budget (device-aware on a
     # GPU) down to a tiny value so the water tensor exceeds it.
     monkeypatch.setattr(energy_mod, "_df_materialize_budget", lambda: 16)

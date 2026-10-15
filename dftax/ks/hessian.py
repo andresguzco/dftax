@@ -42,6 +42,8 @@ finite-difference Hessian.
 
 from __future__ import annotations
 
+import dataclasses
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -49,7 +51,10 @@ import jax.numpy as jnp
 from dftax.basis.loader import build_basis_data
 from dftax.grid import becke_grid, becke_grid_size, points
 from dftax.ks.energy import KS, System, _resolve_chunk
-from dftax.ks.terms import DFSpec, ExactSpec, StreamedDFForcesCoulomb, df
+from dftax.ks.terms import (
+    DFSpec, ExactSpec, ExternalCoulombSpec, PackedDFForcesCoulomb,
+    StreamedDFForcesCoulomb, df, resolve_df_screen,
+)
 
 
 def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
@@ -80,8 +85,7 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
                 "streamed response uses the cartesian auxiliary span; pass "
                 "df(chunk=None)."
             )
-        coulomb = DFSpec(auxbasis=coulomb.auxbasis, chunk=df_chunk,
-                         screen=coulomb.screen, spherical=coulomb.spherical)
+        coulomb = dataclasses.replace(coulomb, chunk=df_chunk)
 
     symbols = mol.symbols
     coords0 = jnp.asarray(mol.atom_coords())
@@ -124,9 +128,32 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
         )
 
         keep = None
-        if coulomb.screen is not None:
-            keep = _shell_pair_keep(basis_t, float(coulomb.screen))
+        screen = resolve_df_screen(coulomb.screen, len(symbols))
+        if screen is not None:
+            keep = _shell_pair_keep(basis_t, float(screen))
         slab_plans = plan_aux_slabs(basis_t, aux_t, df_chunk, keep)
+
+    # Materialized DF: the packed tensor with exchange at the TRACED rotated
+    # orbitals Z(kappa), as the streamed response does (see the energy
+    # below), from the reference geometry's plan and frozen keep set; see
+    # dftax.ks.forces for the forces counterpart.
+    packed = aux_t is not None and df_chunk is None
+    if packed:
+        from dftax.integrals.eri3c_bucketed import (
+            _shell_pair_keep, packed_layout, plan_eri3c, plan_pairs,
+        )
+        from dftax.ks.forces import _packed_forces_tensors
+
+        screen = resolve_df_screen(coulomb.screen, len(symbols))
+        keep = (_shell_pair_keep(basis_t, float(screen))
+                if screen is not None else None)
+        plan3 = plan_eri3c(basis_t, aux_t, keep_pairs=keep)
+        lay = packed_layout(plan3, basis_t.cart2sph is not None)
+        aux_plan = plan_pairs(aux_t)
+        layout = dict(pos=jnp.asarray(lay.pos), rows=jnp.asarray(lay.rows),
+                      cols=jnp.asarray(lay.cols),
+                      weight=jnp.asarray(lay.weight))
+        omega_lr = float(getattr(xc, "omega", 0.0)) if hf_lr != 0.0 else None
 
     nao_final = (
         basis_t.cart2sph.shape[1]
@@ -153,7 +180,8 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
             aux_b = eqx.tree_at(
                 lambda b: b.centers, aux_t, coords[aux_atom_idx]
             )
-            spec = df(aux_b, chunk=df_chunk)
+            spec = (ExternalCoulombSpec() if packed
+                    else df(aux_b, chunk=df_chunk))
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune,
             grid.r_max, grid.radial, grid.radii_adjust,
@@ -193,6 +221,16 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
                     int2c_inv_lr=ks.coulomb.int2c_inv_lr,
                     hf_coeff_lr=hf_lr, omega=ks.coulomb.omega,
                 ),
+            )
+        if packed:
+            T, vinv, T_lr, vinv_lr = _packed_forces_tensors(
+                basis, aux_b, plan3, aux_plan, omega_lr)
+            ks = eqx.tree_at(
+                lambda k: k.coulomb, ks,
+                PackedDFForcesCoulomb(
+                    T=T, int2c_inv=vinv, Zs=tuple(Zs), hf_coeff=hf_ax,
+                    T_lr=T_lr, int2c_inv_lr=vinv_lr, hf_coeff_lr=hf_lr,
+                    **layout),
             )
         return ks.total(jnp.stack(Ps))
 

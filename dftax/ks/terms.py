@@ -37,7 +37,7 @@ from dataclasses import dataclass
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Scalar
+from jaxtyping import Array, Float, Int, Scalar
 
 from dftax.energy.grid import xc_energy
 from dftax.energy.gto import BasisData, eval_gto, eval_gto_and_grad
@@ -61,6 +61,16 @@ class ExactSpec:
 
 
 @dataclass(frozen=True)
+class ExternalCoulombSpec(ExactSpec):
+    """Internal: build no Coulomb integrals at all, for a caller that swaps its
+    own Coulomb term into the built ``KS`` (:func:`dftax.ks.forces.forces`
+    with the packed density-fitting tensor). ``stream=True`` skips the
+    4-center build."""
+
+    stream: bool = True
+
+
+@dataclass(frozen=True)
 class DFSpec:
     """Density-fitting (RI-J/RI-K) backend (see :func:`df`).
 
@@ -72,8 +82,10 @@ class DFSpec:
 
     auxbasis: str | BasisData = "def2-universal-jkfit"
     chunk: int | str | None = "auto"
-    screen: float | None = None
+    screen: float | str | None = "auto"
     spherical: bool | None = None
+    whiten: bool | None = None
+    packed: bool | str = "auto"
 
 
 def exact(*, screen: float | None = None, stream: bool = False) -> ExactSpec:
@@ -97,8 +109,10 @@ def df(
     auxbasis: str | BasisData = "def2-universal-jkfit",
     *,
     chunk: int | str | None = "auto",
-    screen: float | None = None,
+    screen: float | str | None = "auto",
     spherical: bool | None = None,
+    whiten: bool | None = None,
+    packed: bool | str = "auto",
 ) -> DFSpec:
     """Density-fitted (RI) Coulomb/exchange with the given auxiliary basis.
 
@@ -120,8 +134,11 @@ def df(
             materialized path it is a shell-pair compact gather that omits
             the screened shell-pairs from the 3-center build (they stay
             exactly zero); with an int ``chunk`` it restricts the streamed
-            RI-J bra sum to the significant AO pairs. ``None`` (default)
-            keeps every pair, a bit-identical build.
+            RI-J bra sum to the significant AO pairs. ``None`` keeps every
+            pair, a bit-identical build. ``"auto"`` (default) screens at
+            ``DF_SCREEN_AUTO_CUTOFF`` from ``DF_SCREEN_AUTO_MIN_ATOMS`` atoms
+            up (the grid's gate) and keeps every pair below it; batched
+            geometries (``scf_batched``) never screen.
         spherical: auxiliary basis span. ``None`` (default) uses spherical
             harmonics on the materialized paths, single-device and
             mesh-sharded alike (non-redundant fit, positive definite metric),
@@ -131,6 +148,23 @@ def df(
             compare a materialized result against a streamed one in the same
             fit space; ``True`` asserts the spherical span and raises where
             it is unsupported.
+        whiten: fold the metric into the materialized tensor once, ``B = Lᵀ T``
+            with ``L Lᵀ = V⁺`` (:class:`WhitenedDFCoulomb`): the same energy to
+            the density-fitting floor, no metric multiply per build, and an
+            orbital-route exchange that never forms ``nao x nao`` kernels.
+            ``None`` (default) whitens whenever the build is concrete and
+            single-device materialized, and keeps :class:`DFCoulomb` where the
+            geometry is traced (forces, Hessians, ``scf_batched``), whose
+            metric inverse carries the geometry derivative; ``False`` never
+            whitens; ``True`` asserts it and raises where it cannot apply.
+        packed: store the whitened tensor packed over the kept bra shell
+            pairs, ``(naux, npair)`` (:class:`PackedDFCoulomb`): about half
+            the memory before screening and only the kept pairs with it, at
+            the price of unpacking one aux block per exchange evaluation.
+            ``"auto"`` (default) packs where that pays: when pair screening
+            is on (``screen``) or when the square tensor would miss the
+            device budget and the packed one fits; ``True`` / ``False``
+            force it. Traced builds (no whitening) stay square.
 
     Example:
         ```python
@@ -144,8 +178,35 @@ def df(
             "df(spherical=True, chunk=<int>) is not supported: the streamed "
             "backend contracts cartesian auxiliary elements on the fly."
         )
+    if whiten is True and isinstance(chunk, int):
+        raise ValueError(
+            "df(whiten=True, chunk=<int>) is not supported: the streamed "
+            "backend never materializes the tensor it would whiten."
+        )
+    if packed is True and (whiten is False or isinstance(chunk, int)):
+        raise ValueError(
+            "df(packed=True) stores the whitened materialized tensor; it "
+            "needs whiten=None or True and a materialized chunk."
+        )
     return DFSpec(auxbasis=auxbasis, chunk=chunk, screen=screen,
-                  spherical=spherical)
+                  spherical=spherical, whiten=whiten, packed=packed)
+
+
+# The default pair screen: off for small molecules, where nearly every pair
+# survives and an exact build is free, on from the size where the kept
+# fraction falls (cholesterol keeps ~half its pairs at 1e-10). Relative to
+# the largest Schwarz factor, like the grid's screen.
+DF_SCREEN_AUTO_MIN_ATOMS = 50
+DF_SCREEN_AUTO_CUTOFF = 1e-10
+
+
+def resolve_df_screen(screen, n_atom: int) -> float | None:
+    """A DF spec's ``screen`` for a molecule of ``n_atom`` atoms: ``"auto"``
+    by the size gate, an explicit float or ``None`` as given."""
+    if screen == "auto":
+        return (DF_SCREEN_AUTO_CUTOFF if n_atom >= DF_SCREEN_AUTO_MIN_ATOMS
+                else None)
+    return screen
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +268,63 @@ def _metric_pinv_jvp(primals, tangents):
     # eigenvalue differences, so it stays finite when metric eigenvalues coincide.
     dVs = 0.5 * (dV + dV.T)
     return Vp, -Vp @ dVs @ Vp
+
+
+def _metric_factor(V: Float[Array, "naux naux"]) -> Float[Array, "naux naux"]:
+    """``L`` with ``L Lᵀ = _metric_pinv(V)`` exactly: the same eigendecomposition
+    and the same 1e-7 relative cutoff, ``L = U_k w_k^{-1/2}``, with the dropped
+    directions kept as zero columns (so shapes do not depend on the spectrum).
+
+    Whitening the 3-center tensor with it, ``B = Lᵀ T``, folds the metric into
+    the tensor once per geometry, so neither RI-J nor RI-K multiplies by
+    ``V⁺`` again (the metric multiply was 72% of the exchange work on
+    coronene). Not differentiable here on purpose: the whitened term is built
+    only where the geometry is concrete (see :class:`WhitenedDFCoulomb`).
+    """
+    w, U = jnp.linalg.eigh(V)
+    keep = w > 1e-7 * w[-1]
+    return U * jnp.where(keep, 1.0 / jnp.sqrt(jnp.where(keep, w, 1.0)), 0.0)
+
+
+def _whiten(T: Float[Array, "nao nao naux"],
+            L: Float[Array, "naux naux"]) -> Float[Array, "nao nao naux"]:
+    """``B = Lᵀ T`` over the aux index, one block of AO rows at a time.
+
+    A loop of in-place slice updates rather than one einsum, so inside the
+    jitted build XLA rewrites ``T``'s own buffer and the whitened tensor costs
+    no second ``nao² naux`` allocation (the materialized tensor is the
+    device-memory ceiling). Blocks are the largest divisor of ``nao`` under
+    ~16M elements, so the loop has no ragged tail.
+    """
+    nao, _, naux = T.shape
+    rows = max(1, (1 << 24) // max(1, nao * naux))
+    k = max(d for d in range(1, min(nao, rows) + 1) if nao % d == 0)
+
+    def body(i, T):
+        blk = jax.lax.dynamic_slice_in_dim(T, i * k, k, axis=0)
+        return jax.lax.dynamic_update_slice_in_dim(
+            T, jnp.einsum("mnP,Px->mnx", blk, L), i * k, axis=0)
+
+    return jax.lax.fori_loop(0, nao // k, body, T)
+
+
+def _whiten_packed(T: Float[Array, "naux npair"],
+                   L: Float[Array, "naux naux"]) -> Float[Array, "naux npair"]:
+    """``B = Lᵀ T`` for a packed tensor, a block of pair columns at a time and
+    in place, like :func:`_whiten`: full blocks in a ``fori_loop`` and one
+    static tail."""
+    naux, npair = T.shape
+    k = max(1, min(npair, (1 << 24) // max(1, naux)))
+    nfull, tail = divmod(npair, k)
+
+    def body(i, T):
+        blk = jax.lax.dynamic_slice_in_dim(T, i * k, k, axis=1)
+        return jax.lax.dynamic_update_slice_in_dim(T, L.T @ blk, i * k, axis=1)
+
+    T = jax.lax.fori_loop(0, nfull, body, T)
+    if tail:
+        T = T.at[:, nfull * k:].set(L.T @ T[:, nfull * k:])
+    return T
 
 
 # ---------------------------------------------------------------------------
@@ -1011,6 +1129,272 @@ class DFCoulomb(CoulombTerm):
         return e, tuple(grads)
 
 
+# Exchange through a whitened tensor runs over aux blocks whose transient
+# (block x nao x nocc for G = B C) stays under this many elements (256 MiB in
+# float64); a system under it takes the whole aux range in one block.
+_K_BLOCK_ELEMS = 1 << 25
+
+
+def _over_aux_blocks(Bt, ncol, fn):
+    """``Σ_blocks fn(Bt[:, :, block])`` (``fn`` returns a pytree), with blocks
+    sized by ``_K_BLOCK_ELEMS`` for an ``ncol``-column right-hand side: a
+    ``fori_loop`` over the full blocks and one static tail."""
+    nao, _, naux = Bt.shape
+    b = max(1, min(naux, _K_BLOCK_ELEMS // max(1, nao * ncol)))
+    nfull, tail = divmod(naux, b)
+    acc = fn(Bt[:, :, :b])
+    if nfull > 1:
+        def body(i, acc):
+            blk = jax.lax.dynamic_slice_in_dim(Bt, i * b, b, axis=2)
+            return jax.tree.map(jnp.add, acc, fn(blk))
+        acc = jax.lax.fori_loop(1, nfull, body, acc)
+    if tail:
+        acc = jax.tree.map(jnp.add, acc, fn(Bt[:, :, nfull * b:]))
+    return acc
+
+
+def _rik_whitened(B, Cocc):
+    """``(raw exchange, kernel KK)`` from a whitened tensor: ``_rik_materialized``
+    with the metric already folded in (``KK = Σ_x G_x G_xᵀ``, ``G_x = B_x C``),
+    accumulated over aux blocks."""
+    def block(Bb):
+        G = jnp.einsum("mlx,li->xmi", Bb, Cocc)
+        return jnp.einsum("xmi,xni->mn", G, G)
+
+    KK = _over_aux_blocks(B, Cocc.shape[1], block)
+    return jnp.vdot(Cocc, KK @ Cocc), KK
+
+
+def _rik_whitened_orbitals(B, Ct):
+    """``(Σ_x |D_x|², Σ_x G_x D_x)`` with ``G_x = B_x C``, ``D_x = Cᵀ G_x``:
+    the raw exchange and a quarter of its orbital gradient, with no
+    ``nao x nao`` kernel, over aux blocks."""
+    def block(Bb):
+        G = jnp.einsum("mlx,li->xmi", Bb, Ct)             # (b, nao, no)
+        D = jnp.einsum("mi,xmj->xij", Ct, G)              # (b, no, no)
+        return jnp.sum(D * D), jnp.einsum("xmi,xij->mj", G, D)
+
+    return _over_aux_blocks(B, Ct.shape[1], block)
+
+
+class WhitenedDFCoulomb(CoulombTerm):
+    """Materialized density fitting on the whitened tensor ``B = Lᵀ T``.
+
+    The same functional as :class:`DFCoulomb` (``L Lᵀ = V⁺`` exactly, see
+    :func:`_metric_factor`) with the metric folded in once per geometry:
+
+    * RI-J is ``½ |B·p|²`` and its potential ``Bᵀ(B·p)``, symmetric by
+      construction (the rounding asymmetry of ``V⁺γ`` cannot arise);
+    * RI-K never multiplies by ``V⁺``. Through the orbitals it is
+      ``Σ_x |D_x|²`` with ``D_x = Cᵀ B_x C`` and gradient ``4 Σ_x (B_x C) D_x``,
+      at ``nao² nocc naux`` for the half transform and ``nao nocc² naux``
+      after it, with no ``nao x nao`` kernel formed.
+
+    Results agree with :class:`DFCoulomb` to the documented density-fitting
+    floor (a reordered contraction against the jkfit metric's kept band), not
+    to machine precision.
+
+    Built only where the geometry is concrete (an eager ``KS``): the factor
+    is not differentiated, so a ``KS`` rebuilt at traced coordinates (forces,
+    the batched solvers) keeps :class:`DFCoulomb` and its ``_metric_pinv``
+    derivative. ``B``'s individual aux rows are gauge-dependent; consumers use
+    it only through ``Σ_x B_x ⊗ B_x``.
+    """
+
+    B: Float[Array, "nao nao naux"]
+    hf_coeff: float = eqx.field(static=True)
+    B_lr: Float[Array, "nao nao naux"] | None = None
+    hf_coeff_lr: float = eqx.field(static=True, default=0.0)
+
+    def _exchanges(self):
+        return tuple((ax, Bt) for ax, Bt in ((self.hf_coeff, self.B),
+                                             (self.hf_coeff_lr, self.B_lr))
+                     if ax != 0.0)
+
+    def energy(self, P, S, nocc):
+        gamma = jnp.einsum("mnx,mn->x", self.B, jnp.sum(P, axis=0))
+        e = 0.5 * jnp.dot(gamma, gamma)
+        for ax, Bt in self._exchanges():
+            e = e + _exchange_quadratic(
+                lambda Q, Bt=Bt: jnp.einsum("mlx,nsx,ls->mn", Bt, Bt, Q),
+                P, ax)
+        return e
+
+    def energy_and_potential(self, P, S, nocc, idempotent=True):
+        if not idempotent:
+            return super().energy_and_potential(P, S, nocc, idempotent)
+        gamma = jnp.einsum("mnx,mn->x", self.B, jnp.sum(P, axis=0))
+        e = 0.5 * jnp.dot(gamma, gamma)
+        V = jnp.broadcast_to(jnp.einsum("mnx,x->mn", self.B, gamma), P.shape)
+        nspin = P.shape[0]
+        dscale = 0.5 if nspin == 1 else 1.0
+        for ax, Bt in self._exchanges():
+            e_pref = -ax if nspin == 1 else -0.5 * ax
+            for sigma, n in enumerate(nocc):
+                if n == 0:
+                    continue
+                # stop_gradient: see DFCoulomb.energy_and_potential
+                C = jax.lax.stop_gradient(
+                    _rik_occ_orbitals(P[sigma], S, n, dscale))
+                raw, KK = _rik_whitened(Bt, C)
+                e = e + e_pref * raw
+                V = V.at[sigma].add(-ax * KK)
+        return e, V
+
+    def energy_and_grad_orbitals(self, Cs, ws, S, nocc):
+        """See :meth:`DFCoulomb.energy_and_grad_orbitals`; here RI-K needs no
+        kernel: ``raw = Σ_x |D_x|²``, ``d raw / dC = 4 Σ_x G_x D_x``."""
+        nspin = len(Cs)
+        w_full = 2.0 if nspin == 1 else 1.0
+        P = jnp.stack([(C * w) @ C.T for C, w in zip(Cs, ws)])
+        gamma = jnp.einsum("mnx,mn->x", self.B, jnp.sum(P, axis=0))
+        e = 0.5 * jnp.dot(gamma, gamma)
+        J = jnp.einsum("mnx,x->mn", self.B, gamma)
+        grads = [2.0 * (J @ C) * w for C, w in zip(Cs, ws)]
+        for ax, Bt in self._exchanges():
+            e_pref = -ax if nspin == 1 else -0.5 * ax
+            for s, (C, w) in enumerate(zip(Cs, ws)):
+                if C.shape[1] == 0:
+                    continue
+                scale = jnp.sqrt(w / w_full)
+                Ct = C * scale
+                raw, GD = _rik_whitened_orbitals(Bt, Ct)
+                e = e + e_pref * raw
+                grads[s] = grads[s] + 4.0 * e_pref * GD * scale
+        return e, tuple(grads)
+
+
+def _over_row_blocks(X, per_row, fn):
+    """``Σ_blocks fn(X[block])`` over row blocks of ``X`` whose transient is
+    ``per_row`` elements a row, sized by ``_K_BLOCK_ELEMS``; see
+    :func:`_over_aux_blocks`."""
+    n = X.shape[0]
+    b = max(1, min(n, _K_BLOCK_ELEMS // max(1, per_row)))
+    nfull, tail = divmod(n, b)
+    acc = fn(X[:b])
+    if nfull > 1:
+        def body(i, acc):
+            blk = jax.lax.dynamic_slice_in_dim(X, i * b, b, axis=0)
+            return jax.tree.map(jnp.add, acc, fn(blk))
+        acc = jax.lax.fori_loop(1, nfull, body, acc)
+    if tail:
+        acc = jax.tree.map(jnp.add, acc, fn(X[nfull * b:]))
+    return acc
+
+
+class PackedDFCoulomb(CoulombTerm):
+    """:class:`WhitenedDFCoulomb` on the packed tensor: ``B = Lᵀ T`` stored
+    ``(naux, npair)`` over the kept bra shell pairs
+    (:func:`~dftax.integrals.eri3c_bucketed.eri3c_packed`), about half the
+    square tensor before any screening and only the kept pairs with it.
+
+    * RI-J: ``p = weight * P[rows, cols]``, ``γ = B p``, ``E_J = ½ |γ|²`` and
+      ``J = unpack(Bᵀ γ)``: two passes over the tensor, symmetric by
+      construction (``pos`` is).
+    * RI-K, aux block by aux block: unpack ``U_x = B_x[pos]`` (dense
+      ``nao x nao``, zeros where screened), then exactly the whitened square
+      contractions (``G_x = U_x C``, ``D_x = Cᵀ G_x``).
+
+    The same functional as :class:`DFCoulomb` and :class:`WhitenedDFCoulomb`
+    up to the documented density-fitting floor (the diagonal shell blocks
+    read their upper triangle, the square build its transposed write). Built
+    where the geometry is concrete, like the whitened term.
+    """
+
+    B: Float[Array, "naux npair"]
+    pos: Int[Array, "nao nao"]
+    rows: Int[Array, "npair"]
+    cols: Int[Array, "npair"]
+    weight: Float[Array, "npair"]
+    hf_coeff: float = eqx.field(static=True)
+    B_lr: Float[Array, "naux npair"] | None = None
+    hf_coeff_lr: float = eqx.field(static=True, default=0.0)
+
+    def _exchanges(self):
+        return tuple((ax, Bt) for ax, Bt in ((self.hf_coeff, self.B),
+                                             (self.hf_coeff_lr, self.B_lr))
+                     if ax != 0.0)
+
+    def _unpack(self, Bb):
+        """``(b, npair) -> (b, nao, nao)``; screened pairs read a zero."""
+        z = jnp.zeros((Bb.shape[0], 1), Bb.dtype)
+        return jnp.take(jnp.concatenate([Bb, z], axis=1), self.pos, axis=1)
+
+    def _coulomb(self, Ptot):
+        gamma = self.B @ (self.weight * Ptot[self.rows, self.cols])
+        return gamma, 0.5 * jnp.dot(gamma, gamma)
+
+    def _j(self, gamma):
+        return self._unpack((self.B.T @ gamma)[None])[0]
+
+    def _per_row(self, ncol):
+        nao = self.pos.shape[0]
+        return nao * nao + nao * ncol
+
+    def energy(self, P, S, nocc):
+        gamma, e = self._coulomb(jnp.sum(P, axis=0))
+        for ax, Bt in self._exchanges():
+            def kfun(Q, Bt=Bt):
+                def block(Bb):
+                    U = self._unpack(Bb)
+                    return jnp.einsum("xml,ls,xsn->mn", U, Q, U)
+                return _over_row_blocks(Bt, self._per_row(Q.shape[0]), block)
+            e = e + _exchange_quadratic(kfun, P, ax)
+        return e
+
+    def energy_and_potential(self, P, S, nocc, idempotent=True):
+        if not idempotent:
+            return super().energy_and_potential(P, S, nocc, idempotent)
+        gamma, e = self._coulomb(jnp.sum(P, axis=0))
+        V = jnp.broadcast_to(self._j(gamma), P.shape)
+        nspin = P.shape[0]
+        dscale = 0.5 if nspin == 1 else 1.0
+        for ax, Bt in self._exchanges():
+            e_pref = -ax if nspin == 1 else -0.5 * ax
+            for sigma, n in enumerate(nocc):
+                if n == 0:
+                    continue
+                # stop_gradient: see DFCoulomb.energy_and_potential
+                C = jax.lax.stop_gradient(
+                    _rik_occ_orbitals(P[sigma], S, n, dscale))
+
+                def block(Bb, C=C):
+                    G = jnp.einsum("xml,li->xmi", self._unpack(Bb), C)
+                    return jnp.einsum("xmi,xni->mn", G, G)
+
+                KK = _over_row_blocks(Bt, self._per_row(n), block)
+                e = e + e_pref * jnp.vdot(C, KK @ C)
+                V = V.at[sigma].add(-ax * KK)
+        return e, V
+
+    def energy_and_grad_orbitals(self, Cs, ws, S, nocc):
+        """See :meth:`WhitenedDFCoulomb.energy_and_grad_orbitals`."""
+        nspin = len(Cs)
+        w_full = 2.0 if nspin == 1 else 1.0
+        Ptot = sum((C * w) @ C.T for C, w in zip(Cs, ws))
+        gamma, e = self._coulomb(Ptot)
+        J = self._j(gamma)
+        grads = [2.0 * (J @ C) * w for C, w in zip(Cs, ws)]
+        for ax, Bt in self._exchanges():
+            e_pref = -ax if nspin == 1 else -0.5 * ax
+            for s, (C, w) in enumerate(zip(Cs, ws)):
+                if C.shape[1] == 0:
+                    continue
+                scale = jnp.sqrt(w / w_full)
+                Ct = C * scale
+
+                def block(Bb, Ct=Ct):
+                    G = jnp.einsum("xml,li->xmi", self._unpack(Bb), Ct)
+                    D = jnp.einsum("mi,xmj->xij", Ct, G)
+                    return jnp.sum(D * D), jnp.einsum("xmi,xij->mj", G, D)
+
+                raw, GD = _over_row_blocks(Bt, self._per_row(C.shape[1]),
+                                           block)
+                e = e + e_pref * raw
+                grads[s] = grads[s] + 4.0 * e_pref * GD * scale
+        return e, tuple(grads)
+
+
 class ShardedDFCoulomb(CoulombTerm):
     """Materialized RI-J with the 3-center tensor sharded over the aux axis.
 
@@ -1212,6 +1596,96 @@ class StreamedDFForcesCoulomb(CoulombTerm):
                     self.basis, self.aux_basis, vinv,
                     S, self.Zs, prefs, self.slab_plans, om,
                 )
+        return e
+
+
+class _NoCoulomb(CoulombTerm):
+    """Placeholder of an :class:`ExternalCoulombSpec` build; replaced by the
+    caller before any energy is taken."""
+
+    def energy(self, P, S, nocc):
+        return jnp.asarray(0.0)
+
+
+def _packed_dmat(T, pos, Z):
+    """``D_X = Zᵀ T_X Z`` for every aux function, ``(naux, nocc, nocc)``, from a
+    packed tensor, a block of aux rows at a time: each block is unpacked
+    through ``pos`` to dense ``nao x nao`` slices and rematerialized in the
+    backward pass (``jax.checkpoint``), so under ``grad`` no more than one
+    unpacked block exists at once."""
+    naux = T.shape[0]
+    nao, no = Z.shape
+    b = max(1, min(naux, _K_BLOCK_ELEMS // max(1, nao * nao + nao * no)))
+
+    @jax.checkpoint
+    def block(Tb):
+        z = jnp.zeros((Tb.shape[0], 1), Tb.dtype)
+        U = jnp.take(jnp.concatenate([Tb, z], axis=1), pos, axis=1)
+        G = jnp.einsum("xmn,nj->xmj", U, Z)
+        return jnp.einsum("mi,xmj->xij", Z, G)
+
+    nfull, tail = divmod(naux, b)
+    parts = []
+    if nfull:
+        def body(carry, i):
+            return carry, block(jax.lax.dynamic_slice_in_dim(T, i * b, b, 0))
+        _, D = jax.lax.scan(body, None, jnp.arange(nfull))
+        parts.append(D.reshape(nfull * b, no, no))
+    if tail:
+        parts.append(block(T[nfull * b:]))
+    return parts[0] if len(parts) == 1 else jnp.concatenate(parts)
+
+
+class PackedDFForcesCoulomb(CoulombTerm):
+    """Density fitting on the packed tensor for geometry derivatives;
+    constructed only by :func:`dftax.ks.forces.forces`.
+
+    ``T`` is the un-whitened packed 3-center tensor built at the traced
+    coordinates (:func:`~dftax.integrals.eri3c_bucketed.eri3c_packed`, with
+    the reference geometry's plan and frozen screening keep set), and
+    ``int2c_inv`` the metric pseudo-inverse whose ``custom_jvp`` carries the
+    metric's derivative. RI-J contracts the packed density
+    (``γ = T (w ∘ P[rows, cols])``, ``½ γᵀ V⁺ γ``). Exchange is evaluated at
+    the frozen occupied coefficients ``Zs``, as
+    :func:`_streamed_df_rik_frozen` does: with ``P_σ = w Z M⁻¹ Zᵀ``,
+    ``M = Zᵀ S Z``, it is ``Σ_XY V⁺_XY Tr(M⁻¹ D_X M⁻¹ D_Y)`` with
+    ``D_X = Zᵀ T_X Z`` (:func:`_packed_dmat`), the same energy as that of
+    ``P`` within the forces parametrization, at ``nao² nocc naux`` instead
+    of the square tensor's dense density-route contraction. Forces only:
+    ``∂E/∂P`` is not the KS Fock here.
+    """
+
+    T: Float[Array, "naux npair"]
+    int2c_inv: Float[Array, "naux naux"]
+    pos: Int[Array, "nao nao"]
+    rows: Int[Array, "npair"]
+    cols: Int[Array, "npair"]
+    weight: Float[Array, "npair"]
+    Zs: tuple
+    hf_coeff: float = eqx.field(static=True)
+    T_lr: Float[Array, "naux npair"] | None = None
+    int2c_inv_lr: Float[Array, "naux naux"] | None = None
+    hf_coeff_lr: float = eqx.field(static=True, default=0.0)
+
+    def energy(self, P, S, nocc):
+        p = self.weight * jnp.sum(P, axis=0)[self.rows, self.cols]
+        gamma = self.T @ p
+        e = 0.5 * jnp.dot(gamma, self.int2c_inv @ gamma)
+        for ax, Tt, vinv in ((self.hf_coeff, self.T, self.int2c_inv),
+                             (self.hf_coeff_lr, self.T_lr, self.int2c_inv_lr)):
+            if ax == 0.0:
+                continue
+            prefs = (-ax,) if len(self.Zs) == 1 else (-0.5 * ax, -0.5 * ax)
+            for Z, pref in zip(self.Zs, prefs):
+                if Z.shape[1] == 0:
+                    continue
+                M = Z.T @ S @ Z
+                D = _packed_dmat(Tt, self.pos, Z)          # (naux, no, no)
+                naux = D.shape[0]
+                Q = jnp.linalg.solve(M, D)                  # M⁻¹ D_X
+                QF = Q.reshape(naux, -1)
+                QT = Q.transpose(0, 2, 1).reshape(naux, -1)
+                e = e + pref * jnp.vdot(QF, vinv @ QT)
         return e
 
 
@@ -1896,7 +2370,8 @@ class ShardedGridXC(XCTerm):
 
 def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                   eri_lr=None, int3c_lr=None, int2c_inv_lr=None,
-                  hf_coeff_lr=0.0, omega=0.0, devices=None, slab_plans=None):
+                  hf_coeff_lr=0.0, omega=0.0, devices=None, slab_plans=None,
+                  packed_plan=None):
     """Wrap the integral arrays built for ``spec`` into the matching Coulomb term.
 
     ``hf_coeff_lr`` (with the ``*_lr`` attenuated tensors and ``omega``) is the
@@ -1925,11 +2400,24 @@ def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
                 int2c_inv_lr=int2c_inv_lr, hf_coeff_lr=hf_coeff_lr,
                 omega=omega, slab_plans=slab_plans,
             )
+        if int2c_inv is None and int3c.ndim == 2:     # packed + whitened
+            from dftax.integrals.eri3c_bucketed import packed_layout
+
+            lay = packed_layout(packed_plan, basis.cart2sph is not None)
+            return PackedDFCoulomb(
+                B=int3c, pos=jnp.asarray(lay.pos), rows=jnp.asarray(lay.rows),
+                cols=jnp.asarray(lay.cols), weight=jnp.asarray(lay.weight),
+                hf_coeff=hf_coeff, B_lr=int3c_lr, hf_coeff_lr=hf_coeff_lr)
+        if int2c_inv is None:      # whitened in _build_integrals
+            return WhitenedDFCoulomb(B=int3c, hf_coeff=hf_coeff, B_lr=int3c_lr,
+                                     hf_coeff_lr=hf_coeff_lr)
         return DFCoulomb(
             int3c=int3c, int2c_inv=int2c_inv, hf_coeff=hf_coeff,
             int3c_lr=int3c_lr, int2c_inv_lr=int2c_inv_lr,
             hf_coeff_lr=hf_coeff_lr,
         )
+    if isinstance(spec, ExternalCoulombSpec):
+        return _NoCoulomb()
     if spec.stream:
         if hf_coeff_lr != 0.0:
             raise NotImplementedError(

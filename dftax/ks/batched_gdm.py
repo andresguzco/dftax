@@ -56,7 +56,9 @@ from dftax.ks.gdm import (
 )
 from dftax.ks.guess import density_from_guess
 from dftax.ks.scf import canonical_orthonormalizer
-from dftax.ks.terms import DFCoulomb, GridXC
+from dftax.ks.terms import (
+    DFCoulomb, GridXC, PackedDFCoulomb, WhitenedDFCoulomb,
+)
 
 PAD = 1.0e3          # Ha; the padded one-electron diagonal, far from any level
 
@@ -75,7 +77,7 @@ class PaddedKS(eqx.Module):
     hcore: Float[Array, "nao nao"]
     e_nn: Scalar
     e_disp: Scalar
-    coulomb: DFCoulomb
+    coulomb: DFCoulomb | WhitenedDFCoulomb | PackedDFCoulomb
     xc_term: GridXC
     occ: tuple
     guess_shift: Float[Array, "nspin nao"]
@@ -96,17 +98,48 @@ class Bucket:
     naux: int
     ng: int
     nocc: tuple[int, ...]
+    npair: int = 0             # packed DF only: the packed pair count
 
 
 def _check_supported(ks: KS) -> None:
-    if not isinstance(ks.coulomb, DFCoulomb) or not isinstance(ks.xc_term,
-                                                                GridXC):
+    if not isinstance(ks.coulomb, (DFCoulomb, WhitenedDFCoulomb,
+                                   PackedDFCoulomb)) or \
+            not isinstance(ks.xc_term, GridXC):
         raise NotImplementedError(
             "gdm_batched needs the materialized DF and AO-grid backends "
             "(df(chunk=None), becke(chunk=None)); got "
             f"{type(ks.coulomb).__name__} / {type(ks.xc_term).__name__}.")
     if float(getattr(ks.xc_term.xc, "nlc_b", 0.0)) != 0.0:
         raise NotImplementedError("gdm_batched: no VV10, so far.")
+
+
+def _tensors(c):
+    """``(3-center, metric inverse, long-range 3-center, its inverse)`` of a
+    materialized DF term; a whitened term has the metric folded in (``None``
+    inverses) and is padded the same way, zero aux columns being inert."""
+    if isinstance(c, PackedDFCoulomb):
+        return None, None, None, None          # padded by _pad_packed
+    if isinstance(c, WhitenedDFCoulomb):
+        return c.B, None, c.B_lr, None
+    return c.int3c, c.int2c_inv, c.int3c_lr, c.int2c_inv_lr
+
+
+def _naux(c):
+    if isinstance(c, PackedDFCoulomb):
+        return int(c.B.shape[0])
+    return int(_tensors(c)[0].shape[2])
+
+
+@partial(jax.jit, static_argnames=("nao", "naux", "npair"))
+def _pad_packed(B, pos, rows, cols, weight, B_lr, *, nao, naux, npair):
+    """A packed term's arrays at the bucket sizes. Padded aux rows and pair
+    columns are zero; padded AOs, like the molecule's own screened pairs,
+    read a zero column through ``pos``; padded packed entries weigh 0."""
+    n = pos.shape[0]
+    pos_p = jnp.full((nao, nao), npair, pos.dtype).at[:n, :n].set(pos)
+    lr = None if B_lr is None else _block(B_lr, (naux, npair))
+    return (_block(B, (naux, npair)), pos_p, _block(rows, (npair,)),
+            _block(cols, (npair,)), _block(weight, (npair,)), lr)
 
 
 def bucket_for(kss) -> Bucket:
@@ -123,12 +156,16 @@ def bucket_for(kss) -> Bucket:
     nocc = tuple(max(ks.nocc[s] for ks in kss) for s in range(nspin))
     nao = max(int(ks.S.shape[0]) + max(nocc[s] - ks.nocc[s]
                                        for s in range(nspin)) for ks in kss)
-    naux = max(int(ks.coulomb.int2c_inv.shape[0]) for ks in kss)
+    naux = max(_naux(ks.coulomb) for ks in kss)
     ng = max(int(ks.xc_term.weights.shape[0]) for ks in kss)
-    return Bucket(nao=nao, naux=naux, ng=ng, nocc=nocc)
+    npair = max((int(ks.coulomb.B.shape[1]) for ks in kss
+                 if isinstance(ks.coulomb, PackedDFCoulomb)), default=0)
+    return Bucket(nao=nao, naux=naux, ng=ng, nocc=nocc, npair=npair)
 
 
 def _block(a, shape):
+    if a is None:
+        return None
     out = jnp.zeros(shape, a.dtype)
     return out.at[tuple(slice(0, n) for n in a.shape)].set(a)
 
@@ -145,7 +182,7 @@ def _pad_arrays(S, hcore, int3c, int2c_inv, ao, dao, weights, int3c_lr,
         PAD * jnp.eye(nao - n))
     lr = (None if int3c_lr is None else
           (_block(int3c_lr, (nao, nao, naux)),
-           _block(int2c_inv_lr, (naux, naux))))
+           _block(int2c_inv_lr, (naux, naux))))   # (B_lr, None) if whitened
     return (S_p, hcore_p, _block(int3c, (nao, nao, naux)),
             _block(int2c_inv, (naux, naux)), _block(ao, (ng, nao)),
             _block(dao, (ng, nao, 3)), _block(weights, (ng,)), lr)
@@ -169,9 +206,10 @@ def pad_ks(ks: KS, b: Bucket) -> PaddedKS:
                          f"has {nspin}.")
     n = int(ks.S.shape[0])
     c, x = ks.coulomb, ks.xc_term
+    t3, vinv, t3_lr, vinv_lr = _tensors(c)
     S, hcore, int3c, int2c_inv, ao, dao, weights, lr = _pad_arrays(
-        ks.S, ks.hcore, c.int3c, c.int2c_inv, x.ao, x.dao, x.weights,
-        c.int3c_lr, c.int2c_inv_lr, nao=b.nao, naux=b.naux, ng=b.ng)
+        ks.S, ks.hcore, t3, vinv, x.ao, x.dao, x.weights, t3_lr, vinv_lr,
+        nao=b.nao, naux=b.naux, ng=b.ng)
     w = 2.0 if nspin == 1 else 1.0
     empty = [b.nocc[s] - ks.nocc[s] for s in range(nspin)]
     occ = tuple(jnp.concatenate([jnp.zeros(empty[s]),
@@ -182,11 +220,25 @@ def pad_ks(ks: KS, b: Bucket) -> PaddedKS:
         shift[s, n:n + empty[s]] = -2.0 * PAD
     # hybrids: the exchange takes the orbitals with their occupations
     # (DFCoulomb.energy_and_grad_orbitals), so the empty padded slots drop out
-    coulomb = DFCoulomb(
-        int3c=int3c, int2c_inv=int2c_inv, hf_coeff=c.hf_coeff,
-        int3c_lr=None if lr is None else lr[0],
-        int2c_inv_lr=None if lr is None else lr[1],
-        hf_coeff_lr=c.hf_coeff_lr)
+    if isinstance(c, PackedDFCoulomb):
+        if b.npair < c.B.shape[1]:
+            raise ValueError(f"bucket npair {b.npair} < {c.B.shape[1]}.")
+        Bp, pos, rows, cols, wt, Blr = _pad_packed(
+            c.B, c.pos, c.rows, c.cols, c.weight, c.B_lr, nao=b.nao,
+            naux=b.naux, npair=b.npair)
+        coulomb = PackedDFCoulomb(
+            B=Bp, pos=pos, rows=rows, cols=cols, weight=wt,
+            hf_coeff=c.hf_coeff, B_lr=Blr, hf_coeff_lr=c.hf_coeff_lr)
+    elif isinstance(c, WhitenedDFCoulomb):
+        coulomb = WhitenedDFCoulomb(
+            B=int3c, hf_coeff=c.hf_coeff, B_lr=None if lr is None else lr[0],
+            hf_coeff_lr=c.hf_coeff_lr)
+    else:
+        coulomb = DFCoulomb(
+            int3c=int3c, int2c_inv=int2c_inv, hf_coeff=c.hf_coeff,
+            int3c_lr=None if lr is None else lr[0],
+            int2c_inv_lr=None if lr is None else lr[1],
+            hf_coeff_lr=c.hf_coeff_lr)
     return PaddedKS(
         S=S, hcore=hcore, e_nn=ks.e_nn, e_disp=ks.e_disp,
         coulomb=coulomb,
@@ -437,15 +489,16 @@ def gdm_batched(kss, *, max_iter: int = 200, e_tol: float = 1e-8,
     kss = list(kss)
     # one batch per spin type and functional: both are static metadata of
     # the padded system (the functional object, its exact-exchange
-    # fractions), and systems that differ in them cannot be stacked
+    # fractions, whitened or not), and systems that differ in them cannot be
+    # stacked
     groups: dict[tuple, list[int]] = {}
     for i, ks in enumerate(kss):
         key = (len(ks.nocc), ks.xc_term.xc, float(ks.coulomb.hf_coeff),
-               float(ks.coulomb.hf_coeff_lr))
+               float(ks.coulomb.hf_coeff_lr), type(ks.coulomb))
         groups.setdefault(key, []).append(i)
     if bucket is not None and len(groups) > 1:
-        raise ValueError("a fixed bucket needs a batch of one spin type and "
-                         "one functional.")
+        raise ValueError("a fixed bucket needs a batch of one spin type, "
+                         "one functional and one DF term type.")
     n = len(kss)
     e, conv, it = np.zeros(n), np.zeros(n, bool), np.zeros(n, int)
     redo = np.zeros(n, bool)

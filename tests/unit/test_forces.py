@@ -186,6 +186,35 @@ class TestDensityFittingForces:
         fd = -(energy(cp) - energy(cm)) / (2 * eps)
         assert abs(float(F[1, 2]) - fd) < 1e-4, f"F={float(F[1,2])} fd={fd}"
 
+    def test_materialized_df_forces_take_the_packed_path(self, monkeypatch):
+        """Materialized DF forces build the packed tensor at the traced
+        coordinates (with frozen-orbital exchange), not the square one; a
+        hybrid's packed forces match the streamed frozen-orbital forces to
+        machine precision on a well-conditioned auxiliary metric."""
+        import importlib
+
+        from dftax.energy.xc import PBE0
+
+        # the module, not the re-exported forces() function of the same name
+        forces_mod = importlib.import_module("dftax.ks.forces")
+
+        calls = []
+        orig = forces_mod._packed_forces_tensors
+        monkeypatch.setattr(forces_mod, "_packed_forces_tensors",
+                            lambda *a: (calls.append(1), orig(*a))[1])
+        xc = PBE0()
+        mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.9; H 0 0.2 1.8", "sto-3g",
+                                spin=1)
+        res = scf(KS(mol, xc, grid=becke(NR, LEB), coulomb=df("sto-3g")),
+                  e_tol=1e-10, d_tol=1e-8)
+        Zs = (res.mo_coeff[0][:, :2], res.mo_coeff[1][:, :1])
+        Fp = forces(mol, xc, Zs, grid=becke(NR, LEB),
+                    coulomb=df("sto-3g", chunk=None, spherical=False))
+        assert calls
+        Fs = forces(mol, xc, Zs, grid=becke(NR, LEB),
+                    coulomb=df("sto-3g", chunk=4))
+        assert float(jnp.max(jnp.abs(Fp - Fs))) < 1e-12
+
     def test_streamed_df_forces_match_materialized(self):
         """The streamed DF force path (aux-slabbed, 3-center recomputed; the
         forces-OOM fix) must reproduce the materialized-tensor forces.

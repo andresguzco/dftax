@@ -25,6 +25,7 @@ is the observable contract.
 """
 
 from collections import defaultdict
+from dataclasses import dataclass
 from functools import lru_cache
 
 from dftax.energy.gto import static_fingerprint
@@ -150,6 +151,62 @@ def _merge_classes(buckets, nprims, nang, npayload, tol=None):
     return sorted(out, key=lambda e: (e[0], e[1]))
 
 
+def _merge_factored(buckets, nprims, tol=None):
+    """:func:`_merge_classes` for factored 3-center sub-buckets.
+
+    ``buckets`` maps ``(la, lb, lc, npa, npb, npc)`` to one segment, its
+    ``((ra, rb, sa, sb), (rc, sc))`` factors; a sub-bucket holds
+    ``len(ra) * len(rc)`` triples. Returns ``[((la, lb, lc), nprims,
+    segments), ...]`` with the same grouping, order and padded primitive
+    counts the triple-by-triple planner produced.
+    """
+    by_ang = defaultdict(list)
+    for key in sorted(buckets):
+        by_ang[key[:3]].append(key)
+    out = []
+    for ang, keys in sorted(by_ang.items()):
+        counts = [len(buckets[k][0][0]) * len(buckets[k][1][0]) for k in keys]
+        for grp in _merge_padded_buckets([nprims[k] for k in keys], counts,
+                                         tol):
+            npr = tuple(max(nprims[keys[i]][d] for i in grp)
+                        for d in range(3))
+            out.append((ang, npr, tuple(buckets[keys[i]]
+                                        for i in sorted(grp))))
+    return sorted(out, key=lambda e: (e[0], e[1]))
+
+
+def _segment_triples(seg):
+    """``(ra, rb, rc, sa, sb, sc)`` numpy rows of one factored segment, in the
+    builder's pair-major, aux-minor order."""
+    (ra, rb, sa, sb), (rc, sc) = seg
+    npair, nax = len(ra), len(rc)
+    pair = [np.repeat(np.asarray(x, dtype=np.int64), nax)
+            for x in (ra, rb, sa, sb)]
+    auxr = [np.tile(np.asarray(x, dtype=np.int64), npair) for x in (rc, sc)]
+    return pair[0], pair[1], auxr[0], pair[2], pair[3], auxr[1]
+
+
+def expand_eri3c(plan):
+    """``plan`` with every class spelled out triple by triple, as
+    ``(la, lb, lc, anga, angb, angc, ra, rb, rc, nprims, sa, sb, sc)`` with
+    tuple rows: the form planners emitted before factoring, for consumers
+    that read rows (tests, the tiled engine). O(triples); the builder never
+    needs it. Already-expanded classes pass through."""
+    nao, naux, nao_sph, naux_sph, classes = plan
+    out = []
+    for c in classes:
+        if len(c) != 8:
+            out.append(c)
+            continue
+        la, lb, lc, anga, angb, angc, segs, npr = c
+        rows = [np.concatenate(x) for x in
+                zip(*(_segment_triples(sg) for sg in segs))]
+        ra, rb, rc, sa, sb, sc = (tuple(int(v) for v in x) for x in rows)
+        out.append((la, lb, lc, anga, angb, angc, ra, rb, rc, npr,
+                    sa, sb, sc))
+    return Plan((nao, naux, nao_sph, naux_sph, tuple(out)))
+
+
 def _scatter_blocks(out, starts, vals):
     """Write one dense block per shell (triple) into ``out``.
 
@@ -237,20 +294,9 @@ def _shell_pair_keep(basis, thresh):
     is conservative w.r.t. the per-AO test. Geometry-only, host-side; for
     extended systems the survivors are O(N).
     """
-    from dftax.integrals.eri4c import schwarz_diagonal
+    from dftax.integrals.eri4c import shell_pair_schwarz
 
-    shells, _ = _shells(basis.angular, basis.exponents)
-    nao = int(np.asarray(basis.angular).shape[0])
-    row_shell = np.empty(nao, dtype=np.int64)
-    for si, (_l, row0, ncomp, _np) in enumerate(shells):
-        row_shell[row0:row0 + ncomp] = si
-    Q = np.asarray(schwarz_diagonal(basis))              # √(μν|μν), tril μ>=ν
-    pa, pb = np.tril_indices(nao)
-    lo = np.minimum(row_shell[pa], row_shell[pb])
-    hi = np.maximum(row_shell[pa], row_shell[pb])
-    ns = len(shells)
-    Qsh = np.zeros((ns, ns))
-    np.maximum.at(Qsh, (hi, lo), Q)                      # max over components
+    Qsh = np.tril(shell_pair_schwarz(basis))             # [hi, lo]
     qmax = float(Qsh.max()) if Qsh.size else 0.0
     hi_idx, lo_idx = np.nonzero(Qsh >= thresh * qmax)
     return {(int(a), int(b)) for b, a in zip(hi_idx, lo_idx)}  # (ia<=ib)
@@ -396,8 +442,14 @@ def _plan_eri3c_uncached(basis, aux_basis, keep_pairs=None, tol=None):
     aux_sph, naux_sph = _sph_layout(aux, aux_basis.cart2sph)
     _check_uniform_cart2sph(basis.cart2sph, bra, bra_sph, "orbital")
     _check_uniform_cart2sph(aux_basis.cart2sph, aux, aux_sph, "auxiliary")
-    buckets = defaultdict(lambda: ([], [], [], [], [], []))
-    nprims = {}
+    # A class is an outer product: the bra pairs of one (la, lb, npa, npb)
+    # times the aux shells of one (lc, npc). Planning the two factors apart
+    # keeps the plan O(pairs + aux shells); enumerating the triples was
+    # O(pairs x aux shells) python (cholesterol: 46M triples, 25 s and
+    # 3.2 GiB to plan, and the triple index arrays then reached the compiler
+    # as literals). The builder broadcasts the factors back to triples in the
+    # graph, in the same pair-major, aux-minor order.
+    pair_groups = defaultdict(lambda: ([], [], [], []))
     for ia, (la0, ra0, _nca, npa0) in enumerate(bra):
         for jb_off, (lb0, rb0, _ncb, npb0) in enumerate(bra[ia:]):
             if keep_pairs is not None and (ia, ia + jb_off) not in keep_pairs:
@@ -417,41 +469,43 @@ def _plan_eri3c_uncached(basis, aux_basis, keep_pairs=None, tol=None):
                 first, second = second, first
             la, npa, ra, sa = first
             lb, npb, rb, sb = second
-            for kc, (lc, rc, ncc, npc) in enumerate(aux):
-                # Contraction lengths join the key, so a triple is never padded
-                # to a heavier shell it does not contain; _merge_classes below
-                # then merges the sub-buckets back wherever the padding it
-                # would reintroduce is cheap. See _merge_padded_buckets.
-                key = (la, lb, lc, npa, npb, npc)
-                b = buckets[key]
-                b[0].append(ra); b[1].append(rb); b[2].append(rc)
-                b[3].append(sa); b[4].append(sb)
-                b[5].append(aux_sph[kc])
-                nprims[key] = (npa, npb, npc)
+            g = pair_groups[(la, lb, npa, npb)]
+            g[0].append(ra); g[1].append(rb); g[2].append(sa); g[3].append(sb)
+    aux_groups = defaultdict(lambda: ([], []))
+    for kc, (lc, rc, _ncc, npc) in enumerate(aux):
+        g = aux_groups[(lc, npc)]
+        g[0].append(rc); g[1].append(aux_sph[kc])
+    # Contraction lengths join the key, so a triple is never padded to a
+    # heavier shell it does not contain; _merge_classes below then merges the
+    # sub-buckets back wherever the padding it would reintroduce is cheap.
+    # See _merge_padded_buckets.
+    buckets, nprims = {}, {}
+    for (la, lb, npa, npb), pg in pair_groups.items():
+        pseg = tuple(tuple(x) for x in pg)
+        for (lc, npc), ag in aux_groups.items():
+            key = (la, lb, lc, npa, npb, npc)
+            buckets[key] = (pseg, tuple(tuple(x) for x in ag))
+            nprims[key] = (npa, npb, npc)
 
     def ang_tup(ang, row0, l, ncomp):
         return tuple(tuple(int(x) for x in ang[row0 + i])
                      for i in range(ncomp))
 
+    # Each class is (la, lb, lc, anga, angb, angc, segments, nprims): the
+    # sub-buckets merged into it, each a ((ra, rb, sa, sb), (rc, sc)) pair of
+    # factors. expand_eri3c spells a plan out triple by triple.
     classes = []
-    # The emitted class tuple is unchanged in shape; there are simply more of
-    # them where merging did not put them back together, each carrying the
-    # primitive counts its own members need, so every consumer unpacks exactly
-    # as before.
-    for (la, lb, lc), npr, rows in _merge_classes(buckets, nprims, 3, 6,
-                                                  tol):
-        rows_a, rows_b, rows_c, sph_a, sph_b, sph_c = rows
+    for (la, lb, lc), npr, segs in _merge_factored(buckets, nprims, tol):
+        (ra0, rb0, _, _), (rc0, _) = segs[0]
         nca = (la + 1) * (la + 2) // 2
         ncb = (lb + 1) * (lb + 2) // 2
         ncc = (lc + 1) * (lc + 2) // 2
         classes.append((
             la, lb, lc,
-            ang_tup(ang_b, rows_a[0], la, nca),
-            ang_tup(ang_b, rows_b[0], lb, ncb),
-            ang_tup(ang_a, rows_c[0], lc, ncc),
-            tuple(rows_a), tuple(rows_b), tuple(rows_c),
-            npr,
-            tuple(sph_a), tuple(sph_b), tuple(sph_c),
+            ang_tup(ang_b, ra0[0], la, nca),
+            ang_tup(ang_b, rb0[0], lb, ncb),
+            ang_tup(ang_a, rc0[0], lc, ncc),
+            segs, npr,
         ))
     nao = int(np.asarray(basis.angular).shape[0])
     naux = int(np.asarray(aux_basis.angular).shape[0])
@@ -1103,52 +1157,227 @@ def eri3c_matrix_bucketed(basis, aux_basis, omega=None, plan=None,
     if plan is None:
         plan = plan_eri3c(basis, aux_basis)
     _nao_cart, _naux_cart, nao_sph, naux_sph, classes = plan
-    cen, cen_aux = basis.centers, aux_basis.centers
-    c2s_bra, c2s_aux = basis.cart2sph, aux_basis.cart2sph
-    out = jnp.zeros((nao_sph, nao_sph, naux_sph), dtype=cen.dtype)
-    for (la, lb, lc, anga, angb, angc, ra, rb, rc, nprims,
-         sa, sb, sc) in classes:
-        npa, npb, npc = nprims
-        row_a, row_b, row_c = ra[0], rb[0], rc[0]      # class representative
-        sph_a, sph_b, sph_c = sa[0], sb[0], sc[0]
-        ra = np.asarray(ra).astype(_IDX)
-        rb = np.asarray(rb).astype(_IDX)
-        rc = np.asarray(rc).astype(_IDX)
-        nca = (la + 1) * (la + 2) // 2
-        ncb = (lb + 1) * (lb + 2) // 2
-        ncc = (lc + 1) * (lc + 2) // 2
-        # every array is block-gathered from the (possibly traced) BasisData
-        # leaves at the class's shell starts; rows are zero-padded past each
-        # shell's true contraction length, so the class-level primitive
-        # trim is a static slice
-        ca = _gather_rows(basis.coefficients, ra, nca)[:, :, :npa]
-        cb = _gather_rows(basis.coefficients, rb, ncb)[:, :, :npb]
-        cc = _gather_rows(aux_basis.coefficients, rc, ncc)[:, :, :npc]
-        fn = _compiled_class_kernel(la, lb, lc, anga, angb, angc, omega,
-                                    min(chunk, ra.shape[0]))
-        vals = fn(
-            cen[ra], cen[rb], cen_aux[rc],
-            basis.exponents[ra][:, :npa], basis.exponents[rb][:, :npb],
-            aux_basis.exponents[rc][:, :npc],
-            ca, cb, cc,
-        )   # (ntrip, nca, ncb, ncc)
-        # cartesian -> spherical on the block, one (ncart, 2l+1) slice per
-        # axis taken from the basis's own transform (see the docstring)
-        if c2s_bra is not None:
-            Ta = c2s_bra[row_a:row_a + nca, sph_a:sph_a + 2 * la + 1]
-            Tb = c2s_bra[row_b:row_b + ncb, sph_b:sph_b + 2 * lb + 1]
-            vals = jnp.einsum("tabc,ap->tpbc", vals, Ta)
-            vals = jnp.einsum("tpbc,bq->tpqc", vals, Tb)
-        if c2s_aux is not None:
-            Tc = c2s_aux[row_c:row_c + ncc, sph_c:sph_c + 2 * lc + 1]
-            vals = jnp.einsum("tpqc,cr->tpqr", vals, Tc)
-        starts = np.stack((np.asarray(sa), np.asarray(sb), np.asarray(sc)),
-                          axis=1).astype(_IDX)
-        out = _scatter_blocks(out, starts, vals)
+    out = jnp.zeros((nao_sph, nao_sph, naux_sph), dtype=basis.centers.dtype)
+    for cls in classes:
+        ra, rb, rc, sa, sb, sc, nprims, rep = _class_rows(cls)
+        vals = _class_block(basis, aux_basis, cls, ra, rb, rc, nprims, rep,
+                            omega, chunk)   # (ntrip, nsa, nsb, nsc)
+        out = _scatter_blocks(out, jnp.stack((sa, sb, sc), axis=1), vals)
         # bra symmetry: the (ba|c) block at corner (sb, sa, sc) is the (a, b)
         # transpose of this one. Under the elementwise scatter the swap of the
         # index arrays did that implicitly; a block write has to transpose the
         # block itself.
-        out = _scatter_blocks(out, np.ascontiguousarray(starts[:, (1, 0, 2)]),
+        out = _scatter_blocks(out, jnp.stack((sb, sa, sc), axis=1),
                               vals.transpose(0, 2, 1, 3))
     return out
+
+
+@dataclass(frozen=True, eq=False)
+class PackedLayout:
+    """Where each kept bra shell pair lives in a packed ``(naux, npair)``
+    3-center tensor (see :func:`eri3c_packed`).
+
+    Pairs are stored once, as the planner orients them (``(a, b)`` with ``a``
+    the first shell by type): an off-diagonal pair as its ``n_a x n_b`` block,
+    row-major, weight 2 (it stands for ``(a, b)`` and ``(b, a)``); a diagonal
+    pair as its full ``n_a x n_a`` block, so every class writes dense blocks,
+    of which only the upper triangle is read (weight 2 off the diagonal, 1 on
+    it, 0 below): ``pos`` is exactly symmetric, and so is everything
+    unpacked through it. Host-side numpy, a function of the plan alone.
+
+    * ``offsets``: packed start of each kept pair, keyed ``(sa, sb)`` (the
+      oriented spherical starts);
+    * ``pos``: ``(nao, nao)`` packed index of ``(m, n)`` under either
+      orientation, ``npair`` for a screened pair;
+    * ``rows``, ``cols``, ``weight``: ``(npair,)``, the ``(m, n)`` each packed
+      entry holds and its weight, so ``p = weight * P[rows, cols]`` packs a
+      symmetric density with ``Σ_mn T_mn P_mn = T_packed · p``.
+    """
+
+    npair: int
+    nao: int
+    offsets: dict
+    pos: np.ndarray
+    rows: np.ndarray
+    cols: np.ndarray
+    weight: np.ndarray
+
+
+def packed_layout(plan, spherical: bool) -> PackedLayout:
+    """The :class:`PackedLayout` of a factored 3-center plan (memoized).
+    ``spherical``: whether the orbital basis carries a cart2sph transform."""
+    return _plan_cached(("packed", plan, bool(spherical)),
+                        lambda: _packed_layout(plan, bool(spherical)))
+
+
+def _width(l, spherical):
+    return 2 * l + 1 if spherical else (l + 1) * (l + 2) // 2
+
+
+def _packed_layout(plan, spherical):
+    nao_sph, classes = plan[2], plan[4]
+    pairs = {}
+    for c in classes:
+        if len(c) != 8:
+            raise ValueError("packed_layout needs a factored plan "
+                             "(plan_eri3c), not an expanded one.")
+        for (_ra, _rb, sa, sb), _aux in c[6]:
+            for a, b in zip(sa, sb):
+                pairs[(a, b)] = (c[0], c[1])
+    keys = sorted(pairs)
+    a_all = np.fromiter((k[0] for k in keys), dtype=np.int64, count=len(keys))
+    b_all = np.fromiter((k[1] for k in keys), dtype=np.int64, count=len(keys))
+    na_all = np.fromiter((_width(pairs[k][0], spherical) for k in keys),
+                         dtype=np.int64, count=len(keys))
+    nb_all = np.fromiter((_width(pairs[k][1], spherical) for k in keys),
+                         dtype=np.int64, count=len(keys))
+    starts = np.concatenate([[0], np.cumsum(na_all * nb_all)])
+    off = int(starts[-1])
+    offsets = dict(zip(keys, (int(x) for x in starts[:-1])))
+    pos = np.full((nao_sph, nao_sph), -1, dtype=np.int64)
+    rows = np.empty(off, dtype=np.int64)
+    cols = np.empty(off, dtype=np.int64)
+    weight = np.empty(off)
+    # one vectorized fill per block shape (na, nb, diagonal or not)
+    shape_key = np.stack([na_all, nb_all, (a_all == b_all)], axis=1)
+    for na, nb, diag in np.unique(shape_key, axis=0):
+        sel = np.nonzero((shape_key == (na, nb, diag)).all(axis=1))[0]
+        ii, jj = np.meshgrid(np.arange(na), np.arange(nb), indexing="ij")
+        if diag:
+            # read only the upper triangle of a diagonal block, so unpacked
+            # slices (and J) are exactly symmetric; the lower one is stored
+            # (the kernel writes whole blocks) but carries weight 0
+            loc = np.minimum(ii, jj) * nb + np.maximum(ii, jj)
+            w = np.where(ii < jj, 2.0, np.where(ii == jj, 1.0, 0.0))
+        else:
+            loc = ii * nb + jj
+            w = np.full((na, nb), 2.0)
+        o = starts[sel][:, None, None]
+        r = a_all[sel][:, None, None] + ii[None]
+        c = b_all[sel][:, None, None] + jj[None]
+        pos[r, c] = o + loc[None]
+        pos[c, r] = o + loc[None]
+        flat = (o + (ii * nb + jj)[None]).reshape(-1)
+        rows[flat] = r.reshape(-1)
+        cols[flat] = c.reshape(-1)
+        weight[flat] = np.broadcast_to(w, r.shape).reshape(-1)
+    pos[pos < 0] = off                   # screened pairs read the zero slot
+    return PackedLayout(
+        npair=off, nao=nao_sph, offsets=offsets, pos=pos.astype(_IDX),
+        rows=rows.astype(_IDX), cols=cols.astype(_IDX), weight=weight)
+
+
+def eri3c_packed(basis, aux_basis, omega=None, plan=None, chunk=4096):
+    """The 3-center tensor packed over kept bra shell pairs, ``(naux, npair)``.
+
+    Same class kernels and spherical transform as
+    :func:`eri3c_matrix_bucketed`; each block is written once, aux-major, at
+    ``(aux start, pair offset)`` of :func:`packed_layout`, with no transposed
+    second write. Screened pairs (``plan_eri3c(keep_pairs=...)``) take no
+    space at all. Unpacking ``T[x][pos]`` gives the square tensor's slice
+    ``x`` (screened entries from an appended zero).
+    """
+    if plan is None:
+        plan = plan_eri3c(basis, aux_basis)
+    layout = packed_layout(plan, basis.cart2sph is not None)
+    _nao_cart, _naux_cart, _nao_sph, naux_sph, classes = plan
+    out = jnp.zeros((naux_sph, layout.npair), dtype=basis.centers.dtype)
+    # one offset array per pair factor: a pair group is shared by every aux
+    # group it meets, so look its pairs up once, not once per class
+    pair_offs = {}
+
+    def offsets(psa, psb):
+        key = id(psa)
+        if key not in pair_offs:
+            pair_offs[key] = np.fromiter(
+                (layout.offsets[(a, b)] for a, b in zip(psa, psb)),
+                dtype=_IDX, count=len(psa))
+        return pair_offs[key]
+
+    for cls in classes:
+        ra, rb, rc, _sa, _sb, sc, nprims, rep = _class_rows(cls)
+        vals = _class_block(basis, aux_basis, cls, ra, rb, rc, nprims, rep,
+                            omega, chunk)
+        ntrip, nsa, nsb, nsc = vals.shape
+        # packed offset of each triple's pair, broadcast like the rows
+        offs = []
+        for (_ra, _rb, psa, psb), (rcs, _sc) in cls[6]:
+            o = offsets(psa, psb)
+            offs.append(jnp.broadcast_to(jnp.asarray(o)[:, None],
+                                         (len(o), len(rcs))).reshape(-1))
+        off = offs[0] if len(offs) == 1 else jnp.concatenate(offs)
+        blocks = vals.transpose(0, 3, 1, 2).reshape(ntrip, nsc, nsa * nsb)
+        out = _scatter_blocks(out, jnp.stack((sc, off), axis=1), blocks)
+    return out
+
+
+def _class_block(basis, aux_basis, cls, ra, rb, rc, nprims, rep, omega,
+                 chunk):
+    """One class's integrals, ``(ntrip, nsa, nsb, nsc)`` in the final
+    (spherical where the basis is) components: the shared core of
+    :func:`eri3c_matrix_bucketed` and :func:`eri3c_packed`."""
+    la, lb, lc, anga, angb, angc = cls[:6]
+    npa, npb, npc = nprims
+    row_a, row_b, row_c, sph_a, sph_b, sph_c = rep    # class representative
+    cen, cen_aux = basis.centers, aux_basis.centers
+    c2s_bra, c2s_aux = basis.cart2sph, aux_basis.cart2sph
+    nca = (la + 1) * (la + 2) // 2
+    ncb = (lb + 1) * (lb + 2) // 2
+    ncc = (lc + 1) * (lc + 2) // 2
+    # every array is block-gathered from the (possibly traced) BasisData
+    # leaves at the class's shell starts; rows are zero-padded past each
+    # shell's true contraction length, so the class-level primitive trim is a
+    # static slice
+    ca = _gather_rows(basis.coefficients, ra, nca)[:, :, :npa]
+    cb = _gather_rows(basis.coefficients, rb, ncb)[:, :, :npb]
+    cc = _gather_rows(aux_basis.coefficients, rc, ncc)[:, :, :npc]
+    fn = _compiled_class_kernel(la, lb, lc, anga, angb, angc, omega,
+                                min(chunk, int(ra.shape[0])))
+    vals = fn(
+        cen[ra], cen[rb], cen_aux[rc],
+        basis.exponents[ra][:, :npa], basis.exponents[rb][:, :npb],
+        aux_basis.exponents[rc][:, :npc],
+        ca, cb, cc,
+    )   # (ntrip, nca, ncb, ncc)
+    # cartesian -> spherical on the block, one (ncart, 2l+1) slice per axis
+    # taken from the basis's own transform (see eri3c_matrix_bucketed)
+    if c2s_bra is not None:
+        Ta = c2s_bra[row_a:row_a + nca, sph_a:sph_a + 2 * la + 1]
+        Tb = c2s_bra[row_b:row_b + ncb, sph_b:sph_b + 2 * lb + 1]
+        vals = jnp.einsum("tabc,ap->tpbc", vals, Ta)
+        vals = jnp.einsum("tpbc,bq->tpqc", vals, Tb)
+    if c2s_aux is not None:
+        Tc = c2s_aux[row_c:row_c + ncc, sph_c:sph_c + 2 * lc + 1]
+        vals = jnp.einsum("tpqc,cr->tpqr", vals, Tc)
+    return vals
+
+
+def _class_rows(cls):
+    """``(ra, rb, rc, sa, sb, sc, nprims, representative)`` of one 3-center
+    class, the six row arrays one entry per triple.
+
+    A factored class (see :func:`_plan_eri3c_uncached`) is broadcast to its
+    triples here, in the graph: the module then carries O(pairs + aux shells)
+    index literals, not O(triples). An expanded class (``expand_eri3c``, or a
+    hand-built plan) carries its rows as numpy literals, as before. The
+    representative is the first triple's ``(ra, rb, rc, sa, sb, sc)``.
+    """
+    if len(cls) != 8:
+        (ra, rb, rc, nprims, sa, sb, sc) = cls[6:]
+        rows = [jnp.asarray(np.asarray(x, dtype=_IDX))
+                for x in (ra, rb, rc, sa, sb, sc)]
+        rep = (ra[0], rb[0], rc[0], sa[0], sb[0], sc[0])
+        return (*rows, nprims, rep)
+    segs, nprims = cls[6], cls[7]
+    cols = [[] for _ in range(6)]
+    for (ra, rb, sa, sb), (rc, sc) in segs:
+        shape = (len(ra), len(rc))
+        for k, x in ((0, ra), (1, rb), (3, sa), (4, sb)):
+            v = jnp.asarray(np.asarray(x, dtype=_IDX))[:, None]
+            cols[k].append(jnp.broadcast_to(v, shape).reshape(-1))
+        for k, x in ((2, rc), (5, sc)):
+            v = jnp.asarray(np.asarray(x, dtype=_IDX))[None, :]
+            cols[k].append(jnp.broadcast_to(v, shape).reshape(-1))
+    rows = [c[0] if len(c) == 1 else jnp.concatenate(c) for c in cols]
+    (ra, rb, sa, sb), (rc, sc) = segs[0]
+    return (*rows, nprims, (ra[0], rb[0], rc[0], sa[0], sb[0], sc[0]))

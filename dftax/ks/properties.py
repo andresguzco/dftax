@@ -18,6 +18,8 @@ External fields couple through the dipole integrals as ``h ← h + Σ_i E_i ⟨�
 
 from __future__ import annotations
 
+import dataclasses
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -398,8 +400,7 @@ def alchemical_deriv(
             mol.symbols, mol.atom_coords(), coulomb.auxbasis,
             spherical=coulomb.spherical is not False,
         )
-        coulomb = DFSpec(auxbasis=aux, chunk=coulomb.chunk,
-                         screen=coulomb.screen, spherical=coulomb.spherical)
+        coulomb = dataclasses.replace(coulomb, auxbasis=aux)
     ks = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
     res = scf(ks, **scf_kw)
     # Per-channel occupied coefficients spanning the converged density

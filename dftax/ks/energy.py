@@ -836,6 +836,46 @@ class KS(eqx.Module):
         F = 0.5 * (g + g.transpose(0, 2, 1))
         return e_rest + e_xc + self.e_nn + self.e_disp, F
 
+    def energy_and_grad_orbitals(self, Cs, idempotent: bool = True):
+        """``(E_total, ∂E/∂C_σ)`` for the occupied orbitals of each channel.
+
+        The density is ``P_σ = C_σ diag(w_σ) C_σᵀ`` with the occupations of
+        :meth:`occupations` (``2`` closed shell, ``1`` per spin channel), so
+        ``∂E/∂C_σ = 2 F_σ C_σ diag(w_σ)`` with ``F = sym(∂E/∂P)``.
+        The one-electron and two-electron parts take that route, through
+        their (cheap) potentials; the XC part, almost all of an iteration,
+        comes straight from the orbitals
+        (:meth:`~dftax.ks.terms.XCTerm.energy_and_grad_orbitals`), which never
+        forms the ``nao x nao`` XC potential. What a direct minimizer
+        (:func:`~dftax.ks.gdm.gdm`) needs, and nothing more.
+        """
+        ws = self.occupations()
+        P = jnp.stack([(C * w) @ C.T for C, w in zip(Cs, ws)])
+        e1 = jnp.sum(jnp.sum(P, axis=0) * self.hcore)
+        if hasattr(self.coulomb, "energy_and_grad_orbitals"):
+            # the orbitals straight into the two-electron term: no orbital
+            # recovery from P for the exchange
+            e_2e, g_2e = self.coulomb.energy_and_grad_orbitals(
+                Cs, ws, self.S, self.nocc)
+        else:
+            e_2e, V = self.coulomb.energy_and_potential(
+                P, self.S, self.nocc, idempotent)
+            g_2e = tuple(((V[s] + V[s].T) @ C) * w
+                         for s, (C, w) in enumerate(zip(Cs, ws)))
+        e_xc, g_xc = self.xc_term.energy_and_grad_orbitals(Cs, ws)
+        grads = tuple(
+            2.0 * (self.hcore @ C) * w + g_2e[s] + g_xc[s]
+            for s, (C, w) in enumerate(zip(Cs, ws))
+        )
+        return e1 + e_2e + e_xc + self.e_nn + self.e_disp, grads
+
+    def occupations(self):
+        """Occupation of each channel's occupied orbitals: 2 each for a
+        closed shell, 1 each per spin channel. A padded system
+        (:mod:`dftax.ks.batched_gdm`) gives its padding slots 0."""
+        w = 2.0 if len(self.nocc) == 1 else 1.0
+        return tuple(jnp.full((n,), w) for n in self.nocc)
+
     def density(
         self, P: Float[Array, "nspin nao nao"]
     ) -> tuple[Float[Array, "ng"], Float[Array, "ng 3"]]:

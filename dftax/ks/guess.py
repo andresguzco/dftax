@@ -551,9 +551,25 @@ class SAPGuess(eqx.Module):
     radii_adjust: str | None = eqx.field(static=True)
 
 
-def _superposition_density(symbols, basis, atom_coords, block_fn):
+# Assembled superposition densities, keyed on the element sequence and the
+# basis structure. The block-diagonal P depends on neither the geometry nor
+# anything else, yet assembling it costs host work per call (shell-to-atom
+# matching, sub-basis slicing, transfers): 5.7 ms a small molecule, the
+# largest part of setting up a batched gdm once its padding was compiled. A
+# trajectory or a conformer set asks for the same one every time.
+_SUPERPOSITION_CACHE: dict = {}
+_SUPERPOSITION_CACHE_MAX = 256
+
+
+def _superposition_density(symbols, basis, atom_coords, block_fn, key=None):
     """Assemble the block-diagonal ``P_tot`` from per-element density blocks
-    (``block_fn(symbol, sub_basis)``), computed once per unique element."""
+    (``block_fn(symbol, sub_basis)``), computed once per unique element, and
+    memoized on ``key`` (with the symbols and the basis structure) when given."""
+    if key is not None:
+        key = (key, tuple(symbols), static_fingerprint(basis))
+        hit = _SUPERPOSITION_CACHE.get(key)
+        if hit is not None:
+            return jnp.asarray(hit)
     slices = _atom_slices(basis, atom_coords)
     nao = (
         basis.cart2sph.shape[1]
@@ -566,6 +582,10 @@ def _superposition_density(symbols, basis, atom_coords, block_fn):
         if sym not in cache:
             cache[sym] = np.asarray(block_fn(sym, _atom_subbasis(basis, cart_sl, fin_sl)))
         P[fin_sl, fin_sl] = cache[sym]
+    if key is not None:
+        if len(_SUPERPOSITION_CACHE) >= _SUPERPOSITION_CACHE_MAX:
+            _SUPERPOSITION_CACHE.clear()
+        _SUPERPOSITION_CACHE[key] = P
     return jnp.asarray(P)
 
 
@@ -585,12 +605,14 @@ def _resolve_guess(spec, symbols, basis, atom_coords):
         P = _superposition_density(
             symbols, basis, atom_coords,
             lambda s, sb: _minao_block(s, sb, spec.basis),
+            key=("minao", spec.basis),
         )
         return DensityGuess(P=P)
     if isinstance(spec, SADSpec):
         P = _superposition_density(
             symbols, basis, atom_coords,
             lambda s, sb: _atomic_hf_density(s, sb)[0],
+            key=("sad",),
         )
         return DensityGuess(P=P)
     if isinstance(spec, SAPSpec):

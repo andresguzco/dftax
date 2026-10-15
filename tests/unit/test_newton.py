@@ -69,21 +69,14 @@ def test_newton_escapes_indefinite_hessian():
     """
     mol = Molecule.from_xyz("N 0 0 0; N 0 0 2.5", "sto-3g")
     ks = KS(mol, PBE(), grid=becke(35, 50))
-    # KNOWN FLAKY, and the cause is characterized rather than guessed. With
-    # XLA's GEMM autotuning disabled, so kernel selection is reproducible, this
-    # converges in 3 steps at the default g_tol=1e-6 (identically at 1e-5 and
-    # 1e-4, same energy). With autotuning on it takes 3 steps on some runs and
-    # fails to converge in 120 on others -- roughly half, measured over four
-    # repeats.
-    #
-    # A 40x swing in step count from kernel selection is not the
-    # achievable-gradient floor that
-    # test_newton_reaches_tight_tolerances_directly sits on; a floor would cap
-    # the tolerance, not send a solve that needs 3 steps past 120. It points at
-    # the trust region occasionally collapsing under last-digit changes in the
-    # Fock matrix, i.e. a robustness issue in newton() itself. Left failing
-    # rather than pinned to a lucky configuration, because masking it with a
-    # deterministic-kernel flag would hide a real defect.
+    # Was known flaky: with XLA's GEMM autotuning on, this took 3 steps on some
+    # runs and failed to converge in 120 on others. The cause was the trust
+    # region's strict-decrease test: near convergence a Newton step lowers E
+    # by about as much as the rounding the autotuner's kernel choice moves,
+    # so steps were rejected at random and every rejection halved the radius
+    # until the solve stalled at the answer. newton() now accepts a step
+    # within the energy's noise floor and never asks the energy test for less
+    # than it (newton._noise), the same rule as gdm and scf.
     r1 = newton(ks, max_iter=120)
     assert r1.converged                                # no longer stalls
     assert r1.n_iter <= 60

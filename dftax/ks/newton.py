@@ -31,6 +31,7 @@ from jax import lax
 from jaxtyping import Array
 
 from dftax.ks.energy import KS
+from dftax.ks.gdm import rotate_full
 from dftax.ks.guess import GuessSpec, density_from_guess
 from dftax.ks.scf import KSResult, _fock_stacked, canonical_orthonormalizer
 
@@ -41,7 +42,7 @@ def _tdot(a, b):
                for x, y in zip(jax.tree.leaves(a), jax.tree.leaves(b)))
 
 
-def _steihaug_cg(hvp, g, radius, maxiter):
+def _steihaug_cg(hvp, g, radius, maxiter, scale=None, forcing=None):
     """Steihaug-Toint truncated CG for the trust-region Newton subproblem.
 
     Approximately minimizes ``m(p) = <g,p> + 1/2 <p, H p>`` over ``||p|| <=
@@ -51,12 +52,30 @@ def _steihaug_cg(hvp, g, radius, maxiter):
     Truncated CG instead follows the first direction of negative curvature
     (``<d, H d> <= 0``) to the trust boundary, and stops at the boundary when a
     CG step would cross it -- so the step is always a genuine model decrease,
-    indefinite Hessian or not. Fixed ``maxiter`` inner iterations (jit-friendly:
-    the loop always runs to length, freezing once the boundary is reached).
+    indefinite Hessian or not.
+
+    ``scale`` (a pytree like ``g``, positive) preconditions by a change of
+    variables ``p = scale * q``: CG runs on ``scale H scale`` and
+    ``scale * g``, and the trust region bounds ``||p / scale||``. With
+    ``scale = (D / mean D)^(-1/2)`` for a diagonal Hessian model ``D`` that
+    norm stays on the scale of the rotation itself.
+
+    ``forcing`` stops CG once the residual falls below ``forcing * ||g||``
+    (inexact Newton); every loop iteration is one Hessian-vector product, a
+    few Fock builds, so running all ``maxiter`` of them after the step has
+    converged was most of the cost of a Newton iteration. ``None`` keeps the
+    fixed-length solve.
 
     ``hvp`` is the Hessian-vector product, ``g`` the gradient (a pytree). All
     vectors are pytrees matching ``g``; returns the step ``p``.
     """
+    if scale is not None:
+        inner = hvp
+        hvp = lambda v: jax.tree.map(  # noqa: E731
+            lambda a, b: a * b, scale,
+            inner(jax.tree.map(lambda a, b: a * b, scale, v)))
+        g = jax.tree.map(lambda a, b: a * b, scale, g)
+
     def to_boundary(z, d):
         # largest tau >= 0 with ||z + tau d|| = radius (positive quadratic root)
         dd = _tdot(d, d)
@@ -72,10 +91,15 @@ def _steihaug_cg(hvp, g, radius, maxiter):
     z0 = jax.tree.map(jnp.zeros_like, g)
     d0 = jax.tree.map(jnp.negative, g)                 # r0 = g (at z=0), d0 = -r0
     rr0 = _tdot(g, g)
-    state = (z0, g, d0, rr0, jnp.array(False), z0)     # (z, r, d, rr, done, p)
+    tol2 = (0.0 if forcing is None else (forcing * forcing) * rr0)
+    state = (0, z0, g, d0, rr0, jnp.array(False), z0)  # (k, z, r, d, rr, done, p)
 
-    def step(_, st):
-        z, r, d, rr, done, p = st
+    def cond(st):
+        k, _, _, _, rr, done, _ = st
+        return (k < maxiter) & jnp.logical_not(done) & (rr > tol2)
+
+    def step(st):
+        k, z, r, d, rr, done, p = st
         Hd = hvp(d)
         dHd = _tdot(d, Hd)
         alpha = rr / jnp.where(dHd == 0.0, 1.0, dHd)
@@ -86,23 +110,31 @@ def _steihaug_cg(hvp, g, radius, maxiter):
         rr_next = _tdot(r_next, r_next)
         beta = rr_next / jnp.where(rr == 0.0, 1.0, rr)
         d_next = jax.tree.map(lambda rn_, d_: -rn_ + beta * d_, r_next, d)
-        advanced = (z_next, r_next, d_next, rr_next, done | hit, p_step)
-        return sel(done, st, advanced)                 # freeze once done
+        return (k + 1, z_next, r_next, d_next, rr_next, done | hit, p_step)
 
-    z, r, d, rr, done, p = lax.fori_loop(0, maxiter, step, state)
+    _, _, _, _, _, _, p = lax.while_loop(cond, step, state)
+    if scale is not None:
+        p = jax.tree.map(lambda a, b: a * b, scale, p)
     return p
 
 
+def _noise(e):
+    """The energy's floating-point floor, ``1e-10 |E| + 1e-12`` Ha: below it,
+    energy differences are rounding (grid sums, DF contractions, and the GEMM
+    algorithm XLA's autotuner picks), so no acceptance or convergence test may
+    resolve them. The same floor :func:`~dftax.ks.gdm.gdm` and
+    :func:`~dftax.ks.scf.scf` use."""
+    return 1e-10 * jnp.abs(e) + 1e-12
+
+
 def _rotate(C, kappa, nocc):
-    """Apply ``C exp(K)`` per channel; K holds the occ-virt block of kappa."""
+    """Apply ``C exp(K)`` per channel; K holds the occ-virt block of kappa.
+    Closed form (:func:`dftax.ks.gdm.rotate_full`), not ``expm``: the rotation
+    costs ``O(nao nocc nvir)`` and is exact at the trust radii used here."""
     out = []
-    for s, (Cs, k) in enumerate(zip(C, kappa)):
-        nmo = Cs.shape[1]
-        no = nocc[s]
-        K = jnp.zeros((nmo, nmo), dtype=Cs.dtype)
-        K = K.at[:no, no:].set(k)
-        K = K.at[no:, :no].set(-k.T)
-        out.append(Cs @ jax.scipy.linalg.expm(K))
+    for Cs, k, no in zip(C, kappa, nocc):
+        Co, Cv = rotate_full(Cs[:, :no], Cs[:, no:], k)
+        out.append(jnp.concatenate([Co, Cv], axis=1))
     return tuple(out)
 
 
@@ -126,18 +158,35 @@ def _newton_solve(ks: KS, C0, max_iter, g_tol, e_tol, cg_iters, trust0,
     def energy_at(C, kappa):
         return ks.total(_density(_rotate(C, kappa, nocc), nocc, w))
 
+    def occupied(C, k):
+        return tuple(c[:, :n] for c, n in zip(_rotate(C, k, nocc), nocc))
+
     def step(C, radius):
-        e0 = energy_at(C, kappa0)
-        g = jax.grad(lambda k: energy_at(C, k))(kappa0)
+        # one evaluation gives the energy, and through F the gradient (VJP of
+        # 2 w F C_o through the rotation) and the preconditioner
+        e0, F = ks.energy_and_fock(_density(C, nocc, w))
+        Cos, vjp = jax.vjp(lambda k: occupied(C, k), kappa0)
+        (g,) = vjp(tuple(2.0 * w * F[s] @ Cos[s] for s in range(nspin)))
         gnorm = jnp.sqrt(sum(jnp.sum(x * x) for x in g))
+        scale = []
+        for s in range(nspin):
+            Co, Cv = C[s][:, :nocc[s]], C[s][:, nocc[s]:]
+            eo = jnp.sum(Co * (F[s] @ Co), axis=0)
+            ev = jnp.sum(Cv * (F[s] @ Cv), axis=0)
+            D = 2.0 * w * jnp.maximum(ev[None, :] - eo[:, None], 0.05)
+            scale.append(jnp.sqrt(jnp.mean(D) / D))
 
         def hvp(v):
             return jax.jvp(jax.grad(lambda k: energy_at(C, k)),
                            (kappa0,), (v,))[1]
 
         # Steihaug-Toint truncated CG: trust-region-bounded and robust to the
-        # indefinite Hessian at a saddle (no separate radius scaling needed).
-        delta = _steihaug_cg(hvp, g, radius, cg_iters)
+        # indefinite Hessian at a saddle; preconditioned by the orbital-energy
+        # differences and stopped once the residual is a forcing fraction of
+        # the gradient (Eisenstat-Walker, min(0.5, sqrt|g|)).
+        forcing = jnp.minimum(0.5, jnp.sqrt(gnorm))
+        delta = _steihaug_cg(hvp, g, radius, cg_iters, scale=tuple(scale),
+                             forcing=forcing)
         C_new = _rotate(C, delta, nocc)
         e_new = energy_at(C_new, kappa0)
         return e0, gnorm, C_new, e_new
@@ -148,12 +197,21 @@ def _newton_solve(ks: KS, C0, max_iter, g_tol, e_tol, cg_iters, trust0,
     def body(st):
         it, C, e_prev, radius, _ = st
         e0, gnorm, C_new, e_new = step(C, radius)
-        accept = e_new < e0
+        # Accept a step unless it raises the energy past the energy's own
+        # floating-point floor, and never ask the energy test for less than
+        # that floor (see _NOISE). A strict decrease test collapsed the trust
+        # region here: near convergence a Newton step lowers E by ~g^2/lambda,
+        # down at the rounding noise that GEMM autotuning moves from run to
+        # run, so steps were rejected at random, every rejection halved the
+        # radius, and the solve stalled at the answer.
+        noise = _noise(e0)
+        accept = e_new < e0 + noise
         C = jax.tree.map(lambda a, b: jnp.where(accept, b, a), C, C_new)
         radius = jnp.where(accept, jnp.minimum(2.0 * radius, 1.0),
                            0.5 * radius)
         e = jnp.where(accept, e_new, e0)
-        converged = (gnorm < g_tol) & (jnp.abs(e - e_prev) < e_tol)
+        converged = ((gnorm < g_tol)
+                     & (jnp.abs(e - e_prev) < jnp.maximum(e_tol, noise)))
         if verbose:
             jax.debug.print(
                 "  newton {it}: E={e:.10f} |g|={g:.2e} r={r:.2e} ok={a}",
@@ -207,12 +265,14 @@ def _newton_solve_shared(ks: KS, C0, mask, max_iter, g_tol, e_tol, cg_iters,
         delta = _steihaug_cg(hvp, g, radius, cg_iters) * mask
         C_new = rotate(C, delta)
         e_new = energy_at(C_new, kappa0)
-        accept = e_new < e0
+        noise = _noise(e0)                    # see _newton_solve
+        accept = e_new < e0 + noise
         C = jnp.where(accept, C_new, C)
         radius = jnp.where(accept, jnp.minimum(2.0 * radius, 1.0),
                            0.5 * radius)
         e = jnp.where(accept, e_new, e0)
-        converged = (gnorm < g_tol) & (jnp.abs(e - e_prev) < e_tol)
+        converged = ((gnorm < g_tol)
+                     & (jnp.abs(e - e_prev) < jnp.maximum(e_tol, noise)))
         if verbose:
             jax.debug.print(
                 "  roks {it}: E={e:.10f} |g|={g:.2e} r={r:.2e} ok={a}",

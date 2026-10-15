@@ -964,6 +964,53 @@ class DFCoulomb(CoulombTerm):
         return e, V
 
 
+    def energy_and_grad_orbitals(self, Cs, ws, S, nocc):
+        """``(E, ∂E/∂C_σ)`` from the occupied orbitals and their occupations.
+
+        RI-J in closed form, as in :meth:`energy_and_potential`. RI-K takes
+        the orbitals as given instead of recovering them from ``P``: each is
+        scaled by ``sqrt(w_i / w_full)`` (``w_full = 2`` closed shell, ``1``
+        per spin channel), so a fully occupied orbital enters exactly as it
+        does there and an empty one (a padded slot, see
+        :mod:`dftax.ks.batched_gdm`) not at all. That is what makes padded
+        hybrids correct, and it removes the ``nao^3`` eigendecomposition the
+        density route pays on every evaluation.
+
+        The exchange derivative is closed form too: the raw term
+        ``vdot(C, KK C)`` is quartic in ``C`` through ``KK = G V⁻¹ Gᵀ``,
+        ``G = T C``, and with a symmetric metric its gradient is ``4 KK C``,
+        so the kernel the energy already builds gives it with no reverse pass.
+        """
+        nspin = len(Cs)
+        w_full = 2.0 if nspin == 1 else 1.0
+        P = jnp.stack([(C * w) @ C.T for C, w in zip(Cs, ws)])
+        Ptot = jnp.sum(P, axis=0)
+        gamma = jnp.einsum("mnP,mn->P", self.int3c, Ptot)
+        Vg = 0.5 * (self.int2c_inv @ gamma + gamma @ self.int2c_inv)
+        e = 0.5 * jnp.dot(gamma, Vg)
+        J = jnp.einsum("mnP,P->mn", self.int3c, Vg)
+        grads = [2.0 * (J @ C) * w for C, w in zip(Cs, ws)]
+
+        for ax, t3, vinv in ((self.hf_coeff, self.int3c, self.int2c_inv),
+                             (self.hf_coeff_lr, self.int3c_lr,
+                              self.int2c_inv_lr)):
+            if ax == 0.0:
+                continue
+            e_pref = -ax if nspin == 1 else -0.5 * ax
+            # symmetrized as in energy_and_potential: _metric_pinv is
+            # symmetric only to rounding, and 4 KK C assumes it exactly
+            vsym = 0.5 * (vinv + vinv.T)
+            for s, (C, w) in enumerate(zip(Cs, ws)):
+                if C.shape[1] == 0:
+                    continue
+                scale = jnp.sqrt(w / w_full)
+                Ct = C * scale
+                raw, KK = _rik_materialized(t3, vsym, Ct)
+                e = e + e_pref * raw
+                grads[s] = grads[s] + 4.0 * e_pref * (KK @ Ct) * scale
+        return e, tuple(grads)
+
+
 class ShardedDFCoulomb(CoulombTerm):
     """Materialized RI-J with the 3-center tensor sharded over the aux axis.
 
@@ -1299,6 +1346,22 @@ class XCTerm(eqx.Module):
         """
         return jax.value_and_grad(self.energy)(P)
 
+    def energy_and_grad_orbitals(self, Cs, ws):
+        """``(E_xc, ∂E_xc/∂C_σ)`` for ``P_σ = C_σ diag(w_σ) C_σᵀ``.
+
+        One ``C`` and one occupation vector ``w`` per channel (``w = 2`` per
+        orbital for a closed shell, ``1`` per spin channel; zero for a padded
+        slot). What a direct minimizer needs: the energy and its derivative
+        with respect to the occupied coefficients. This default goes through
+        the density matrix, ``(V_σ + V_σᵀ) C_σ diag(w_σ)`` (``V = ∂E/∂P`` is
+        not symmetric for a GGA, whose gradient term pairs AO values with
+        their derivatives); :class:`GridXC` goes through the orbitals instead.
+        """
+        P = jnp.stack([(C * w) @ C.T for C, w in zip(Cs, ws)])
+        e, V = self.energy_and_potential(P)
+        return e, tuple(((V[s] + V[s].T) @ C) * w
+                        for s, (C, w) in enumerate(zip(Cs, ws)))
+
 
 class GridXC(XCTerm):
     """XC on precomputed AO grid values (O(ng·nao) memory).
@@ -1335,25 +1398,62 @@ class GridXC(XCTerm):
         return 0.5 * jnp.einsum("gmx,mn,gnx->g", self.dao, P, self.dao)
 
     def energy(self, P):
+        mgga = self.xc.xc_type == "MGGA"
         if P.shape[0] == 1:
             rho, grad_rho = self.density(P)
-            if self.xc.xc_type == "MGGA":
-                e = xc_energy(
-                    self.xc, rho, self.weights, grad_rho=grad_rho,
-                    tau=self._tau(P[0]),
-                )
-            else:
-                gr = grad_rho if self.xc.xc_type == "GGA" else None
-                e = xc_energy(self.xc, rho, self.weights, grad_rho=gr)
-            if self.xc.nlc_b != 0.0:                     # static branch
-                from dftax.energy.vv10 import vv10_energy
+            return self._energy_closed(
+                rho, grad_rho, self._tau(P[0]) if mgga else None)
+        rho_a, grad_a = self._density_spin(P[0])
+        rho_b, grad_b = self._density_spin(P[1])
+        return self._energy_spin(
+            (rho_a, grad_a, self._tau(P[0]) if mgga else None),
+            (rho_b, grad_b, self._tau(P[1]) if mgga else None))
 
-                e = e + vv10_energy(
-                    rho, jnp.sum(grad_rho * grad_rho, axis=-1), self.coords,
-                    self.weights, self.xc.nlc_b, self.xc.nlc_c,
-                )
-            return e
+    def _orbital_channel(self, C):
+        """``ρ``, ``∇ρ`` (and ``τ`` for a meta-GGA) of ``P = C Cᵀ`` from the
+        orbitals ``ψ = ao C``: ``4 ng nao nocc`` against the ``ng nao²`` of
+        contracting the density matrix, a win wherever ``nocc`` is well below
+        ``nao / 4`` (measured on cubane, PBE, energy and gradient: 1.22x at
+        def2-svp, 1.72x at def2-tzvp)."""
+        psi = self.ao @ C                                     # (ng, nocc)
+        dpsi = jnp.einsum("gmx,mi->gix", self.dao, C)         # (ng, nocc, 3)
+        rho = jnp.sum(psi * psi, axis=1)
+        grad = 2.0 * jnp.einsum("gi,gix->gx", psi, dpsi)
+        tau = (0.5 * jnp.sum(dpsi * dpsi, axis=(1, 2))
+               if self.xc.xc_type == "MGGA" else None)
+        return rho, grad, tau
 
+    def energy_from_orbitals(self, Cs):
+        """``E_xc`` with ``P_σ = C_σ C_σᵀ``: one channel holding the total
+        density (closed shell), or one per spin."""
+        chans = [self._orbital_channel(C) for C in Cs]
+        if len(chans) == 1:
+            return self._energy_closed(*chans[0])
+        return self._energy_spin(*chans)
+
+    def energy_and_grad_orbitals(self, Cs, ws):
+        scales = tuple(jnp.sqrt(w) for w in ws)
+        return jax.value_and_grad(
+            lambda cs: self.energy_from_orbitals(
+                tuple(c * sc for c, sc in zip(cs, scales))))(tuple(Cs))
+
+    def _energy_closed(self, rho, grad_rho, tau):
+        if self.xc.xc_type == "MGGA":
+            e = xc_energy(self.xc, rho, self.weights, grad_rho=grad_rho,
+                          tau=tau)
+        else:
+            gr = grad_rho if self.xc.xc_type == "GGA" else None
+            e = xc_energy(self.xc, rho, self.weights, grad_rho=gr)
+        if self.xc.nlc_b != 0.0:                         # static branch
+            from dftax.energy.vv10 import vv10_energy
+
+            e = e + vv10_energy(
+                rho, jnp.sum(grad_rho * grad_rho, axis=-1), self.coords,
+                self.weights, self.xc.nlc_b, self.xc.nlc_c,
+            )
+        return e
+
+    def _energy_spin(self, chan_a, chan_b):
         # Spin-polarized: ε_xc(ρα, ρβ, ∇ρα, ∇ρβ) integrated against ρ_tot, with a
         # per-spin nan-safe double-``where``. Unlike the closed shell
         # (ρ_σ = ½ρ_tot ≥ 0), one spin channel can be negligible (or, under a
@@ -1362,8 +1462,8 @@ class GridXC(XCTerm):
         # reduced gradient blow up or NaN. Clamp each channel and zero its
         # gradient where it is below threshold; the physical (PSD) densities of
         # the SCF are untouched.
-        rho_a, grad_a = self._density_spin(P[0])
-        rho_b, grad_b = self._density_spin(P[1])
+        rho_a, grad_a, tau_a = chan_a
+        rho_b, grad_b, tau_b = chan_b
         rho_tot = rho_a + rho_b
         mask = rho_tot > 1e-10
         ta = rho_a > 1e-10
@@ -1376,8 +1476,8 @@ class GridXC(XCTerm):
             grad_b = jnp.where(tb[:, None], grad_b, 0.0)
             grad_stack = jnp.stack([grad_a, grad_b], axis=-1)      # (ng, 3, 2)
             tau_stack = jnp.stack(
-                [jnp.where(ta, self._tau(P[0]), 1e-10),
-                 jnp.where(tb, self._tau(P[1]), 1e-10)], axis=-1,
+                [jnp.where(ta, tau_a, 1e-10),
+                 jnp.where(tb, tau_b, 1e-10)], axis=-1,
             )                                                      # (ng, 2)
             eps = xc_potential(
                 self.xc, rho_stack, grad_rho=grad_stack, tau=tau_stack

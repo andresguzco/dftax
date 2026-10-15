@@ -334,7 +334,7 @@ def _resolve_coulomb(spec, symbols):
 
 
 def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
-                 sharded: bool) -> DFSpec:
+                 sharded: bool, lr_fold: int = 1) -> DFSpec:
     """Pick the auxiliary span, build the basis once, resolve the policy.
 
     The materialized paths (single-device and mesh-sharded) use spherical
@@ -369,14 +369,17 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
             else aux.centers.shape[0])
     chunk = spec.chunk
     packed = spec.packed
+    # lr_fold: a range-separated hybrid materializes a second, attenuated
+    # tensor beside the first, so the budget prices both
     if chunk == "auto" and packed == "auto":
-        chunk = _resolve_df_chunk(chunk, nao, naux, sharded, False)
+        chunk = _resolve_df_chunk(chunk, nao, naux * lr_fold, sharded, False)
         if chunk is not None and not sharded and _resolve_df_chunk(
-                "auto", nao, naux, sharded, True) is None:
+                "auto", nao, naux * lr_fold, sharded, True) is None:
             # the square tensor misses the budget, the packed one fits
             chunk, packed = None, True
     elif chunk == "auto":
-        chunk = _resolve_df_chunk(chunk, nao, naux, sharded, packed is True)
+        chunk = _resolve_df_chunk(chunk, nao, naux * lr_fold, sharded,
+                                  packed is True)
     if chunk is not None and aux.cart2sph is not None:
         if prebuilt:
             raise NotImplementedError(
@@ -386,7 +389,8 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
         # "auto" fell back to streaming: rebuild and re-price for the
         # (larger) cartesian span.
         aux = build_basis_data(symbols, coords, spec.auxbasis)
-        chunk = _resolve_df_chunk("auto", nao, aux.centers.shape[0], sharded)
+        chunk = _resolve_df_chunk("auto", nao, aux.centers.shape[0] * lr_fold,
+                                  sharded)
     if spec.spherical is True and aux.cart2sph is None:
         raise ValueError(
             "df(spherical=True) with a prebuilt cartesian BasisData; build "
@@ -626,7 +630,12 @@ class KS(eqx.Module):
         is_df = isinstance(spec, DFSpec)
         shard_df = devices is not None and is_df
         if is_df:
-            spec = _resolve_aux(spec, symbols, coords, nao_final, shard_df)
+            # A range-separated hybrid materializes a second, attenuated
+            # 3-center tensor beside the first, so price both (as forces
+            # already does); the budget used to see only one.
+            lr_fold = 2 if float(getattr(xc, "hf_coeff_lr", 0.0)) != 0.0 else 1
+            spec = _resolve_aux(spec, symbols, coords, nao_final, shard_df,
+                                lr_fold)
             # n_atom from the shape: static even at traced coordinates
             spec = dataclasses.replace(spec, screen=resolve_df_screen(
                 spec.screen, int(coords.shape[0])))

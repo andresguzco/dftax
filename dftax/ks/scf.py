@@ -387,8 +387,16 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
     final = lax.while_loop(cond, body, state0)
     it, P, C, eps, _e_at_prev, _, converged = final[:7]
     # The loop's energy belongs to the density that produced the last Fock,
-    # while `P` is the one built from it, so report the energy at `P`.
-    e_prev = ks.total(P)
+    # while `P` is the one built from it, so report the energy at `P`. A
+    # hybrid takes the fast path: ks.total's exchange is the dense
+    # density-route contraction, while energy_and_fock routes it through the
+    # occupied orbitals (static branch on the term's exchange fractions).
+    coulomb = ks.coulomb
+    if (getattr(coulomb, "hf_coeff", 0.0) != 0.0
+            or getattr(coulomb, "hf_coeff_lr", 0.0) != 0.0):
+        e_prev, _ = ks.energy_and_fock(P, idempotent=smear_sigma is None)
+    else:
+        e_prev = ks.total(P)
     # Mermin free energy under smearing: subtract the electronic entropy term
     # from the converged KS energy so the reported energy is the variational
     # (force-consistent) quantity. ts = 0 without smearing.

@@ -79,6 +79,7 @@ from dftax.ks.terms import (
     CoulombTerm,
     DFSpec,
     ExactSpec,
+    ExternalCoulombSpec,
     GridXC,
     ShardedDFCoulomb,
     ShardedGridXC,
@@ -672,7 +673,8 @@ class KS(eqx.Module):
                 f"{type(xc).__name__} sets hf_coeff_lr={hf_lr} but omega=0; "
                 f"a range-separated functional must define its ω."
             )
-        if hf_lr != 0.0 and (not is_df) and spec.stream:
+        if (hf_lr != 0.0 and (not is_df) and spec.stream
+                and not isinstance(spec, ExternalCoulombSpec)):
             raise NotImplementedError(
                 "range-separated hybrids need a materialized backend: use "
                 "exact() or df(chunk=None), not exact(stream=True)."
@@ -722,7 +724,8 @@ class KS(eqx.Module):
             devices is None and grid_chunk is None,   # sharded AO grid built below
             (not shard_df) and not (is_df and spec.chunk is not None),
             quartets, qof, (not is_df) and spec.stream,
-            omega if hf_lr != 0.0 else None,
+            (omega if hf_lr != 0.0
+             and not isinstance(spec, ExternalCoulombSpec) else None),
             eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan, whiten,
             whiten and spec.packed,
         )

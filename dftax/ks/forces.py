@@ -34,6 +34,9 @@ from dftax.integrals import overlap_matrix
 from dftax.ks.energy import KS, System, _resolve_chunk, _resolve_df_chunk
 from dftax.ks.scf import KSResult
 from dftax.ks.terms import (
+    ExternalCoulombSpec,
+    PackedDFForcesCoulomb,
+    _metric_pinv,
     DFSpec,
     ExactSpec,
     StreamedDFForcesCoulomb,
@@ -42,6 +45,24 @@ from dftax.ks.terms import (
     resolve_df_screen,
 )
 from dftax.system.molecule import Molecule
+
+
+@eqx.filter_jit
+def _packed_forces_tensors(basis, aux_basis, plan, aux_plan, omega):
+    """The un-whitened packed 3-center tensor and the metric pseudo-inverse at
+    (possibly traced) coordinates, plus the attenuated pair for a
+    range-separated hybrid (``omega``), in one jitted program."""
+    from dftax.integrals import eri2c_matrix
+    from dftax.integrals.eri3c_bucketed import eri3c_packed
+
+    T = eri3c_packed(basis, aux_basis, plan=plan)
+    vinv = _metric_pinv(eri2c_matrix(aux_basis, plan=aux_plan))
+    if omega is None:
+        return T, vinv, None, None
+    T_lr = eri3c_packed(basis, aux_basis, omega=omega, plan=plan)
+    vinv_lr = _metric_pinv(eri2c_matrix(aux_basis, omega=omega,
+                                        plan=aux_plan))
+    return T, vinv, T_lr, vinv_lr
 
 
 def _natural_orbitals(P, S):
@@ -162,8 +183,11 @@ def forces(
         coulomb: a :func:`~dftax.ks.terms.df` spec (default, matching the KS
             default backend) or a plain materialized
             :func:`~dftax.ks.terms.exact`. ``df(chunk="auto")`` materializes
-            the nao²×naux 3-center tensor when it fits the memory budget and
-            otherwise streams the geometry gradient over shell-aligned
+            the 3-center tensor when it fits the memory budget, packed over
+            the kept shell pairs with exchange at the frozen occupied
+            coefficients (:class:`~dftax.ks.terms.PackedDFForcesCoulomb`;
+            smeared hybrids keep the square tensor), and otherwise streams
+            the geometry gradient over shell-aligned
             auxiliary slabs (RI-J by plain autodiff, RI-K at the frozen
             occupied coefficients; see
             :func:`dftax.ks.terms._streamed_df_rik_frozen`); an int ``chunk``
@@ -305,6 +329,30 @@ def forces(
             keep = _shell_pair_keep(basis_t, float(screen))
         slab_plans = plan_aux_slabs(basis_t, aux_t, df_chunk, keep)
 
+    # Materialized DF: the packed tensor at the traced coordinates, built from
+    # the reference geometry's plan (its screening keep set frozen across the
+    # infinitesimal displacement, as on the streamed path), with exchange at
+    # the frozen occupied coefficients (PackedDFForcesCoulomb): no square
+    # tensor and no dense density-route exchange under grad. Smeared hybrids
+    # keep the square path, whose exchange takes the fractional density.
+    packed = (aux_t is not None and not streamed
+              and not (smeared and (hf_ax != 0.0 or hf_lr != 0.0)))
+    if packed:
+        from dftax.integrals.eri3c_bucketed import (
+            _shell_pair_keep, packed_layout, plan_eri3c, plan_pairs,
+        )
+
+        screen = resolve_df_screen(coulomb.screen, len(symbols))
+        keep = (_shell_pair_keep(basis_t, float(screen))
+                if screen is not None else None)
+        plan3 = plan_eri3c(basis_t, aux_t, keep_pairs=keep)
+        lay = packed_layout(plan3, basis_t.cart2sph is not None)
+        aux_plan = plan_pairs(aux_t)
+        layout = dict(pos=jnp.asarray(lay.pos), rows=jnp.asarray(lay.rows),
+                      cols=jnp.asarray(lay.cols),
+                      weight=jnp.asarray(lay.weight))
+        omega_lr = float(getattr(xc, "omega", 0.0)) if hf_lr != 0.0 else None
+
     # Resolve the "auto" XC streaming policy eagerly: the grid is rebuilt with
     # traced coordinates inside `energy`, but its size is static per spec.
     xc_chunk = _resolve_chunk(
@@ -321,7 +369,8 @@ def forces(
             # Screening rides in the slab plans on the streamed path (a traced
             # basis cannot resolve element-level Schwarz pairs), and is
             # frozen out of the materialized rebuild.
-            spec = df(aux_basis, chunk=df_chunk)
+            spec = (ExternalCoulombSpec() if packed
+                    else df(aux_basis, chunk=df_chunk))
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max
         )
@@ -352,6 +401,16 @@ def forces(
                     int2c_inv_lr=ks.coulomb.int2c_inv_lr,
                     hf_coeff_lr=hf_lr, omega=ks.coulomb.omega,
                 ),
+            )
+        if packed:
+            T, vinv, T_lr, vinv_lr = _packed_forces_tensors(
+                basis, aux_basis, plan3, aux_plan, omega_lr)
+            ks = eqx.tree_at(
+                lambda k: k.coulomb, ks,
+                PackedDFForcesCoulomb(
+                    T=T, int2c_inv=vinv, Zs=() if smeared else Zs,
+                    hf_coeff=hf_ax, T_lr=T_lr, int2c_inv_lr=vinv_lr,
+                    hf_coeff_lr=hf_lr, **layout),
             )
         if smeared:
             P = jnp.stack([_density_frac(Phi, f, ks.S) for Phi, f in nos])

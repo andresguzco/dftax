@@ -116,9 +116,11 @@ def becke(
             otherwise emits tail points at r ~ 10³ Bohr where every basis
             function underflows; Treutler's ends inside it. ``None`` keeps all
             shells.
-        cutoff: drop grid points whose Becke weight is below this (applied
-            only on the eager build path, i.e. the KS constructor; traced
-            rebuilds keep static shapes). ``None`` keeps all points.
+        cutoff: zero the quadrature weights below this (applied on the
+            eager build path, i.e. the KS constructor). The points themselves
+            are kept, so the grid's size depends on the elements and the spec,
+            never the geometry, and a new geometry reuses every compiled
+            program. ``None`` keeps every weight as computed.
         screen: amplitude threshold for per-block basis screening (see
             :mod:`dftax.grid.screen`). The grid is reordered into compact
             blocks and each block keeps only the shells that reach it, so the

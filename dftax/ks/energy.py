@@ -275,10 +275,8 @@ def _resolve_grid(grid, symbols, coords):
 
     Accepts a :class:`~dftax.grid.Becke` spec (default), an explicit
     ``(coords, weights)`` tuple, or a :class:`~dftax.grid.Points` spec (an
-    explicit grid with a streaming chunk). For a Becke spec, points whose
-    quadrature weight falls below ``spec.cutoff`` are dropped (this path is
-    always eager, so the value-dependent compression is legal here; the
-    traced grid rebuilds in forces/batched keep static shapes and skip it).
+    explicit grid with a streaming chunk). For a Becke spec, quadrature
+    weights below ``spec.cutoff`` are set to zero and their points kept.
     """
     if grid is None:
         grid = becke()
@@ -293,10 +291,15 @@ def _resolve_grid(grid, symbols, coords):
             grid.radial, grid.radii_adjust,
         )
         if grid.cutoff is not None:
-            keep = np.abs(np.asarray(gw)) > grid.cutoff
-            if not keep.all():
-                idx = jnp.asarray(np.where(keep)[0])
-                gc, gw = gc[idx], gw[idx]
+            # Zero the negligible weights; do not drop their points. Which
+            # points fall below the cutoff depends on the geometry, so
+            # dropping them made the point count, and every grid-shaped array
+            # downstream, a function of the coordinates: each new geometry of
+            # the same molecule recompiled the whole build (12 programs, 50 s
+            # for water/6-31g, against milliseconds for a cache hit). Kept,
+            # the count depends on the elements and the spec alone, at the
+            # price of evaluating ~8% more points that contribute exactly 0.
+            gw = jnp.where(jnp.abs(gw) > grid.cutoff, gw, 0.0)
         return gc, gw, grid.chunk
     if isinstance(grid, Points):
         return grid.coords, grid.weights, grid.chunk
@@ -578,6 +581,12 @@ class KS(eqx.Module):
 
         coords = jnp.asarray(coords)
         charges = jnp.asarray(charges, dtype=coords.dtype)
+        # The default spec, filled in here rather than only inside
+        # _resolve_grid: the XC backend choice below reads the spec's screen
+        # policy, and with grid=None it read None, so the default grid never
+        # took the per-block screening documented as on from 50 atoms.
+        if grid is None and symbols is not None:
+            grid = becke()
         grid_coords, grid_weights, grid_chunk = _resolve_grid(grid, symbols, coords)
         grid_coords = jnp.asarray(grid_coords)
         weights = jnp.asarray(grid_weights)

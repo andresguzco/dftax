@@ -119,15 +119,31 @@ def test_pruned_energy_vs_pyscf_reference(water_mol, water_ks):
     assert abs(res.e_tot - water_ks.e_tot) < 1e-8
 
 
-def test_weight_cutoff_compresses_eager_path():
+def test_weight_cutoff_zeroes_weights_and_keeps_points():
+    """The cutoff zeroes negligible weights rather than dropping points, so
+    the point count does not change and neither does the energy."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     # exact(): this compares two separately converged SCF runs, and the test
     # targets the weight cutoff; on the DF backend the stopping-tolerance
     # flap through the RI metric (~5e-9) would drown the 1e-9 bound.
     ks_cut = KS(mol, PBE(), coulomb=exact())                     # cutoff=1e-15
     ks_all = KS(mol, PBE(), grid=becke(cutoff=None), coulomb=exact())
-    assert ks_cut.xc_term.ao.shape[0] < ks_all.xc_term.ao.shape[0]
+    w_cut = np.asarray(ks_cut.xc_term.weights)
+    assert w_cut.shape == ks_all.xc_term.weights.shape
+    assert np.any(w_cut == 0.0) and np.all(np.abs(w_cut[w_cut != 0]) > 1e-15)
     assert abs(scf(ks_cut).e_tot - scf(ks_all).e_tot) < 1e-9
+
+
+def test_grid_shape_does_not_depend_on_the_geometry():
+    """Two geometries of one molecule get grids of one size, so the second
+    build reuses every program the first compiled. Dropping the points under
+    the weight cutoff made the size, and so the compiled build, a function of
+    the coordinates."""
+    a = KS(Molecule.from_xyz(WATER, "sto-3g"), PBE())
+    b = KS(Molecule.from_xyz("O 0 0 0.03; H 0.79 0.02 0.47; H 0.74 -0.01 "
+                             "-0.53", "sto-3g"), PBE())
+    assert a.xc_term.weights.shape == b.xc_term.weights.shape
+    assert a.xc_term.ao.shape == b.xc_term.ao.shape
 
 
 # ---------------------------------------------------------------------------
@@ -204,3 +220,16 @@ def test_pruned_grid_traces_under_jit_and_vmap():
     batch = jnp.stack([coords, coords * 1.02])
     w = jax.vmap(total_weight)(batch)
     assert w.shape == (2,) and bool(jnp.isfinite(w).all())
+
+
+def test_default_grid_takes_the_screening_policy(monkeypatch):
+    """KS(mol, xc) with no grid must follow becke()'s screen="auto" gate like
+    an explicit becke() does; it used to read the policy off grid=None and
+    never screen."""
+    import dftax.grid.grid as grid_mod
+    from dftax.ks.terms import ScreenedGridXC
+
+    monkeypatch.setattr(grid_mod, "SCREEN_AUTO_MIN_ATOMS", 3)
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    assert isinstance(KS(mol, PBE()).xc_term, ScreenedGridXC)
+    assert isinstance(KS(mol, PBE(), grid=becke()).xc_term, ScreenedGridXC)

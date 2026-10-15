@@ -32,8 +32,11 @@ def _bases(atoms, spherical=True):
 def test_bucketed_tensor_is_the_bucketed_build(spherical):
     basis, aux = _bases(WATER, spherical)
     plan0 = plan_eri3c(basis, aux, tol=0.0)
-    np.testing.assert_array_equal(eri3c_square(basis, aux, plan0),
-                                  eri3c_matrix_bucketed(basis, aux))
+    # rounding only: the nested vmap orders the contractions differently
+    # (measured 8.9e-16 on values up to ~8)
+    np.testing.assert_allclose(eri3c_square(basis, aux, plan0),
+                               eri3c_matrix_bucketed(basis, aux), rtol=0,
+                               atol=1e-13)
 
 
 @pytest.mark.float64

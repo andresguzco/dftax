@@ -112,9 +112,11 @@ def _free_jax_memory():
 
 @pytest.fixture(autouse=True, scope="module")
 def _free_jax_memory_per_module():
+    """The fallback where RSS cannot be read (not Linux): clear per module."""
     yield
-    jax.clear_caches()
-    gc.collect()
+    if _rss_gib() is None:
+        jax.clear_caches()
+        gc.collect()
 
 
 # Every grid dftax fills in by default (KS(mol, xc) and the forces, Hessian,

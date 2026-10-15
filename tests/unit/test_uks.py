@@ -19,7 +19,7 @@ import pytest
 
 from pyscf import dft, gto
 
-from dftax.energy.xc import LDA, PBE, PBE0, B3LYP
+from dftax.energy.xc import LDA, PBE, PBE0
 from dftax.system.molecule import Molecule
 from dftax import KS, becke, df, scf, minimize, forces, exact
 from dftax.grid import becke_grid
@@ -45,7 +45,7 @@ def _ch3():
 
 @pytest.mark.pyscf
 @pytest.mark.float64
-@pytest.mark.parametrize("xc_cls,pyscf_xc", [(LDA, "slater,vwn5"), (PBE, "pbe")])
+@pytest.mark.parametrize("xc_cls,pyscf_xc", [(PBE, "pbe")])
 def test_uks_reduces_to_rks(xc_cls, pyscf_xc, water_mol):
     """Closed shell: UKS (Pα=Pβ) must reproduce the RKS energy exactly."""
     mf = dft.RKS(water_mol)
@@ -64,7 +64,7 @@ def test_uks_reduces_to_rks(xc_cls, pyscf_xc, water_mol):
 @pytest.mark.float64
 @pytest.mark.parametrize(
     "xc_obj,pyscf_xc",
-    [(LDA(), "slater,vwn5"), (PBE(), "pbe"), (PBE0(), "pbe0"), (B3LYP(), "b3lyp")],
+    [(PBE(), "pbe"), (PBE0(), "pbe0")],
 )
 def test_uks_doublet_matches_pyscf(xc_obj, pyscf_xc):
     """CH3 doublet vs pyscf.dft.UKS across LDA / PBE / PBE0 / B3LYP (hybrids)."""

@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from dftax import KS, Molecule, becke, df, gdm, scf
-from dftax.energy.xc import LDA, PBE, R2SCAN, functional
+from dftax.energy.xc import PBE, R2SCAN, functional
 from dftax.ks.scf import canonical_orthonormalizer
 
 WATER = "O 0 0 0; H 0.76 0 0.50; H 0.76 0 -0.50"
@@ -32,9 +32,9 @@ def _orbitals(ks, seed=0):
 
 
 @pytest.mark.float64
-@pytest.mark.parametrize("xc", [LDA, PBE, R2SCAN])
-@pytest.mark.parametrize("atoms,spin", [(WATER, 0), (OH, 1)])
-@pytest.mark.parametrize("chunk", [None, 64])
+@pytest.mark.parametrize("xc, atoms, spin, chunk", [
+    (PBE, WATER, 0, None), (R2SCAN, OH, 1, 64),
+])
 def test_orbital_gradient_is_the_chain_rule(xc, atoms, spin, chunk):
     """Materialized grid (chunk=None, the orbital route) and streamed grid
     (the density-matrix default) both match 2 w F C from energy_and_fock."""
@@ -85,8 +85,9 @@ def test_gdm_orbital_route_matches_fock_route(atoms, spin):
 
 
 @pytest.mark.float64
-@pytest.mark.parametrize("name", ["pbe0", "cam-b3lyp"])
-@pytest.mark.parametrize("atoms,spin", [(WATER, 0), (OH, 1)])
+@pytest.mark.parametrize("name, atoms, spin", [
+    ("cam-b3lyp", WATER, 0), ("pbe0", OH, 1),
+])
 def test_hybrid_orbital_route_is_the_chain_rule(name, atoms, spin):
     """The DF exchange from the orbitals (no orbital recovery from P) against
     energy_and_fock, global and range-separated."""

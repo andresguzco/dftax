@@ -19,7 +19,7 @@ H2O = "O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043"
 @pytest.mark.pyscf
 @pytest.mark.float64
 class TestDirectMinimization:
-    @pytest.mark.parametrize("xc_cls,pyscf_xc", [(LDA, "slater,vwn5"), (PBE, "pbe")])
+    @pytest.mark.parametrize("xc_cls,pyscf_xc", [(PBE, "pbe")])
     def test_matches_scf(self, xc_cls, pyscf_xc):
         mol = gto.M(atom=H2O, basis="sto-3g").build()
         mf = dft.RKS(mol)

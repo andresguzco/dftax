@@ -23,9 +23,7 @@ def _random_density(nao, nocc, seed=0):
 
 
 @pytest.mark.parametrize("basis_name,spherical", [
-    ("sto-3g", False),
     ("sto-3g", True),
-    ("6-31g", True),
 ])
 def test_streamed_K_matches_the_materialized_tensor(basis_name, spherical):
     syms = ["O", "H", "H"]

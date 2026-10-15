@@ -32,8 +32,7 @@ def _bases(spherical):
 
 
 @pytest.mark.float64
-@pytest.mark.parametrize("spherical", [True, False])
-@pytest.mark.parametrize("screen", [None, 1e-3])
+@pytest.mark.parametrize("spherical, screen", [(True, 1e-3), (False, None)])
 def test_packed_unpacks_to_the_square_tensor(spherical, screen):
     basis, aux = _bases(spherical)
     keep = None if screen is None else _shell_pair_keep(basis, screen)

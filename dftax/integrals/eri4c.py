@@ -486,8 +486,8 @@ def shell_pair_schwarz(basis: BasisData) -> np.ndarray:
     One bucketed class kernel per pair type ``(la, lb, npa, npb)`` evaluates
     just those quartets, O(shell pairs), instead of the flat element padded
     to the basis's largest ``l`` over every cartesian pair. Batches are padded
-    to a power of two (at least the class chunk), so the kernels' shapes, and
-    so their compiled programs, recur across molecules. Host-side; the basis
+    to a power of two, so the kernels' shapes, and so their compiled programs,
+    recur across molecules. Host-side; the basis
     must be concrete.
     """
     from collections import defaultdict
@@ -523,7 +523,11 @@ def shell_pair_schwarz(basis: BasisData) -> np.ndarray:
         angb = tuple(tuple(int(x) for x in ang[rb[0] + i]) for i in range(ncb))
         chunk = _eri4c_class_chunk(la, lb, la, lb, (npa, npb, npa, npb))
         n = len(members)
-        size = max(chunk, 1 << (n - 1).bit_length())
+        # pad to a power of two (shapes recur across molecules), not to the
+        # kernel chunk: for cheap s-type classes that chunk is millions of
+        # quartets, and padding a few hundred pairs up to it was most of
+        # the work
+        size = max(64, 1 << (n - 1).bit_length())
         pad = np.full(size - n, ra[0], dtype=_IDX), np.full(size - n, rb[0],
                                                              dtype=_IDX)
         rap, rbp = np.concatenate([ra, pad[0]]), np.concatenate([rb, pad[1]])

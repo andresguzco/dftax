@@ -52,8 +52,9 @@ def test_spherical_aux_knob():
     """
     mol = gto.M(atom=H2O, basis="sto-3g").build()
     grid = jnp.zeros((8, 3)), jnp.zeros((8,))
-    ks_sph = KS(mol, LDA(), grid=grid, coulomb=df(AUX))
-    ks_cart = KS(mol, LDA(), grid=grid, coulomb=df(AUX, spherical=False))
+    ks_sph = KS(mol, LDA(), grid=grid, coulomb=df(AUX, whiten=False))
+    ks_cart = KS(mol, LDA(), grid=grid,
+                 coulomb=df(AUX, spherical=False, whiten=False))
     naux_sph = ks_sph.coulomb.int3c.shape[-1]
     naux_cart = ks_cart.coulomb.int3c.shape[-1]
     assert naux_sph < naux_cart  # h/i cartesian contaminants dropped

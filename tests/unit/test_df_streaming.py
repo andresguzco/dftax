@@ -49,7 +49,8 @@ def test_streamed_rij_matches_materialized(water_mol):
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
 
-    ks = KS(water_mol, LDA(), grid=(grid[0], grid[1]), coulomb=df(AUX, spherical=False))
+    ks = KS(water_mol, LDA(), grid=(grid[0], grid[1]),
+            coulomb=df(AUX, spherical=False, whiten=False))
     P = scf(ks).P[0]
 
     aux = build_basis_data(

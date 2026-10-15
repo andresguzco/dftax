@@ -38,26 +38,16 @@ def test_adiis_matches_plain_diis_on_easy_case():
 
 
 @pytest.mark.float64
-def test_degenerate_cr_atom_limit_cycles_and_smearing_converges():
+def test_degenerate_cr_atom_converges_with_smearing():
     """Cr atom: the exactly degenerate d-shell has no stable
-    integer-occupation fixed point, so plain DIIS limit-cycles; Fermi
-    smearing (the ensemble treatment of a degenerate ground state)
-    converges.
-
-    Historical record: this case originally separated ADIIS (converged,
-    164 iterations, lower energy) from plain DIIS (cycled). The bucketed
-    integral engine's epsilon-level changes flipped that knife edge
-    (verified by isolating the pre-bucketing tree: ADIIS cycles there
-    too), and no guess (core/minao/sad/sap) or neighboring system
-    (Mn atom, Cr2) restores a robust separation; both accelerators now
-    orbit the degenerate minimum. ADIIS's no-regression guarantees live
-    in the parity tests in this module.
+    integer-occupation fixed point; Fermi smearing (the ensemble treatment of
+    a degenerate ground state) converges. Whether plain DIIS limit-cycles
+    here is a knife edge that last-digit integral changes flip, so it is not
+    asserted. ADIIS's no-regression guarantees live in the parity tests in
+    this module.
     """
     mol = Molecule.from_xyz("Cr 0 0 0", "sto-3g", spin=6)
     ks = KS(mol, PBE(), grid=becke(35, 50), spin=6)
-    with pytest.warns(UserWarning, match="did NOT converge"):
-        r0 = scf(ks, max_iter=200)
-    assert not r0.converged
     rf = scf(ks, max_iter=200, smearing=fermi(sigma=0.01))
     assert rf.converged
 

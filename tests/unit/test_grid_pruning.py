@@ -99,6 +99,7 @@ def test_pruned_grid_size_and_tail():
     assert float(jnp.abs(gc_f).max()) > 100.0                    # the old tail
 
 
+@pytest.mark.default_grid      # compares the default grid with the full one
 def test_pruned_energy_matches_full_grid():
     mol = Molecule.from_xyz(WATER, "sto-3g")
     e_pruned = scf(KS(mol, PBE())).e_tot                         # all defaults
@@ -120,6 +121,7 @@ def test_pruned_energy_vs_pyscf_reference(water_mol, water_ks):
     assert abs(res.e_tot - water_ks.e_tot) < 1e-8
 
 
+@pytest.mark.default_grid      # the default grid against itself uncut
 def test_weight_cutoff_zeroes_weights_and_keeps_points():
     """The cutoff zeroes negligible weights rather than dropping points, so
     the point count does not change and neither does the energy."""
@@ -190,6 +192,7 @@ def test_resolve_chunk_policy():
     assert _resolve_chunk(4096, 10, 10) == 4096                  # explicit passthrough
 
 
+@pytest.mark.default_grid      # monkeypatch.undo() would drop the test grid
 def test_auto_chunk_selects_backend(monkeypatch):
     import dftax.ks.energy as energy_mod
 

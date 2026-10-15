@@ -32,6 +32,9 @@ def main():
     ap.add_argument("--grid", choices=("default", "bench"), default="default",
                     help="default: becke() (pruned, screened from 50 atoms); "
                          "bench: gpu4pyscf_bench's becke(75, 302, prune=None)")
+    ap.add_argument("--profile-build", type=int, default=0, metavar="TOP",
+                    help="also cProfile one warm same-geometry rebuild and "
+                         "print its TOP functions by cumulative time")
     args = ap.parse_args()
 
     import equinox as eqx
@@ -65,6 +68,19 @@ def main():
           f"{type(c).__name__}, xc {type(x).__name__}; cold build {cold:.0f} s",
           flush=True)
     t_build = wall(lambda: KS(mol, xc, grid=grid))
+    if args.profile_build:
+        import cProfile
+        import io
+        import pstats
+
+        pr = cProfile.Profile()
+        pr.enable()
+        jax.block_until_ready(KS(mol, xc, grid=grid))
+        pr.disable()
+        out = io.StringIO()
+        pstats.Stats(pr, stream=out).sort_stats("cumulative").print_stats(
+            args.profile_build)
+        print(out.getvalue(), flush=True)
     r = scf(ks)
     P = r.P
     fock = eqx.filter_jit(lambda k, P: k.energy_and_fock(P))

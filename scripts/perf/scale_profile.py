@@ -29,6 +29,9 @@ def main():
     ap.add_argument("--basis", default="def2-svp")
     ap.add_argument("--xc", default="PBE0")
     ap.add_argument("--repeat", type=int, default=3)
+    ap.add_argument("--grid", choices=("default", "bench"), default="default",
+                    help="default: becke() (pruned, screened from 50 atoms); "
+                         "bench: gpu4pyscf_bench's becke(75, 302, prune=None)")
     args = ap.parse_args()
 
     import equinox as eqx
@@ -36,7 +39,7 @@ def main():
     jax.config.update("jax_enable_x64", True)
     from profile_terms import read_xyz
 
-    from dftax import KS, Molecule, scf
+    from dftax import KS, Molecule, becke, scf
     from dftax.energy import xc as xcmod
 
     def wall(fn):
@@ -50,15 +53,18 @@ def main():
 
     mol = Molecule.from_xyz(read_xyz(args.mol), args.basis)
     xc = getattr(xcmod, args.xc)()
+    # explicit, so the screening policy applies even before the default-grid
+    # fix (grid=None never screened)
+    grid = becke() if args.grid == "default" else becke(75, 302, prune=None)
     t0 = time.perf_counter()
-    ks = KS(mol, xc)
+    ks = KS(mol, xc, grid=grid)
     jax.block_until_ready(ks)
     cold = time.perf_counter() - t0
     c, x = ks.coulomb, ks.xc_term
-    print(f"{args.mol} {args.xc}: nao {ks.S.shape[0]}, coulomb "
+    print(f"{args.mol} {args.xc} ({args.grid} grid): nao {ks.S.shape[0]}, coulomb "
           f"{type(c).__name__}, xc {type(x).__name__}; cold build {cold:.0f} s",
           flush=True)
-    t_build = wall(lambda: KS(mol, xc))
+    t_build = wall(lambda: KS(mol, xc, grid=grid))
     r = scf(ks)
     P = r.P
     fock = eqx.filter_jit(lambda k, P: k.energy_and_fock(P))

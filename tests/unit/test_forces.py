@@ -191,8 +191,12 @@ class TestDensityFittingForces:
         coordinates (with frozen-orbital exchange), not the square one; a
         hybrid's packed forces match the streamed frozen-orbital forces to
         machine precision on a well-conditioned auxiliary metric."""
-        import dftax.ks.forces as forces_mod
+        import importlib
+
         from dftax.energy.xc import PBE0
+
+        # the module, not the re-exported forces() function of the same name
+        forces_mod = importlib.import_module("dftax.ks.forces")
 
         calls = []
         orig = forces_mod._packed_forces_tensors

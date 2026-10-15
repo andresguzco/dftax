@@ -60,7 +60,7 @@ from dftax import KS, Molecule, scf
 from dftax.energy.xc import PBE
 
 water = Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043", "sto-3g")
-ks  = KS(water, PBE())                      # density fitting + default becke() grid (75, 302)
+ks  = KS(water, PBE())                      # density fitting + the default becke() grid
 print(scf(ks).e_tot)                        # -75.146...
 ```
 

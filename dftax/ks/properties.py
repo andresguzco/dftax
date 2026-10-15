@@ -84,7 +84,7 @@ def _becke_spec(grid) -> Becke:
 def _grid(mol, grid):
     g = _becke_spec(grid)
     return becke_grid(mol.symbols, mol.atom_coords(), g.n_radial, g.lebedev,
-                      g.prune, g.r_max), g
+                      g.prune, g.r_max, g.radial, g.radii_adjust), g
 
 
 def _solve_field(mol, xc, gc, gw, *, chunk=None, field=None,
@@ -194,7 +194,7 @@ def _eval_at(mol, xc, coords, origin, g, scf_kw, coulomb=None):
     """Analytic forces ``(n_atom,3)`` and dipole ``(3,)`` at a geometry."""
     m = _displaced(mol, coords)
     gc, gw = becke_grid(m.symbols, m.atom_coords(), g.n_radial, g.lebedev,
-                        g.prune, g.r_max)
+                        g.prune, g.r_max, g.radial, g.radii_adjust)
     ks = KS(m, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
     res = scf(ks, **scf_kw)
     F = forces(m, xc, res, grid=g, coulomb=coulomb)
@@ -286,7 +286,7 @@ def hessian(mol, xc, *, method: str = "fd", step: float = 1e-3,
 
         gc, gw = becke_grid(
             mol.symbols, mol.atom_coords(), g.n_radial, g.lebedev,
-            g.prune, g.r_max,
+            g.prune, g.r_max, g.radial, g.radii_adjust,
         )
         ks = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
         res = scf(ks, **scf_kw)

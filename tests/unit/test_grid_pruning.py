@@ -57,8 +57,8 @@ def test_lebedev_new_orders_match_pyscf(order):
 def test_nwchem_prune_matches_pyscf_rule():
     """Per-shell angular orders equal PySCF's nwchem_prune for the same radial
     nodes. Even n_radial: odd counts place a Chebyshev node exactly on a
-    region boundary, where either side is a valid quadrature and the two
-    libraries' last-bit radii constants may disagree."""
+    region boundary, where either side is a valid quadrature and float
+    rounding picks one."""
     from pyscf.dft import gen_grid
 
     for Z in list(range(1, 37)) + [54]:
@@ -68,14 +68,16 @@ def test_nwchem_prune_matches_pyscf_rule():
             ref = gen_grid.nwchem_prune(Z, r, n_ang)
             ours = np.concatenate([
                 [order] * rr.shape[0]
-                for rr, _, order in _atom_shell_blocks(Z, n_rad, n_ang, "nwchem", None)
+                for rr, _, order in _atom_shell_blocks(
+                    Z, n_rad, n_ang, "nwchem", None, "becke"
+                )
             ])
             assert np.array_equal(ref, ours), (Z, n_rad, n_ang)
 
 
 def test_prune_rejects_unknown_scheme():
     with pytest.raises(ValueError, match="unknown prune scheme"):
-        _atom_shell_blocks(8, 75, 302, "sg9", None)
+        _atom_shell_blocks(8, 75, 302, "sg9", None, "becke")
 
 
 # ---------------------------------------------------------------------------
@@ -83,12 +85,16 @@ def test_prune_rejects_unknown_scheme():
 # ---------------------------------------------------------------------------
 
 def test_pruned_grid_size_and_tail():
+    # Becke's mapping: its tail is what r_max cuts (Treutler's ends inside).
     mol = Molecule.from_xyz(WATER, "sto-3g")
     syms, coords = mol.symbols, mol.atom_coords()
-    gc_p, gw_p = becke_grid(syms, coords)                        # pruned default
-    gc_f, gw_f = becke_grid(syms, coords, prune=None, r_max=None)
+    becke_kw = dict(radial="becke", radii_adjust="becke")
+    gc_p, gw_p = becke_grid(syms, coords, 75, 302, **becke_kw)  # pruned
+    gc_f, gw_f = becke_grid(syms, coords, 75, 302, prune=None, r_max=None,
+                            **becke_kw)
     assert gc_p.shape[0] < 0.6 * gc_f.shape[0]
-    assert gc_p.shape[0] == becke_grid_size(syms)                # static size helper
+    assert gc_p.shape[0] == becke_grid_size(syms, 75, 302, radial="becke")
+    assert becke_grid(syms, coords)[0].shape[0] == becke_grid_size(syms)
     assert float(jnp.abs(gc_p).max()) <= 45.0 + float(jnp.abs(jnp.asarray(coords)).max())
     assert float(jnp.abs(gc_f).max()) > 100.0                    # the old tail
 
@@ -105,10 +111,12 @@ def test_pruned_energy_vs_pyscf_reference(water_mol, water_ks):
     from dftax import exact
 
     # exact Coulomb: the PySCF reference is exact-ERI, tighter than RI error.
+    # For water the default grid is PySCF's default grid, so only the SCF
+    # convergence is left (4e-11 measured; Becke's scheme sits 4e-7 away).
     ks = KS(water_mol, PBE(), coulomb=exact())                   # pruned default
     res = scf(ks)
     assert res.converged
-    assert abs(res.e_tot - water_ks.e_tot) < 5e-5
+    assert abs(res.e_tot - water_ks.e_tot) < 1e-8
 
 
 def test_weight_cutoff_compresses_eager_path():

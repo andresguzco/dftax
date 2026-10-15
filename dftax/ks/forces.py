@@ -307,7 +307,8 @@ def forces(
     # traced coordinates inside `energy`, but its size is static per spec.
     xc_chunk = _resolve_chunk(
         grid.chunk,
-        becke_grid_size(symbols, grid.n_radial, grid.lebedev, grid.prune, grid.r_max),
+        becke_grid_size(symbols, grid.n_radial, grid.lebedev, grid.prune,
+                        grid.r_max, grid.radial),
         nao_final,
     )
 
@@ -321,7 +322,8 @@ def forces(
             # frozen out of the materialized rebuild.
             spec = df(aux_basis, chunk=df_chunk)
         gc, gw = becke_grid(
-            symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max
+            symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max,
+            grid.radial, grid.radii_adjust,
         )
         # points(..., chunk=...) keeps the resolved XC streaming: silently
         # materializing the AO grid here would OOM exactly the systems the

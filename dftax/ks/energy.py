@@ -289,7 +289,8 @@ def _resolve_grid(grid, symbols, coords):
                 "(coords, weights) grid when building from a raw System."
             )
         gc, gw = becke_grid(
-            symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max
+            symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max,
+            grid.radial, grid.radii_adjust,
         )
         if grid.cutoff is not None:
             keep = np.abs(np.asarray(gw)) > grid.cutoff

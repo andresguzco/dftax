@@ -1,12 +1,23 @@
 # Grid specs
 
 Quadrature choices for the XC integral. `becke` is the default atom-centered
-grid: NWChem-pruned per radial region (`prune=None` for the full product
-grid), tail shells cut at `r_max`, and negligible-weight points dropped at
-build time (`cutoff`). `points` wraps an explicit grid. `chunk` controls XC
-streaming on either spec: `"auto"` (default) materializes the AO grid values
-only when they fit a memory budget and otherwise streams in O(chunk·nao)
-memory; `None` forces the materialized grid; an int streams with that chunk.
+grid: Treutler-Ahlrichs radial shells at PySCF's level-3 counts (50 for H,
+75 for Li-Ne, 80 for Na-Ar), 302-point Lebedev shells NWChem-pruned per
+radial region (`prune=None` for the full product grid), tail shells cut at
+`r_max`, and negligible-weight points dropped at build time (`cutoff`).
+`points` wraps an explicit grid. `chunk` controls XC streaming on either
+spec: `"auto"` (default) materializes the AO grid values only when they fit a
+memory budget and otherwise streams in O(chunk·nao) memory; `None` forces the
+materialized grid; an int streams with that chunk.
+
+`radial` and `radii_adjust` choose the radial mapping and the cell sizes of
+the partition: Treutler-Ahlrichs' (the default, and PySCF's, which reaches a
+given accuracy with fewer radial shells) or Becke's (dftax's default through
+0.8.1, which is `becke(75, 302, radial="becke", radii_adjust="becke")`).
+`n_radial` and `lebedev` take an int for every element or `"pyscf"` for
+PySCF's level-3 count per period. With `becke(lebedev="pyscf")` the grid is
+PySCF's default `Grids`, point for point; it differs from the default only
+from Na on, where PySCF uses 434 angular points.
 
 `screen` is the large-system knob. With it, the grid is reordered into compact
 blocks and each block keeps only the shells that actually reach it, so the XC

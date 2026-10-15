@@ -212,3 +212,16 @@ def test_pruned_grid_traces_under_jit_and_vmap():
     batch = jnp.stack([coords, coords * 1.02])
     w = jax.vmap(total_weight)(batch)
     assert w.shape == (2,) and bool(jnp.isfinite(w).all())
+
+
+def test_default_grid_takes_the_screening_policy(monkeypatch):
+    """KS(mol, xc) with no grid must follow becke()'s screen="auto" gate like
+    an explicit becke() does; it used to read the policy off grid=None and
+    never screen."""
+    import dftax.grid.grid as grid_mod
+    from dftax.ks.terms import ScreenedGridXC
+
+    monkeypatch.setattr(grid_mod, "SCREEN_AUTO_MIN_ATOMS", 3)
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    assert isinstance(KS(mol, PBE()).xc_term, ScreenedGridXC)
+    assert isinstance(KS(mol, PBE(), grid=becke()).xc_term, ScreenedGridXC)

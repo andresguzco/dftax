@@ -614,6 +614,12 @@ class KS(eqx.Module):
 
         coords = jnp.asarray(coords)
         charges = jnp.asarray(charges, dtype=coords.dtype)
+        # The default spec, filled in here rather than only inside
+        # _resolve_grid: the XC backend choice below reads the spec's screen
+        # policy, and with grid=None it read None, so the default grid never
+        # took the per-block screening documented as on from 50 atoms.
+        if grid is None and symbols is not None:
+            grid = becke()
         grid_coords, grid_weights, grid_chunk = _resolve_grid(grid, symbols, coords)
         grid_coords = jnp.asarray(grid_coords)
         weights = jnp.asarray(grid_weights)

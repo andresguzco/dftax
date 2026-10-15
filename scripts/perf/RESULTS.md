@@ -463,6 +463,20 @@ now ask for the same 189 classes; before, 27 of bicyclo's were not cubane's.
 Validated against the 62 PySCF-comparison integral tests. The parity gate's
 two DF cases moved 1.1e-9 and 1.3e-9 Ha, the density-fitting floor of a
 reordered contraction (see the `forces_df` note above).
+### The AO grid sized to the device
+
+The materialized AO grid (values and gradients, `4 · ng · nao` doubles) was
+capped by a fixed budget of 2^27 elements, about 1 GiB, whatever the device.
+On an 80 GB A100 that made bicyclo[2.2.2]octane/def2-svp stream its XC term
+and recompute AO values every evaluation: `energy_and_fock` 23.2 ms. Sized to
+an eighth of the device's memory pool (`_AO_POOL_FRACTION`, the same policy as
+the DF tensor), it stays materialized: **8.75 ms**, 2.7x, and the orbital
+route of direct minimization (density from the occupied orbitals on the
+grid) becomes available to mid-size molecules. Smaller devices get a smaller
+budget and stream as before; the floor is the old fixed budget.
+
+Coronene/def2-svp PBE with the AO grid materialized (383k points x 420 AOs)
+peaks at 13.67 GiB of 75.3 GiB through build and SCF.
 
 ## What the gate learned about itself
 

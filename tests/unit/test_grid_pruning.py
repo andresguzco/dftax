@@ -170,7 +170,7 @@ def test_auto_chunk_selects_backend(monkeypatch):
 
     mol = Molecule.from_xyz(WATER, "sto-3g")
     assert isinstance(KS(mol, PBE()).xc_term, GridXC)            # small: materialized
-    monkeypatch.setattr(energy_mod, "_AO_GRID_BUDGET", 1024)     # force streaming
+    monkeypatch.setattr(energy_mod, "_ao_grid_budget", lambda: 1024)  # stream
     ks_s = KS(mol, PBE())
     assert isinstance(ks_s.xc_term, StreamedGridXC)
     e_s = scf(ks_s).e_tot

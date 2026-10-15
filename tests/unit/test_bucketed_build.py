@@ -89,6 +89,7 @@ def test_ks_with_shared_programs_matches(monkeypatch, xc, packed):
 
     mol = Molecule.from_xyz(WATER, "6-31g*")
     kw = dict(coulomb=df(chunk=None, packed=True)) if packed else {}
+    monkeypatch.setenv("DFTAX_BUCKETED", "0")
     ref = KS(mol, xc(), **kw)
     monkeypatch.setenv("DFTAX_BUCKETED", "1")
     ks = KS(mol, xc(), **kw)

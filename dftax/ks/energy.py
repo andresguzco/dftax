@@ -820,12 +820,14 @@ class KS(eqx.Module):
             if aux_basis is None and not spec.stream and quartets is None
             else None
         )
-        # Shared class programs (opt-in while it is measured; see
-        # dftax.integrals.bucketed): an eager whitened square build takes its
-        # one-electron integrals, metric and 3-center tensor from per-class
-        # programs that every molecule with the same shell classes reuses,
-        # and skips the per-molecule _build_integrals program altogether.
-        bucketed = (os.environ.get("DFTAX_BUCKETED") == "1" and whiten
+        # Shared class programs (dftax.integrals.bucketed; DFTAX_BUCKETED=0
+        # turns them off): an eager whitened build takes its one-electron
+        # integrals, metric and 3-center tensor from per-class programs that
+        # every molecule with the same shell classes reuses, and skips the
+        # per-molecule _build_integrals program. Cubane, cold: 189 s either
+        # way; bicyclo[2.2.2]octane after it: 26 against 189 s; a new process
+        # on a warm cache: 12 against 50 s (the fused program is traced again).
+        bucketed = (os.environ.get("DFTAX_BUCKETED", "1") != "0" and whiten
                     and devices is None)
         fused_args = (
             basis, coords, charges, grid_coords, aux_basis,

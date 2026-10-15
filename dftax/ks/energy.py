@@ -506,12 +506,16 @@ def _fused_ready(key):
 def _schedule_fused(key, call):
     """Compile (and run once) the fused build for ``key`` in the background,
     on the structure's second build: a structure built once (each molecule of
-    a dataset) never pays for it."""
+    a dataset) never pays for it. One compile at a time, none queued (a
+    pending compile would hold up interpreter exit): while one runs, a later
+    build of another structure tries again."""
     global _FUSED_POOL
     if key in _FUSED_BUILDS:
         return
     if key not in _SEEN:
         _SEEN.add(key)
+        return
+    if any(not f.done() for f in _FUSED_BUILDS.values()):
         return
     if _FUSED_POOL is None:
         from concurrent.futures import ThreadPoolExecutor

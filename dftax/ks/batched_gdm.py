@@ -52,7 +52,7 @@ from jaxtyping import Array, Float, Scalar
 
 from dftax.ks.energy import KS
 from dftax.ks.gdm import (
-    KAPPA_RESET, _lbfgs_direction, _occupied, _tdot, rotate_full,
+    KAPPA_RESET, _lbfgs_direction, _occupied, _tdot, gdm, rotate_full,
 )
 from dftax.ks.guess import density_from_guess
 from dftax.ks.scf import canonical_orthonormalizer
@@ -394,12 +394,51 @@ def _solve_batch(stacked: PaddedKS, P0s, max_iter, e_tol, d_tol, max_step,
 
 @dataclass
 class BatchedGDMResult:
-    """Per-system results of :func:`gdm_batched`, in input order."""
+    """Per-system results of :func:`gdm_batched`, in input order.
+
+    ``fallback`` marks the systems the batch did not settle (not converged,
+    or converged to a state whose occupied orbitals are not the lowest ones)
+    and that were re-solved one at a time by :func:`~dftax.ks.gdm.gdm`; their
+    ``n_iter`` is that solve's.
+    """
 
     e_tot: np.ndarray
     converged: np.ndarray
     n_iter: np.ndarray
     P: list            # each system's spin-stacked density, unpadded
+    fallback: np.ndarray = None
+
+
+# An occupied orbital this far above the lowest unoccupied level (Ha) marks
+# a converged state that is not the aufbau one: a stationary point the batch
+# can settle in (Cr2 at 1.68 A, 0.6-0.7 Ha above the ground state) because
+# its preconditioner stays in the guess frame. Degenerate levels never trip
+# it.
+AUFBAU_TOL = 1e-3
+
+
+@eqx.filter_jit
+def _aufbau_violation(stacked: PaddedKS, P):
+    """Per system: occupation weight on orbitals more than ``AUFBAU_TOL``
+    above the highest level an aufbau state would fill. One Fock build and
+    one eigh per channel, after the loop."""
+
+    def one(ks, P):
+        _, F = ks.energy_and_fock(P)
+        X = _lowdin(ks.S)
+        bad = 0.0
+        for s, f in enumerate(ks.occupations()):
+            eps, U = jnp.linalg.eigh(X.T @ F[s] @ X)
+            # the occupied projector in the orthonormal basis; P = w C Cᵀ
+            w = jnp.maximum(jnp.max(f), 1e-30)
+            Xi = X.T @ ks.S
+            q = jnp.einsum("ak,ab,bk->k", U, Xi @ P[s] @ Xi.T / w, U)
+            n = jnp.sum(f > 0.0)
+            top = eps[jnp.maximum(n - 1, 0)]
+            bad = bad + jnp.sum(jnp.where(eps > top + AUFBAU_TOL, q, 0.0))
+        return bad
+
+    return jax.vmap(one)(stacked, P)
 
 
 def _solve_group(kss, b, guess, max_iter, e_tol, d_tol, max_step, gap_floor,
@@ -414,16 +453,19 @@ def _solve_group(kss, b, guess, max_iter, e_tol, d_tol, max_step, gap_floor,
         stacked, jnp.stack(P0s), jnp.asarray(max_iter), jnp.asarray(e_tol),
         jnp.asarray(d_tol), jnp.asarray(max_step), jnp.asarray(gap_floor),
         history)
+    unsettled = ~np.asarray(conv) | (np.asarray(_aufbau_violation(stacked, P))
+                                     > 0.5)
     P = np.asarray(P)
     return (np.asarray(e), np.asarray(conv), np.asarray(it),
             [P[i, :, :int(ks.S.shape[0]), :int(ks.S.shape[0])]
-             for i, ks in enumerate(kss)])
+             for i, ks in enumerate(kss)], unsettled)
 
 
 def gdm_batched(kss, *, max_iter: int = 200, e_tol: float = 1e-8,
                 d_tol: float = 1e-6, history: int = 20, max_step: float = 0.5,
                 gap_floor: float = 0.05, guess=None,
-                bucket: Bucket | None = None) -> BatchedGDMResult:
+                bucket: Bucket | None = None,
+                fallback: bool = True) -> BatchedGDMResult:
     """Minimize the KS energy of every system in ``kss`` at once.
 
     Args:
@@ -436,6 +478,12 @@ def gdm_batched(kss, *, max_iter: int = 200, e_tol: float = 1e-8,
             of similar molecules share one compiled program.
         guess: a guess spec as for :func:`~dftax.ks.scf.scf`, applied per
             molecule before padding.
+        fallback: re-solve one at a time, with :func:`~dftax.ks.gdm.gdm`,
+            every system the batch leaves unconverged or converges to a
+            non-aufbau state (the batched loop keeps its preconditioner in
+            the guess frame and can settle in an excited stationary state on
+            hard cases such as Cr2; :func:`~dftax.ks.gdm.gdm` re-diagonalizes
+            at its resets). Marked in ``BatchedGDMResult.fallback``.
         The tolerances and step controls are those of :func:`~dftax.ks.gdm.gdm`.
     """
     kss = list(kss)
@@ -453,15 +501,25 @@ def gdm_batched(kss, *, max_iter: int = 200, e_tol: float = 1e-8,
                          "one functional and one DF term type.")
     n = len(kss)
     e, conv, it = np.zeros(n), np.zeros(n, bool), np.zeros(n, int)
+    redo = np.zeros(n, bool)
     P = [None] * n
     for idx in groups.values():
         sub = [kss[i] for i in idx]
         b = bucket if bucket is not None else bucket_for(sub)
-        ge, gc, gi, gP = _solve_group(sub, b, guess, max_iter, e_tol, d_tol,
-                                      max_step, gap_floor, history)
+        ge, gc, gi, gP, gu = _solve_group(sub, b, guess, max_iter, e_tol,
+                                          d_tol, max_step, gap_floor, history)
         for j, i in enumerate(idx):
             e[i], conv[i], it[i], P[i] = ge[j], gc[j], gi[j], gP[j]
-    return BatchedGDMResult(e_tot=e, converged=conv, n_iter=it, P=P)
+            redo[i] = gu[j]
+    if fallback:
+        for i in np.nonzero(redo)[0]:
+            r = gdm(kss[i], max_iter=max_iter, e_tol=e_tol, d_tol=d_tol,
+                    history=history, max_step=max_step, gap_floor=gap_floor,
+                    guess=guess)
+            e[i], conv[i], it[i] = r.e_tot, r.converged, r.n_iter
+            P[i] = np.asarray(r.P)
+    return BatchedGDMResult(e_tot=e, converged=conv, n_iter=it, P=P,
+                            fallback=redo if fallback else np.zeros(n, bool))
 
 
 __all__ = ["gdm_batched", "pad_ks", "bucket_for", "Bucket", "PaddedKS",

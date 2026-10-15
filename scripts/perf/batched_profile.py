@@ -56,7 +56,7 @@ def main():
     b = bucket_for(kss)
     stacked = jax.tree.map(lambda *xs: jnp.stack(xs),
                            *[pad_ks(ks, b) for ks in kss])
-    B, nao, no = len(kss), b.nao, b.nocc
+    B, nao, no = len(kss), b.nao, b.nocc[0]     # closed shells: one channel
     nv = nao - no
     m = 20
     key = jax.random.PRNGKey(0)
@@ -106,8 +106,8 @@ def main():
 
     padded, t_pad = stage(lambda: [pad_ks(ks, b) for ks in kss])
     P0s, t_guess = stage(lambda: [_block(density_from_guess(
-        ks, None, canonical_orthonormalizer(ks.S))[0], (b.nao, b.nao))
-        for ks in kss])
+        ks, None, canonical_orthonormalizer(ks.S)),
+        (len(b.nocc), b.nao, b.nao)) for ks in kss])
     st, t_stack = stage(lambda: (jax.tree.map(lambda *x: jnp.stack(x),
                                               *padded), jnp.stack(P0s)))
     _, t_core = stage(lambda: _solve_batch(

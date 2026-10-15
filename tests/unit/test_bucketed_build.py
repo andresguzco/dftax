@@ -8,9 +8,9 @@ only, so a second molecule with the same shell classes reuses them.
 import numpy as np
 import pytest
 
-from dftax import KS, Molecule
+from dftax import KS, Molecule, df
 from dftax.basis.loader import build_basis_data
-from dftax.energy.xc import PBE
+from dftax.energy.xc import PBE, PBE0
 from dftax.integrals.bucketed import class_program, eri3c_square
 from dftax.integrals.eri3c_bucketed import eri3c_matrix_bucketed, plan_eri3c
 
@@ -80,16 +80,18 @@ def test_pair_integrals_are_the_bucketed_build(spherical):
 
 
 @pytest.mark.float64
-def test_ks_with_shared_programs_matches(monkeypatch):
+@pytest.mark.parametrize("xc, packed", [(PBE, False), (PBE0, True)])
+def test_ks_with_shared_programs_matches(monkeypatch, xc, packed):
     """The whole eager build from shared class programs: the same KS, to
     rounding, as the per-molecule build (energy and Fock at a fixed
     density)."""
     import jax.numpy as jnp
 
     mol = Molecule.from_xyz(WATER, "6-31g*")
-    ref = KS(mol, PBE())
+    kw = dict(coulomb=df(chunk=None, packed=True)) if packed else {}
+    ref = KS(mol, xc(), **kw)
     monkeypatch.setenv("DFTAX_BUCKETED", "1")
-    ks = KS(mol, PBE())
+    ks = KS(mol, xc(), **kw)
     for a, b in ((ks.S, ref.S), (ks.hcore, ref.hcore)):
         np.testing.assert_allclose(a, b, rtol=0, atol=1e-11)
     n = ref.nocc[0]

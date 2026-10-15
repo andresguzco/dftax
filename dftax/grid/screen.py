@@ -148,11 +148,20 @@ def plan_grid_screen(basis, coords, atom_coords, block=2048, cutoff=1e-10,
     atom_coords = np.asarray(atom_coords)
     ng = coords.shape[0]
 
-    # Group points by nearest atom, atoms walked in neighbour order.
+    # Group points by nearest atom, atoms walked in neighbour order. The
+    # nearest atom minimizes |a|² - 2 x·a, a GEMM; the explicit (ng, natom, 3)
+    # difference array this replaces was ~0.9 GB and a second of host time on
+    # a 74-atom molecule. Chunked over points to bound the (chunk, natom) tile.
     path = _atom_path(atom_coords)
     ac = atom_coords[path]
-    d2 = ((coords[:, None, :] - ac[None, :, :]) ** 2).sum(-1)
-    order = np.argsort(np.argmin(d2, axis=1), kind="stable")
+    a2 = (ac * ac).sum(1)
+    nearest = np.empty(ng, dtype=np.int64)
+    step = max(1, (1 << 24) // max(1, ac.shape[0]))
+    for i0 in range(0, ng, step):
+        x = coords[i0:i0 + step]
+        nearest[i0:i0 + step] = np.argmin(a2[None, :] - 2.0 * (x @ ac.T),
+                                          axis=1)
+    order = np.argsort(nearest, kind="stable")
 
     n_block = -(-ng // block)
     n_pad = n_block * block - ng
@@ -175,36 +184,39 @@ def plan_grid_screen(basis, coords, atom_coords, block=2048, cutoff=1e-10,
     # All blocks bounded in one pass.
     blk = pts.reshape(n_block, block, 3)
     bounds = _shell_bound(cen, ls, exps, coefs, blk.min(1), blk.max(1))
-    keep = [np.nonzero(row > cutoff)[0] for row in bounds]
+    shell_keep = bounds > cutoff                         # (n_block, nshell)
+    # Kept shells expanded to their AO columns, cartesian and final; a row's
+    # kept AO indices, in increasing order, are its kept shells' ranges
+    # concatenated in shell order (row0 and sph0 increase with the shell).
+    cart_cols = np.concatenate([np.arange(r, r + n)
+                                for r, n in zip(row0, ncomp)])
+    sph_cols = np.concatenate([np.arange(r, r + n)
+                               for r, n in zip(sph0, width)])
+    cart_keep = np.repeat(shell_keep, ncomp, axis=1)
+    sph_keep = np.repeat(shell_keep, width, axis=1)
+    cart_count = cart_keep.sum(1)
+    sph_count = sph_keep.sum(1)
 
-    counts = np.array([width[k].sum() for k in keep])
+    def packed_rows(keep, cols, count, n):
+        # Each row's kept columns first, in order (a stable sort of ~keep),
+        # zero-filled past the row's count, plus the 0/1 mask.
+        first = np.argsort(~keep, axis=1, kind="stable")[:, :n]
+        mask = np.arange(n)[None, :] < count[:, None]
+        return (np.where(mask, cols[first], 0).astype(np.int32),
+                mask.astype(np.float64))
+
     # Group blocks of similar size, then pad each group to its own maximum.
-    rank = np.argsort(counts, kind="stable")
+    rank = np.argsort(sph_count, kind="stable")
     edges = np.linspace(0, n_block, n_bucket + 1).astype(int)
     buckets = []
     for e0, e1 in zip(edges[:-1], edges[1:]):
         if e1 <= e0:
             continue
         ids = rank[e0:e1]
-        nc = max(1, max(int(ncomp[keep[i]].sum()) for i in ids))
-        ns = max(1, max(int(width[keep[i]].sum()) for i in ids))
-        C = np.zeros((len(ids), nc), dtype=np.int32)
-        S = np.zeros((len(ids), ns), dtype=np.int32)
-        CM = np.zeros((len(ids), nc))
-        SM = np.zeros((len(ids), ns))
-        for r, i in enumerate(ids):
-            k = keep[i]
-            if k.size:
-                c = np.concatenate([np.arange(row0[j], row0[j] + ncomp[j])
-                                    for j in k])
-                s = np.concatenate([np.arange(sph0[j], sph0[j] + width[j])
-                                    for j in k])
-            else:
-                c = s = np.zeros(0, dtype=np.int64)
-            C[r, :c.size] = c
-            S[r, :s.size] = s
-            CM[r, :c.size] = 1.0
-            SM[r, :s.size] = 1.0
+        nc = max(1, int(cart_count[ids].max()))
+        ns = max(1, int(sph_count[ids].max()))
+        C, CM = packed_rows(cart_keep[ids], cart_cols, cart_count[ids], nc)
+        S, SM = packed_rows(sph_keep[ids], sph_cols, sph_count[ids], ns)
         buckets.append(ScreenBucket(
             block_ids=jnp.asarray(ids, dtype=jnp.int32), cart=jnp.asarray(C),
             sph=jnp.asarray(S), cart_mask=jnp.asarray(CM),

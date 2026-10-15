@@ -296,7 +296,11 @@ class TestDensityFittingForces:
             terms, "_streamed_df_rij_slabs",
             lambda *a, **k: (calls.append(1), orig(*a, **k))[1],
         )
-        monkeypatch.setattr(energy_mod, "_DF_BUDGET", 0)
+        # Patch the budget function the "auto" policy calls, not the
+        # _DF_BUDGET floor: on a GPU the budget is a fraction of the device's
+        # memory pool (_df_materialize_budget), so a zero floor never forced
+        # streaming there and the test only passed on CPU.
+        monkeypatch.setattr(energy_mod, "_df_materialize_budget", lambda: 16)
         F_auto = forces(mol, xc, Zs, grid=becke(NR, LEB), coulomb=df(self.AUX))
         assert calls                                      # streamed path taken
         # 1e-8: the jkfit pseudo-inverse rounding band, as above.
@@ -341,7 +345,11 @@ class TestDensityFittingForces:
                     coulomb=df("sto-3g", chunk=None, spherical=False))
         Fs = forces(mol, xc, res, grid=becke(NR, LEB),
                     coulomb=df("sto-3g", chunk=6))
-        assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-12
+        # 1e-8, as for the integer-occupation streamed/materialized checks
+        # above: the two backends contract in different orders, which on CPU
+        # agree to ~1e-12 but on an A100 to 9.7e-10 (the cross-backend
+        # rounding band of density-fitted forces, see _metric_pinv).
+        assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-8
 
         with pytest.raises(NotImplementedError, match="smeared"):
             forces(mol, PBE0(), res, grid=becke(NR, LEB),

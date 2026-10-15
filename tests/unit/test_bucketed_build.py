@@ -120,8 +120,13 @@ def test_hybrid_switches_to_the_fused_build(monkeypatch):
     second = KS(mol, PBE())
     assert len(shared) == 1                       # took the fused program
     np.testing.assert_allclose(second.S, first.S, rtol=0, atol=1e-11)
-    np.testing.assert_allclose(second.coulomb.B.sum(), first.coulomb.B.sum(),
-                               rtol=1e-12)
+    # B = Lᵀ T with L from eigh: each row is fixed up to its sign, which the
+    # two compiles may pick differently. The fitted ERIs BᵀB are not.
+    def gram(ks):
+        B = np.asarray(ks.coulomb.B).reshape(ks.coulomb.B.shape[0], -1)
+        return B.T @ B
+
+    np.testing.assert_allclose(gram(second), gram(first), rtol=0, atol=1e-10)
 
 
 @pytest.mark.float64

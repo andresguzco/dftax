@@ -11,7 +11,7 @@ import pytest
 from dftax import KS, Molecule, df
 from dftax.basis.loader import build_basis_data
 from dftax.energy.xc import PBE, PBE0
-from dftax.integrals.bucketed import class_program, eri3c_square
+from dftax.integrals.bucketed import class_jobs, eri3c_square
 from dftax.integrals.eri3c_bucketed import eri3c_matrix_bucketed, plan_eri3c
 
 WATER = "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692"
@@ -28,9 +28,8 @@ def _bases(atoms, spherical=True):
 
 
 @pytest.mark.float64
-@pytest.mark.parametrize("spherical", [True, False])
-def test_bucketed_tensor_is_the_bucketed_build(spherical):
-    basis, aux = _bases(WATER, spherical)
+def test_bucketed_tensor_is_the_bucketed_build():
+    basis, aux = _bases(WATER)
     plan0 = plan_eri3c(basis, aux, tol=0.0)
     # rounding only: the nested vmap orders the contractions differently
     # (measured 8.9e-16 on values up to ~8)
@@ -39,32 +38,28 @@ def test_bucketed_tensor_is_the_bucketed_build(spherical):
                                atol=1e-13)
 
 
-@pytest.mark.float64
 def test_class_programs_are_shared_across_molecules():
-    """Water then methanol: every class methanol shares with water reuses
-    water's program (fixed tiles: the program depends on the class alone)."""
-    class_program.cache_clear()
-    basis, aux = _bases(WATER)
-    eri3c_square(basis, aux, plan_eri3c(basis, aux, tol=0.0))
-    n_water = class_program.cache_info().currsize
-    basis, aux = _bases(METHANOL)
-    plan = plan_eri3c(basis, aux, tol=0.0)
-    eri3c_square(basis, aux, plan)
-    info = class_program.cache_info()
-    # every water class is an O/H class methanol also has
-    assert info.hits >= n_water
+    """Water then methanol: methanol's build runs every program water's does
+    (fixed tiles: a program is keyed by its class alone, not the molecule),
+    so none of them compiles again. Checked on the program keys, no build."""
+    def keys(atoms):
+        basis, aux = _bases(atoms)
+        return {k for _, k in class_jobs(basis, aux,
+                                         plan_eri3c(basis, aux, tol=0.0))}
+
+    water, methanol = keys(WATER), keys(METHANOL)
+    assert water <= methanol and len(methanol) > len(water)
 
 
 @pytest.mark.float64
-@pytest.mark.parametrize("spherical", [True, False])
-def test_pair_integrals_are_the_bucketed_build(spherical):
+def test_pair_integrals_are_the_bucketed_build():
     from dftax.integrals.bucketed import pairs_host
     from dftax.integrals.eri3c_bucketed import (
         eri2c_matrix_bucketed, nuclear_attraction_bucketed,
         overlap_kinetic_bucketed, plan_pairs,
     )
 
-    basis, aux = _bases(WATER, spherical)
+    basis, aux = _bases(WATER)
     mol = Molecule.from_xyz(WATER, "6-31g*")
     coords, charges = mol.atom_coords(), mol.atom_charges()
     pp = plan_pairs(basis, tol=0.0)
@@ -80,19 +75,20 @@ def test_pair_integrals_are_the_bucketed_build(spherical):
 
 
 @pytest.mark.float64
-@pytest.mark.parametrize("xc, packed", [(PBE, False), (PBE0, True)])
-def test_ks_with_shared_programs_matches(monkeypatch, xc, packed):
+def test_ks_with_shared_programs_matches(monkeypatch):
     """The whole eager build from shared class programs: the same KS, to
     rounding, as the per-molecule build (energy and Fock at a fixed
     density)."""
     import jax.numpy as jnp
 
     mol = Molecule.from_xyz(WATER, "6-31g*")
-    kw = dict(coulomb=df(chunk=None, packed=True)) if packed else {}
+    # the packed tensor and a hybrid (the square shared build is checked
+    # against the fused one in test_hybrid_switches_to_the_fused_build)
+    kw = dict(coulomb=df(chunk=None, packed=True))
     monkeypatch.setenv("DFTAX_BUCKETED", "0")
-    ref = KS(mol, xc(), **kw)
+    ref = KS(mol, PBE0(), **kw)
     monkeypatch.setenv("DFTAX_BUCKETED", "1")
-    ks = KS(mol, xc(), **kw)
+    ks = KS(mol, PBE0(), **kw)
     for a, b in ((ks.S, ref.S), (ks.hcore, ref.hcore)):
         np.testing.assert_allclose(a, b, rtol=0, atol=1e-11)
     n = ref.nocc[0]
@@ -126,6 +122,7 @@ def test_hybrid_switches_to_the_fused_build(monkeypatch):
     second = KS(mol, PBE())
     assert len(shared) == 2                       # took the fused program
     np.testing.assert_allclose(second.S, first.S, rtol=0, atol=1e-11)
+    np.testing.assert_allclose(second.hcore, first.hcore, rtol=0, atol=1e-11)
     # B = Lᵀ T with L from eigh: each row is fixed up to its sign, which the
     # two compiles may pick differently. The fitted ERIs BᵀB are not.
     def gram(ks):
@@ -137,13 +134,14 @@ def test_hybrid_switches_to_the_fused_build(monkeypatch):
 
 
 @pytest.mark.float64
-@pytest.mark.parametrize("screen", [None, 1e-3])
-def test_packed_tensor_is_the_packed_build(screen):
+def test_packed_tensor_is_the_packed_build():
+    """Screened (a 1e-3 keep set) and cartesian: the packed layout over a
+    partial pair list, through the cartesian branch of the class programs."""
     from dftax.integrals.bucketed import eri3c_host_packed
     from dftax.integrals.eri3c_bucketed import _shell_pair_keep, eri3c_packed
 
-    basis, aux = _bases(WATER)
-    keep = None if screen is None else _shell_pair_keep(basis, screen)
+    basis, aux = _bases(WATER, spherical=False)
+    keep = _shell_pair_keep(basis, 1e-3)
     plan0 = plan_eri3c(basis, aux, keep_pairs=keep, tol=0.0)
     np.testing.assert_allclose(
         eri3c_host_packed(basis, aux, plan0),

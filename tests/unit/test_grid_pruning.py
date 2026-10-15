@@ -107,6 +107,7 @@ def test_pruned_energy_matches_full_grid():
 
 
 @pytest.mark.pyscf
+@pytest.mark.default_grid      # it is about the default grid itself
 def test_pruned_energy_vs_pyscf_reference(water_mol, water_ks):
     from dftax import exact
 

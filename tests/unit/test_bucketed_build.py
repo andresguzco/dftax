@@ -122,3 +122,18 @@ def test_hybrid_switches_to_the_fused_build(monkeypatch):
     np.testing.assert_allclose(second.S, first.S, rtol=0, atol=1e-11)
     np.testing.assert_allclose(second.coulomb.B.sum(), first.coulomb.B.sum(),
                                rtol=1e-12)
+
+
+@pytest.mark.float64
+@pytest.mark.parametrize("screen", [None, 1e-3])
+def test_packed_tensor_is_the_packed_build(screen):
+    from dftax.integrals.bucketed import eri3c_host_packed
+    from dftax.integrals.eri3c_bucketed import _shell_pair_keep, eri3c_packed
+
+    basis, aux = _bases(WATER)
+    keep = None if screen is None else _shell_pair_keep(basis, screen)
+    plan0 = plan_eri3c(basis, aux, keep_pairs=keep, tol=0.0)
+    np.testing.assert_allclose(
+        eri3c_host_packed(basis, aux, plan0),
+        eri3c_packed(basis, aux, plan=plan_eri3c(basis, aux, keep_pairs=keep)),
+        rtol=0, atol=1e-13)

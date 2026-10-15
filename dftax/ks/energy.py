@@ -439,18 +439,21 @@ def ao_on_grid(
 
 _jit_metric_factor = jax.jit(_metric_factor)
 _jit_whiten = jax.jit(_whiten, donate_argnums=0)
+_jit_whiten_packed = jax.jit(_whiten_packed, donate_argnums=0)
 _jit_ao_on_grid = jax.jit(lambda basis, coords: ao_on_grid(basis, coords))
 
 
 def _build_integrals_shared(basis, coords, charges, grid_coords, aux_basis,
-                            materialize_ao, keep_pairs, omega):
+                            materialize_ao, keep_pairs, omega, packed=False):
     """:func:`_build_integrals`'s outputs for an eager whitened square build,
     from shared class programs (:mod:`dftax.integrals.bucketed`): the
     one-electron integrals, the metric and the 3-center tensor are assembled
     from per-class programs that recur across molecules, so none of them is
     compiled per molecule. Only the AO grid, the metric factor and the
     whitening are small per-molecule programs."""
-    from dftax.integrals.bucketed import eri3c_square, pairs_host
+    from dftax.integrals.bucketed import (
+        eri3c_host_packed, eri3c_square, pairs_host,
+    )
     from dftax.integrals.eri3c_bucketed import plan_eri3c, plan_pairs
 
     pp = plan_pairs(basis, tol=0.0)
@@ -462,8 +465,11 @@ def _build_integrals_shared(basis, coords, charges, grid_coords, aux_basis,
 
     def whitened(om):
         (int2c,) = pairs_host("eri2c", aux_basis, ap, omega=om)
-        return _jit_whiten(eri3c_square(basis, aux_basis, plan0, omega=om),
-                           _jit_metric_factor(int2c))
+        L = _jit_metric_factor(int2c)
+        if packed:
+            return _jit_whiten_packed(
+                eri3c_host_packed(basis, aux_basis, plan0, omega=om), L)
+        return _jit_whiten(eri3c_square(basis, aux_basis, plan0, omega=om), L)
 
     int3c = whitened(None)
     int3c_lr = None if omega is None else whitened(omega)
@@ -804,7 +810,7 @@ class KS(eqx.Module):
         # programs that every molecule with the same shell classes reuses,
         # and skips the per-molecule _build_integrals program altogether.
         bucketed = (os.environ.get("DFTAX_BUCKETED") == "1" and whiten
-                    and not spec.packed and devices is None)
+                    and devices is None)
         fused_args = (
             basis, coords, charges, grid_coords, aux_basis,
             devices is None and grid_chunk is None,  # sharded AO grid below
@@ -830,7 +836,7 @@ class KS(eqx.Module):
              eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals_shared(
                 basis, coords, charges, grid_coords, aux_basis,
                 grid_chunk is None, screen_keep,
-                omega if hf_lr != 0.0 else None)
+                omega if hf_lr != 0.0 else None, packed=spec.packed)
         else:
             (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
              eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(*fused_args)

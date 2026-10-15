@@ -294,6 +294,31 @@ def _scatter_drop(out, starts, vals):
                        mode=lax.GatherScatterMode.FILL_OR_DROP)
 
 
+def eri3c_host_packed(basis, aux_basis, plan, omega=None):
+    """The packed ``(naux, npair)`` tensor of
+    :func:`~dftax.integrals.eri3c_bucketed.eri3c_packed` from fixed tiles,
+    assembled on the host: each block lands once, at its pair's packed
+    offset (``packed_layout``, which depends on the kept pairs alone)."""
+    from dftax.integrals.eri3c_bucketed import packed_layout
+
+    lay = packed_layout(plan, basis.cart2sph is not None)
+    out = np.zeros((plan[3], lay.npair))
+    pending = list(class_tiles(basis, aux_basis, plan, omega))
+    for _cls, vals, sa, sb, sc in pending:
+        v = np.asarray(vals)                        # (P, A, a, b, c)
+        ka, kc = sa >= 0, sc >= 0
+        v = v[ka][:, kc]
+        sa, sb, sc = sa[ka], sb[ka], sc[kc]
+        na, nb, nc = v.shape[2:]
+        off = np.fromiter((lay.offsets[(int(a), int(b))]
+                           for a, b in zip(sa, sb)), np.int64, len(sa))
+        col = (off[:, None, None] + np.arange(na)[None, :, None] * nb
+               + np.arange(nb)[None, None, :])     # (p, a, b)
+        row = sc[:, None] + np.arange(nc)           # (x, c)
+        out[row[None, :, None, None, :], col[:, None, :, :, None]] = v
+    return jnp.asarray(out)
+
+
 # ---------------------------------------------------------------------------
 # Two-index integrals: overlap + kinetic, nuclear attraction, the aux metric
 # ---------------------------------------------------------------------------

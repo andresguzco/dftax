@@ -452,16 +452,22 @@ def _build_integrals_shared(basis, coords, charges, grid_coords, aux_basis,
     compiled per molecule. Only the AO grid, the metric factor and the
     whitening are small per-molecule programs."""
     from dftax.integrals.bucketed import (
-        eri3c_host_packed, eri3c_square, pairs_host,
+        class_jobs, eri3c_host_packed, eri3c_square, pair_jobs, pairs_host,
+        warm,
     )
     from dftax.integrals.eri3c_bucketed import plan_eri3c, plan_pairs
 
     pp = plan_pairs(basis, tol=0.0)
+    ap = plan_pairs(aux_basis, tol=0.0)
+    plan0 = plan_eri3c(basis, aux_basis, keep_pairs=keep_pairs, tol=0.0)
+    # every program this build runs, compiled side by side up front
+    oms = (None,) if omega is None else (None, omega)
+    warm(pair_jobs("st", pp) + pair_jobs("nuc", pp)
+         + [j for om in oms for j in pair_jobs("eri2c", ap, om)
+            + class_jobs(basis, aux_basis, plan0, om)])
     S, T = pairs_host("st", basis, pp)
     (V,) = pairs_host("nuc", basis, pp, atom_coords=coords,
                       atom_charges=charges)
-    ap = plan_pairs(aux_basis, tol=0.0)
-    plan0 = plan_eri3c(basis, aux_basis, keep_pairs=keep_pairs, tol=0.0)
 
     def whitened(om):
         (int2c,) = pairs_host("eri2c", aux_basis, ap, omega=om)
@@ -479,16 +485,17 @@ def _build_integrals_shared(basis, coords, charges, grid_coords, aux_basis,
     return (S, T + V, ao, dao, e_nn, None, int3c, None, None, int3c_lr, None)
 
 
-# The hybrid (see _build_integrals_shared): a structure's first build in a
-# process runs the shared class programs, which need no per-molecule compile,
-# while its fused _build_integrals compiles on a background thread; once that
-# is done, later builds of the same structure take the fused program, which
-# is about twice as fast warm (cubane: 59 against 117 ms for the 3-center
-# tensor). A new process repeats the background compile, but the fused XLA
+# The hybrid (see _build_integrals_shared): a structure's builds in a process
+# run the shared class programs, which need no per-molecule compile; from its
+# second build on (a repeat: an optimization, a scan, a trajectory), its fused
+# _build_integrals compiles on a background thread, and once that is done the
+# later builds take the fused program, which is about twice as fast warm
+# (cubane: 59 against 117 ms for the 3-center tensor). A new process repeats the background compile, but the fused XLA
 # executable is then a persistent-cache hit, so only its tracing is paid, off
 # the critical path.
 _FUSED_BUILDS: dict = {}
 _FUSED_POOL = None
+_SEEN: set = set()
 
 
 def _fused_ready(key):
@@ -497,9 +504,14 @@ def _fused_ready(key):
 
 
 def _schedule_fused(key, call):
-    """Compile (and run once) the fused build for ``key`` in the background."""
+    """Compile (and run once) the fused build for ``key`` in the background,
+    on the structure's second build: a structure built once (each molecule of
+    a dataset) never pays for it."""
     global _FUSED_POOL
     if key in _FUSED_BUILDS:
+        return
+    if key not in _SEEN:
+        _SEEN.add(key)
         return
     if _FUSED_POOL is None:
         from concurrent.futures import ThreadPoolExecutor
@@ -827,7 +839,7 @@ class KS(eqx.Module):
             key = (static_fingerprint(basis), static_fingerprint(aux_basis),
                    tuple(grid_coords.shape), int(coords.shape[0]),
                    eri3c_plan, pair_plan, aux_pair_plan, fused_args[5],
-                   fused_args[10], whiten)
+                   fused_args[10], whiten, fused_args[16])
             bucketed = not _fused_ready(key)
             if bucketed:
                 _schedule_fused(key, lambda: _build_integrals(*fused_args))

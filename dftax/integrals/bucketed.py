@@ -89,12 +89,13 @@ def _export_dir():
 
 
 def _serialized(name, key, build, shapes):
-    """``build()``'s jitted function, called through its serialized export
-    when one exists or can be written; the plain jit otherwise. ``shapes`` is
-    the tuple of float64 argument shapes."""
+    """``build()``'s jitted function, compiled ahead of time for the float64
+    argument ``shapes``, from its serialized export when one exists or can be
+    written (from the plain jit otherwise)."""
+    specs = tuple(jax.ShapeDtypeStruct(sh, jnp.float64) for sh in shapes)
     root = _export_dir()
     if root is None or not _can_serialize():
-        return build()
+        return build().lower(*specs).compile()
     platform = jax.devices()[0].platform
     tag = hashlib.sha256(repr((name, key, shapes, platform,
                                _code_fingerprint())).encode()).hexdigest()
@@ -103,8 +104,7 @@ def _serialized(name, key, build, shapes):
         with open(path, "rb") as fh:
             exp = jax.export.deserialize(bytearray(fh.read()))
     except (OSError, ValueError):
-        exp = jax.export.export(build())(
-            *(jax.ShapeDtypeStruct(sh, jnp.float64) for sh in shapes))
+        exp = jax.export.export(build())(*specs)
         try:
             os.makedirs(root, exist_ok=True)
             tmp = f"{path}.{os.getpid()}.tmp"
@@ -113,7 +113,33 @@ def _serialized(name, key, build, shapes):
             os.replace(tmp, path)
         except OSError:
             pass
-    return jax.jit(exp.call)
+    return jax.jit(exp.call).lower(*specs).compile()
+
+
+def _workers() -> int:
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:                  # not Linux
+        return os.cpu_count() or 1
+
+
+_WARM: set = set()
+
+
+def warm(jobs):
+    """Compile every program ``build(*key)`` of ``jobs`` (``(build, key)``
+    pairs) side by side. XLA compiles release the GIL, so the programs of a
+    structure seen for the first time compile on every core instead of one
+    after another; programs compiled before are skipped."""
+    todo = [j for j in dict.fromkeys(jobs) if j not in _WARM]
+    if not todo:
+        return
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(min(len(todo), _workers()),
+                            thread_name_prefix="dftax-warm") as pool:
+        list(pool.map(lambda j: j[0](*j[1]), todo))
+    _WARM.update(todo)
 
 
 def _ncart(l: int) -> int:
@@ -196,6 +222,15 @@ def class_program(la, lb, lc, anga, angb, angc, omega, nprims, P, A,
     key = (la, lb, lc, anga, angb, angc, omega, nprims, P, A, spherical_bra,
            spherical_aux)
     return _serialized("eri3c", key, lambda: jax.jit(run), shapes)
+
+
+def class_jobs(basis, aux_basis, plan, omega=None):
+    """The ``(class_program, key)`` jobs a ``tol=0`` plan runs, for
+    :func:`warm`."""
+    sb, sx = basis.cart2sph is not None, aux_basis.cart2sph is not None
+    return [(class_program, (la, lb, lc, anga, angb, angc, omega, nprims,
+                             *tile_shape(la, lb, lc, nprims), sb, sx))
+            for (la, lb, lc, anga, angb, angc, _segs, nprims) in plan[4]]
 
 
 def _host(basis):
@@ -366,6 +401,13 @@ def pair_program(kind, la, lb, anga, angb, omega, nprims):
         shapes += ((t, 3), (t,))
     key = (kind, la, lb, anga, angb, omega, nprims, t)
     return _serialized("pair", key, lambda: jax.jit(kern), shapes)
+
+
+def pair_jobs(kind, plan, omega=None):
+    """The ``(pair_program, key)`` jobs of a ``plan_pairs`` plan, for
+    :func:`warm`."""
+    return [(pair_program, (kind, la, lb, anga, angb, omega, nprims))
+            for (la, lb, anga, angb, _ra, _rb, nprims) in plan[1]]
 
 
 def pairs_host(kind, basis, plan, omega=None, atom_coords=None,

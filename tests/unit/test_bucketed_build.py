@@ -103,24 +103,27 @@ def test_ks_with_shared_programs_matches(monkeypatch, xc, packed):
 
 @pytest.mark.float64
 def test_hybrid_switches_to_the_fused_build(monkeypatch):
-    """A structure's first build runs the shared programs and schedules the
-    fused one; once it is compiled, the next build of the structure takes it,
-    and both give the same KS."""
+    """A structure's builds run the shared programs; its second build
+    schedules the fused one, and once that is compiled the next build takes
+    it. Both give the same KS."""
     import dftax.ks.energy as energy_mod
 
     monkeypatch.setenv("DFTAX_BUCKETED", "1")
     monkeypatch.setattr(energy_mod, "_FUSED_BUILDS", {})
+    monkeypatch.setattr(energy_mod, "_SEEN", set())
     shared = []
     orig = energy_mod._build_integrals_shared
     monkeypatch.setattr(energy_mod, "_build_integrals_shared",
-                        lambda *a: (shared.append(1), orig(*a))[1])
+                        lambda *a, **k: (shared.append(1), orig(*a, **k))[1])
     mol = Molecule.from_xyz(WATER, "6-31g*")
     first = KS(mol, PBE())
-    assert len(shared) == 1 and len(energy_mod._FUSED_BUILDS) == 1
+    assert len(shared) == 1 and not energy_mod._FUSED_BUILDS  # seen once
+    KS(mol, PBE())
+    assert len(shared) == 2 and len(energy_mod._FUSED_BUILDS) == 1
     (fut,) = energy_mod._FUSED_BUILDS.values()
     fut.result()
     second = KS(mol, PBE())
-    assert len(shared) == 1                       # took the fused program
+    assert len(shared) == 2                       # took the fused program
     np.testing.assert_allclose(second.S, first.S, rtol=0, atol=1e-11)
     # B = Lᵀ T with L from eigh: each row is fixed up to its sign, which the
     # two compiles may pick differently. The fitted ERIs BᵀB are not.

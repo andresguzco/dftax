@@ -128,8 +128,9 @@ def test_hybrid_switches_to_the_fused_build(monkeypatch):
     # B = Lᵀ T with L from eigh: each row is fixed up to its sign, which the
     # two compiles may pick differently. The fitted ERIs BᵀB are not.
     def gram(ks):
-        B = np.asarray(ks.coulomb.B).reshape(ks.coulomb.B.shape[0], -1)
-        return B.T @ B
+        B = np.asarray(ks.coulomb.B)                  # (nao, nao, naux)
+        B = B.reshape(-1, B.shape[-1])
+        return B @ B.T
 
     np.testing.assert_allclose(gram(second), gram(first), rtol=0, atol=1e-10)
 

@@ -438,6 +438,32 @@ no such jump (+0.10 GiB). Penicillin needs more host memory to trace than a
 32 GB allocation provides -- which is the problem this change is aimed at --
 so that specific case waits for a larger node.
 
+### Canonical shell-pair orientation
+
+The bucketed planners keyed a bra shell pair by whichever of its two shells
+came first in the basis, so a C-H pair landed in a `(C, H)` class or an
+`(H, C)` class depending on the atom order. Both compiled their own kernel,
+and the class set depended on the molecule rather than on the basis and the
+elements. Orienting each pair by shell type, `(l, nprim)`, fixes that; the
+kernel writes both the `(a, b)` and `(b, a)` blocks either way, so the
+integrals are unchanged up to rounding. Cold, empty cache, A100:
+
+| | before | after |
+|---|---:|---:|
+| 3-center classes, cubane | 161 | **100** |
+| 3-center classes, bicyclo[2.2.2]octane | 181 | **109** |
+| padded primitive work, cubane (vs the exact partition) | 1.27x | **1.23x** |
+| cubane / PBE, cold end to end | 280 s | **207 s** |
+| `_build_integrals` XLA compile | 182 s | **134 s** |
+| peak host RSS | 7.09 GiB | **5.09 GiB** |
+
+Compile time and host RSS both track the class count, which is what the
+coronene limit below is about. With no merging (`tol=0`), cubane and bicyclo
+now ask for the same 189 classes; before, 27 of bicyclo's were not cubane's.
+Validated against the 62 PySCF-comparison integral tests. The parity gate's
+two DF cases moved 1.1e-9 and 1.3e-9 Ha, the density-fitting floor of a
+reordered contraction (see the `forces_df` note above).
+
 ## What the gate learned about itself
 
 `scripts/perf/parity_gate.py` compares at a **fixed density**, not at a

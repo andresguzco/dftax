@@ -41,12 +41,17 @@ def test_d_shell_j_compiles():
 
 
 @pytest.mark.float64
-@pytest.mark.slow
 def test_d_shell_j_matches_dense():
     """Streamed J with d functions == dense (μν|λσ) contraction (same kernel, two paths).
-    Marked slow: the exact O(N⁴) run over d-shell quartets is heavy on CPU."""
-    mol = Molecule.from_xyz("Ne 0 0 0", "cc-pvdz")
-    basis = build_basis_data(mol.symbols, mol.atom_coords(), mol.basis, spherical=True)
+    A two-primitive s and a d shell on two centers: the d-shell quartet classes and the
+    bra primitive scan, without cc-pVDZ's full class set to compile."""
+    from pyscf import gto
+
+    from dftax.energy.gto import extract_basis_data
+
+    shells = [[0, [1.2, 0.6], [0.3, 0.5]], [2, [0.8, 1.0]]]
+    basis = extract_basis_data(gto.M(atom="Ne 0 0 0; Ne 0 0 1.6",
+                                     basis={"Ne": shells}, cart=False))
     rng = np.random.default_rng(0)
     nao = basis.cart2sph.shape[1]
     A = rng.standard_normal((nao, nao))

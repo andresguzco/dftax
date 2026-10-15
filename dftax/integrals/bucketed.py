@@ -58,6 +58,23 @@ def bucket(n: int, floor: int = 8) -> int:
     return max(floor, 1 << max(0, n - 1).bit_length())
 
 
+# Fixed tiles: aux shells per tile, and the work per tile that sets the pair
+# count. Both are functions of the class alone, so one compiled program per
+# class serves every molecule that has the class, whatever its size. (Batch
+# sizes that follow the molecule, a power of two per class, recompiled most
+# classes from cubane to bicyclo[2.2.2]octane: 149 of 533 programs.)
+AUX_TILE = 32
+TILE_WORK = 3.2e7
+
+
+def tile_shape(la, lb, lc, nprims) -> tuple[int, int]:
+    """``(pairs, aux shells)`` per launch for a class: powers of two set by
+    the class alone."""
+    t = TILE_WORK / max(1, AUX_TILE * _class_cost(la, lb, lc, nprims))
+    P = 2 ** int(math.floor(math.log2(max(t, 1.0))))
+    return int(min(max(P, 8), 1024)), AUX_TILE
+
+
 @lru_cache(maxsize=4096)
 def class_program(la, lb, lc, anga, angb, angc, omega, nprims, P, A,
                   spherical_bra, spherical_aux):
@@ -112,42 +129,77 @@ def _rows(arr, rows, n):
     return arr[rows[:, None] + np.arange(n)]
 
 
-def class_blocks(basis, aux_basis, plan, omega=None):
-    """Every class's blocks and scatter corners, from a factored ``tol=0``
-    plan: a list of ``(vals, sa, sb, sc)`` with device ``vals`` of shape
-    ``(P, A, nsa, nsb, nsc)`` and numpy corners padded with ``-1`` (the
-    assembly maps those out of bounds)."""
+def class_tiles(basis, aux_basis, plan, omega=None):
+    """Run every class of a factored ``tol=0`` plan as fixed tiles.
+
+    Yields ``(cls, vals, sa, sb, sc)`` per tile: device ``vals`` of shape
+    ``(P, A, nsa, nsb, nsc)`` and numpy corners, padded with ``-1``. Every
+    launch is dispatched before any result is read.
+    """
     cen, exps, coefs = _host(basis)
     acen, aexps, acoefs = _host(aux_basis)
-    out = []
     for cls in plan[4]:
         if len(cls) != 8 or len(cls[6]) != 1:
-            raise ValueError("class_blocks needs an exact (tol=0) factored "
+            raise ValueError("class_tiles needs an exact (tol=0) factored "
                              "plan: one segment per class.")
         la, lb, lc, anga, angb, angc, segs, nprims = cls
         (ra, rb, sa, sb), (rc, sc) = segs[0]
         npa, npb, npc = nprims
-        P, A = bucket(len(ra)), bucket(len(rc), floor=4)
-
-        def pad(x, n, fill):
-            x = np.asarray(x, dtype=np.int64)
-            return np.concatenate([x, np.full(n - len(x), fill, np.int64)])
-
-        ra_p, rb_p = pad(ra, P, ra[0]), pad(rb, P, rb[0])
-        rc_p = pad(rc, A, rc[0])
+        P, A = tile_shape(la, lb, lc, nprims)
         fn = class_program(la, lb, lc, anga, angb, angc, omega, nprims, P, A,
                            basis.cart2sph is not None,
                            aux_basis.cart2sph is not None)
-        vals = fn(
-            cen[ra_p], cen[rb_p],
-            exps[ra_p][:, :npa], exps[rb_p][:, :npb],
-            _rows(coefs, ra_p, _ncart(la))[:, :, :npa],
-            _rows(coefs, rb_p, _ncart(lb))[:, :, :npb],
-            acen[rc_p], aexps[rc_p][:, :npc],
-            _rows(acoefs, rc_p, _ncart(lc))[:, :, :npc],
-        )
-        out.append((vals, pad(sa, P, -1), pad(sb, P, -1), pad(sc, A, -1)))
-    return out
+        ra, rb, sa, sb = (np.asarray(x, np.int64) for x in (ra, rb, sa, sb))
+        rc, sc = np.asarray(rc, np.int64), np.asarray(sc, np.int64)
+
+        def tiles(x, n, fill):
+            pad = -len(x) % n
+            return np.concatenate([x, np.full(pad, fill, np.int64)]).reshape(
+                -1, n)
+
+        ra_t, rb_t = tiles(ra, P, ra[0]), tiles(rb, P, rb[0])
+        sa_t, sb_t = tiles(sa, P, -1), tiles(sb, P, -1)
+        rc_t, sc_t = tiles(rc, A, rc[0]), tiles(sc, A, -1)
+        # aux-side arrays once per aux tile, pair-side once per pair tile
+        aux_in = [(acen[r], aexps[r][:, :npc],
+                   _rows(acoefs, r, _ncart(lc))[:, :, :npc]) for r in rc_t]
+        for i in range(ra_t.shape[0]):
+            pair_in = (cen[ra_t[i]], cen[rb_t[i]],
+                       exps[ra_t[i]][:, :npa], exps[rb_t[i]][:, :npb],
+                       _rows(coefs, ra_t[i], _ncart(la))[:, :, :npa],
+                       _rows(coefs, rb_t[i], _ncart(lb))[:, :, :npb])
+            for j, aux_j in enumerate(aux_in):
+                yield cls, fn(*pair_in, *aux_j), sa_t[i], sb_t[i], sc_t[j]
+
+
+def eri3c_host_square(basis, aux_basis, plan, omega=None):
+    """``(nao, nao, naux)`` from fixed tiles, assembled on the host.
+
+    No program here depends on the molecule: the tiles are the class
+    programs, and the scatter is numpy (the tensor is then put on the device
+    once). For a structure's first build; repeat builds take the fused
+    per-molecule program.
+    """
+    nao, naux = plan[2], plan[3]
+    out = np.zeros((nao, nao, naux))
+    pending = list(class_tiles(basis, aux_basis, plan, omega))
+    for _cls, vals, sa, sb, sc in pending:
+        v = np.asarray(vals)                        # (P, A, a, b, c)
+        ka, kc = sa >= 0, sc >= 0
+        v = v[ka][:, kc]
+        sa, sb, sc = sa[ka], sb[ka], sc[kc]
+        na, nb, nc = v.shape[2:]
+        ia = sa[:, None] + np.arange(na)            # (p, a)
+        ib = sb[:, None] + np.arange(nb)
+        ic = sc[:, None] + np.arange(nc)            # (x, c)
+        I = ia[:, None, :, None, None]
+        J = ib[:, None, None, :, None]
+        K = ic[None, :, None, None, :]
+        out[I, J, K] = v
+        # the bra-mirrored block: the index arrays carry the axes, so the
+        # same v lands transposed (last, as the device builder writes it)
+        out[J, I, K] = v
+    return jnp.asarray(out)
 
 
 def _scatter_drop(out, starts, vals):
@@ -163,41 +215,11 @@ def _scatter_drop(out, starts, vals):
                        mode=lax.GatherScatterMode.FILL_OR_DROP)
 
 
-@lru_cache(maxsize=64)
-def _square_assembly(nao, naux, shapes):
-    """One program per (output size, class batch shapes): scatter every
-    class's blocks, and their bra transposes, into ``(nao, nao, naux)``."""
-
-    @jax.jit
-    def run(blocks, corners):
-        out = jnp.zeros((nao, nao, naux))
-        for vals, (sa, sb, sc) in zip(blocks, corners):
-            P, A = vals.shape[:2]
-            oob = lambda x, n: jnp.where(x < 0, n, x)        # noqa: E731
-            sa, sb, sc = oob(sa, nao), oob(sb, nao), oob(sc, naux)
-            ia = jnp.broadcast_to(sa[:, None], (P, A)).reshape(-1)
-            ib = jnp.broadcast_to(sb[:, None], (P, A)).reshape(-1)
-            ic = jnp.broadcast_to(sc[None, :], (P, A)).reshape(-1)
-            v = vals.reshape((P * A,) + vals.shape[2:])
-            out = _scatter_drop(out, jnp.stack((ia, ib, ic), 1), v)
-            out = _scatter_drop(out, jnp.stack((ib, ia, ic), 1),
-                                v.transpose(0, 2, 1, 3))
-        return out
-
-    return run
-
-
 def eri3c_square(basis, aux_basis, plan, omega=None):
     """The ``(nao, nao, naux)`` 3-center tensor from shared class programs;
     the same values as
     :func:`~dftax.integrals.eri3c_bucketed.eri3c_matrix_bucketed`."""
-    nao, naux = plan[2], plan[3]
-    parts = class_blocks(basis, aux_basis, plan, omega)
-    shapes = tuple(v.shape for v, *_ in parts)
-    corners = tuple((jnp.asarray(a, jnp.int32), jnp.asarray(b, jnp.int32),
-                     jnp.asarray(c, jnp.int32)) for _, a, b, c in parts)
-    return _square_assembly(nao, naux, shapes)(
-        tuple(v for v, *_ in parts), corners)
+    return eri3c_host_square(basis, aux_basis, plan, omega)
 
 
 def class_set(basis, aux_basis):

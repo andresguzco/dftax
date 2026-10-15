@@ -32,21 +32,24 @@ def _bases(atoms, spherical=True):
 def test_bucketed_tensor_is_the_bucketed_build(spherical):
     basis, aux = _bases(WATER, spherical)
     plan0 = plan_eri3c(basis, aux, tol=0.0)
-    np.testing.assert_allclose(eri3c_square(basis, aux, plan0),
-                               eri3c_matrix_bucketed(basis, aux), rtol=0,
-                               atol=1e-12)
+    np.testing.assert_array_equal(eri3c_square(basis, aux, plan0),
+                                  eri3c_matrix_bucketed(basis, aux))
 
 
 @pytest.mark.float64
 def test_class_programs_are_shared_across_molecules():
-    """Water then methanol: every class program water compiled at a batch
-    size methanol also asks for is reused, not rebuilt."""
+    """Water then methanol: every class methanol shares with water reuses
+    water's program (fixed tiles: the program depends on the class alone)."""
     class_program.cache_clear()
-    for atoms in (WATER, METHANOL):
-        basis, aux = _bases(atoms)
-        eri3c_square(basis, aux, plan_eri3c(basis, aux, tol=0.0))
+    basis, aux = _bases(WATER)
+    eri3c_square(basis, aux, plan_eri3c(basis, aux, tol=0.0))
+    n_water = class_program.cache_info().currsize
+    basis, aux = _bases(METHANOL)
+    plan = plan_eri3c(basis, aux, tol=0.0)
+    eri3c_square(basis, aux, plan)
     info = class_program.cache_info()
-    assert info.hits > 0
+    # every water class is an O/H class methanol also has
+    assert info.hits >= n_water
 
 
 @pytest.mark.float64

@@ -26,7 +26,9 @@ Eager only: the host gathers need concrete basis data, so traced builds
 
 from __future__ import annotations
 
+import hashlib
 import math
+import os
 from functools import lru_cache
 
 import jax
@@ -40,6 +42,78 @@ from dftax.utils.vmap import vmap as chunked_vmap
 # Work per pair chunk, in the units of _class_cost: the nested vmap holds a
 # chunk of pairs times every aux shell of the class in flight.
 CHUNK_WORK = 4.0e8
+
+
+# ---------------------------------------------------------------------------
+# Serialized programs: no tracing on a cache hit
+# ---------------------------------------------------------------------------
+#
+# The persistent compilation cache holds XLA executables, but JAX computes the
+# cache key from the lowered module, so a new process still traces and lowers
+# every class program before it can find it: on bicyclo[2.2.2]octane after
+# cubane that was 62 s of an 89 s cold run whose XLA work was 21 s. Each class
+# program is therefore also kept as serialized StableHLO (jax.export) next to
+# the compilation cache, keyed by the class, the tile and a hash of the kernel
+# source; a later process deserializes it instead of tracing. Needs the
+# ``flatbuffers`` package; without it the programs are traced as before.
+
+
+@lru_cache(maxsize=1)
+def _code_fingerprint() -> str:
+    from dftax.energy import boys
+    from dftax.integrals import eri3c_bucketed
+
+    h = hashlib.sha256(jax.__version__.encode())
+    for mod in (boys, eri3c_bucketed):
+        with open(mod.__file__, "rb") as fh:
+            h.update(fh.read())
+    with open(__file__, "rb") as fh:
+        h.update(fh.read())
+    return h.hexdigest()[:20]
+
+
+@lru_cache(maxsize=1)
+def _can_serialize() -> bool:
+    try:
+        import flatbuffers  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _export_dir():
+    if os.environ.get("DFTAX_EXPORT", "1") == "0":
+        return None
+    root = jax.config.jax_compilation_cache_dir
+    return None if not root else os.path.join(root, "dftax-export")
+
+
+def _serialized(name, key, build, shapes):
+    """``build()``'s jitted function, called through its serialized export
+    when one exists or can be written; the plain jit otherwise. ``shapes`` is
+    the tuple of float64 argument shapes."""
+    root = _export_dir()
+    if root is None or not _can_serialize():
+        return build()
+    platform = jax.devices()[0].platform
+    tag = hashlib.sha256(repr((name, key, shapes, platform,
+                               _code_fingerprint())).encode()).hexdigest()
+    path = os.path.join(root, tag[:40] + ".stablehlo")
+    try:
+        with open(path, "rb") as fh:
+            exp = jax.export.deserialize(bytearray(fh.read()))
+    except (OSError, ValueError):
+        exp = jax.export.export(build())(
+            *(jax.ShapeDtypeStruct(sh, jnp.float64) for sh in shapes))
+        try:
+            os.makedirs(root, exist_ok=True)
+            tmp = f"{path}.{os.getpid()}.tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(exp.serialize())
+            os.replace(tmp, path)
+        except OSError:
+            pass
+    return jax.jit(exp.call)
 
 
 def _ncart(l: int) -> int:
@@ -116,7 +190,12 @@ def class_program(la, lb, lc, anga, angb, angc, omega, nprims, P, A,
             vals = jnp.einsum("pxijc,ck->pxijk", vals, Tc)
         return vals
 
-    return jax.jit(run)
+    npa, npb, npc = nprims
+    shapes = ((P, 3), (P, 3), (P, npa), (P, npb), (P, _ncart(la), npa),
+              (P, _ncart(lb), npb), (A, 3), (A, npc), (A, _ncart(lc), npc))
+    key = (la, lb, lc, anga, angb, angc, omega, nprims, P, A, spherical_bra,
+           spherical_aux)
+    return _serialized("eri3c", key, lambda: jax.jit(run), shapes)
 
 
 def _host(basis):
@@ -254,7 +333,14 @@ def pair_program(kind, la, lb, anga, angb, omega, nprims):
         one = _make_pair_kernel(la, lb, anga, angb)
         kern = jax.vmap(lambda A, B, ea, eb, ca, cb, C, Z:
                         one(A, B, ea, eb, ca, cb, C[None], Z[None]))
-    return jax.jit(kern)
+    t = pair_tile(kind, la, lb, nprims)
+    npa, npb = nprims
+    shapes = ((t, 3), (t, 3), (t, npa), (t, npb), (t, _ncart(la), npa),
+              (t, _ncart(lb), npb))
+    if kind == "nuc":
+        shapes += ((t, 3), (t,))
+    key = (kind, la, lb, anga, angb, omega, nprims, t)
+    return _serialized("pair", key, lambda: jax.jit(kern), shapes)
 
 
 def pairs_host(kind, basis, plan, omega=None, atom_coords=None,

@@ -21,6 +21,10 @@ from dftax.ks.terms import _streamed_df_rij
 
 AUX = "def2-universal-jkfit"
 
+# Fixed-density comparisons use PySCF's converged density for the same
+# molecule and AO order: it is idempotent (the streamed RI-K recovers the
+# occupied orbitals from P), and no dftax SCF has to compile to make one.
+
 
 def _e2_rks(ks, P):
     """Coulomb + exact-exchange energy of a closed-shell ks at density P."""
@@ -51,7 +55,7 @@ def test_streamed_rij_matches_materialized(water_mol):
 
     ks = KS(water_mol, LDA(), grid=(grid[0], grid[1]),
             coulomb=df(AUX, spherical=False, whiten=False))
-    P = jnp.asarray(mf.make_rdm1())       # any symmetric density serves
+    P = jnp.asarray(mf.make_rdm1())       # PySCF's (idempotent) density
 
     aux = build_basis_data(
         [water_mol.atom_symbol(i) for i in range(water_mol.natm)],
@@ -77,7 +81,7 @@ def test_df_chunk_hybrid_matches_materialized(water_mol):
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
     ks_mat = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, spherical=False))
-    P = jnp.asarray(mf.make_rdm1())       # any symmetric density serves
+    P = jnp.asarray(mf.make_rdm1())       # PySCF's (idempotent) density
     ks_str = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50))
     e_mat = float(_e2_rks(ks_mat, P))
     e_str = float(_e2_rks(ks_str, P))
@@ -97,7 +101,7 @@ def test_screened_df_chunk_matches_dense(water_mol):
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
     ks_dense = KS(water_mol, PBE(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50))
-    P = jnp.asarray(mf.make_rdm1())       # any symmetric density serves
+    P = jnp.asarray(mf.make_rdm1())       # PySCF's (idempotent) density
     ks_scr = KS(water_mol, PBE(), grid=(grid[0], grid[1]),
                 coulomb=df(AUX, chunk=50, screen=1e-10))
     e_dense = float(_e2_rks(ks_dense, P))
@@ -119,7 +123,7 @@ def test_streamed_rik_fock_matches_materialized(water_mol):
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
     ks_mat = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, spherical=False))
-    P = jnp.asarray(mf.make_rdm1())       # any symmetric density serves
+    P = jnp.asarray(mf.make_rdm1())       # PySCF's (idempotent) density
     ks_str = KS(water_mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50))
 
     sym = lambda M: 0.5 * (M + M.T)
@@ -144,7 +148,7 @@ def test_streamed_uks_hybrid_empty_beta():
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
     ks_mat = KS(mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, spherical=False), spin=mol.spin)
-    Pa, Pb = jnp.asarray(mf.make_rdm1())  # any symmetric densities serve
+    Pa, Pb = jnp.asarray(mf.make_rdm1())  # PySCF's (idempotent) densities
     ks_str = KS(
         mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50), spin=mol.spin
     )
@@ -167,7 +171,7 @@ def test_streamed_uks_rik_matches_materialized():
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
     ks_mat = KS(mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, spherical=False), spin=mol.spin)
-    Pa, Pb = jnp.asarray(mf.make_rdm1())  # any symmetric densities serve
+    Pa, Pb = jnp.asarray(mf.make_rdm1())  # PySCF's (idempotent) densities
     ks_str = KS(
         mol, PBE0(), grid=(grid[0], grid[1]), coulomb=df(AUX, chunk=50), spin=mol.spin
     )

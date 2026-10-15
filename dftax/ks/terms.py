@@ -61,6 +61,16 @@ class ExactSpec:
 
 
 @dataclass(frozen=True)
+class ExternalCoulombSpec(ExactSpec):
+    """Internal: build no Coulomb integrals at all, for a caller that swaps its
+    own Coulomb term into the built ``KS`` (:func:`dftax.ks.forces.forces`
+    with the packed density-fitting tensor). ``stream=True`` skips the
+    4-center build."""
+
+    stream: bool = True
+
+
+@dataclass(frozen=True)
 class DFSpec:
     """Density-fitting (RI-J/RI-K) backend (see :func:`df`).
 
@@ -1589,6 +1599,96 @@ class StreamedDFForcesCoulomb(CoulombTerm):
         return e
 
 
+class _NoCoulomb(CoulombTerm):
+    """Placeholder of an :class:`ExternalCoulombSpec` build; replaced by the
+    caller before any energy is taken."""
+
+    def energy(self, P, S, nocc):
+        return jnp.asarray(0.0)
+
+
+def _packed_dmat(T, pos, Z):
+    """``D_X = Zᵀ T_X Z`` for every aux function, ``(naux, nocc, nocc)``, from a
+    packed tensor, a block of aux rows at a time: each block is unpacked
+    through ``pos`` to dense ``nao x nao`` slices and rematerialized in the
+    backward pass (``jax.checkpoint``), so under ``grad`` no more than one
+    unpacked block exists at once."""
+    naux = T.shape[0]
+    nao, no = Z.shape
+    b = max(1, min(naux, _K_BLOCK_ELEMS // max(1, nao * nao + nao * no)))
+
+    @jax.checkpoint
+    def block(Tb):
+        z = jnp.zeros((Tb.shape[0], 1), Tb.dtype)
+        U = jnp.take(jnp.concatenate([Tb, z], axis=1), pos, axis=1)
+        G = jnp.einsum("xmn,nj->xmj", U, Z)
+        return jnp.einsum("mi,xmj->xij", Z, G)
+
+    nfull, tail = divmod(naux, b)
+    parts = []
+    if nfull:
+        def body(carry, i):
+            return carry, block(jax.lax.dynamic_slice_in_dim(T, i * b, b, 0))
+        _, D = jax.lax.scan(body, None, jnp.arange(nfull))
+        parts.append(D.reshape(nfull * b, no, no))
+    if tail:
+        parts.append(block(T[nfull * b:]))
+    return parts[0] if len(parts) == 1 else jnp.concatenate(parts)
+
+
+class PackedDFForcesCoulomb(CoulombTerm):
+    """Density fitting on the packed tensor for geometry derivatives;
+    constructed only by :func:`dftax.ks.forces.forces`.
+
+    ``T`` is the un-whitened packed 3-center tensor built at the traced
+    coordinates (:func:`~dftax.integrals.eri3c_bucketed.eri3c_packed`, with
+    the reference geometry's plan and frozen screening keep set), and
+    ``int2c_inv`` the metric pseudo-inverse whose ``custom_jvp`` carries the
+    metric's derivative. RI-J contracts the packed density
+    (``γ = T (w ∘ P[rows, cols])``, ``½ γᵀ V⁺ γ``). Exchange is evaluated at
+    the frozen occupied coefficients ``Zs``, as
+    :func:`_streamed_df_rik_frozen` does: with ``P_σ = w Z M⁻¹ Zᵀ``,
+    ``M = Zᵀ S Z``, it is ``Σ_XY V⁺_XY Tr(M⁻¹ D_X M⁻¹ D_Y)`` with
+    ``D_X = Zᵀ T_X Z`` (:func:`_packed_dmat`), the same energy as that of
+    ``P`` within the forces parametrization, at ``nao² nocc naux`` instead
+    of the square tensor's dense density-route contraction. Forces only:
+    ``∂E/∂P`` is not the KS Fock here.
+    """
+
+    T: Float[Array, "naux npair"]
+    int2c_inv: Float[Array, "naux naux"]
+    pos: Int[Array, "nao nao"]
+    rows: Int[Array, "npair"]
+    cols: Int[Array, "npair"]
+    weight: Float[Array, "npair"]
+    Zs: tuple
+    hf_coeff: float = eqx.field(static=True)
+    T_lr: Float[Array, "naux npair"] | None = None
+    int2c_inv_lr: Float[Array, "naux naux"] | None = None
+    hf_coeff_lr: float = eqx.field(static=True, default=0.0)
+
+    def energy(self, P, S, nocc):
+        p = self.weight * jnp.sum(P, axis=0)[self.rows, self.cols]
+        gamma = self.T @ p
+        e = 0.5 * jnp.dot(gamma, self.int2c_inv @ gamma)
+        for ax, Tt, vinv in ((self.hf_coeff, self.T, self.int2c_inv),
+                             (self.hf_coeff_lr, self.T_lr, self.int2c_inv_lr)):
+            if ax == 0.0:
+                continue
+            prefs = (-ax,) if len(self.Zs) == 1 else (-0.5 * ax, -0.5 * ax)
+            for Z, pref in zip(self.Zs, prefs):
+                if Z.shape[1] == 0:
+                    continue
+                M = Z.T @ S @ Z
+                D = _packed_dmat(Tt, self.pos, Z)          # (naux, no, no)
+                naux = D.shape[0]
+                Q = jnp.linalg.solve(M, D)                  # M⁻¹ D_X
+                QF = Q.reshape(naux, -1)
+                QT = Q.transpose(0, 2, 1).reshape(naux, -1)
+                e = e + pref * jnp.vdot(QF, vinv @ QT)
+        return e
+
+
 class ShardedStreamedDFCoulomb(CoulombTerm):
     """Streamed RI-J with the auxiliary axis divided across a device mesh.
 
@@ -2316,6 +2416,8 @@ def _make_coulomb(spec, basis, eri, int3c, int2c_inv, pairs, hf_coeff,
             int3c_lr=int3c_lr, int2c_inv_lr=int2c_inv_lr,
             hf_coeff_lr=hf_coeff_lr,
         )
+    if isinstance(spec, ExternalCoulombSpec):
+        return _NoCoulomb()
     if spec.stream:
         if hf_coeff_lr != 0.0:
             raise NotImplementedError(

@@ -5,12 +5,13 @@ the same energy function on its real block, so the batched minimum is each
 molecule's own minimum, whatever it was batched with.
 """
 
+import jax
 import numpy as np
 import pytest
 
 from dftax import KS, Molecule, becke, gdm, scf
 from dftax.energy.xc import B3LYP, PBE
-from dftax.ks.batched_gdm import Bucket, bucket_for, gdm_batched
+from dftax.ks.batched_gdm import Bucket, bucket_for, gdm_batched, pad_ks
 
 MOLS = {
     "water": "O 0 0 0; H 0.76 0 0.50; H 0.76 0 -0.50",
@@ -97,3 +98,44 @@ def test_rejects_what_it_does_not_pad_yet():
     with pytest.raises(NotImplementedError, match="materialized"):
         gdm_batched([KS(Molecule.from_xyz(MOLS["water"], "sto-3g"), PBE(),
                         grid=becke(35, 50, chunk=64))])
+
+
+@pytest.mark.float64
+@pytest.mark.slow
+def test_aufbau_check_flags_a_swapped_occupation():
+    """The post-loop check that sends a system back to single-molecule gdm:
+    zero on the ground state, about one electron's weight on a state with the
+    HOMO and LUMO swapped."""
+    import jax.numpy as jnp
+
+    from dftax.ks.batched_gdm import _aufbau_violation
+
+    ks = _ks("water")
+    r = scf(ks)
+    b = bucket_for([ks])
+    stacked = jax.tree.map(lambda x: x[None], pad_ks(ks, b))
+    C = np.asarray(r.mo_coeff)[0]
+    no = ks.nocc[0]
+    occ = list(range(no - 1)) + [no]                 # HOMO -> LUMO
+    Cs = C[:, occ]
+    P_ground = np.asarray(r.P)
+    P_swapped = (2.0 * Cs @ Cs.T)[None]
+    viol = _aufbau_violation(stacked, jnp.asarray(P_ground)[None])
+    assert float(viol[0]) < 1e-6
+    viol = _aufbau_violation(stacked, jnp.asarray(P_swapped)[None])
+    assert float(viol[0]) > 0.5
+
+
+@pytest.mark.float64
+@pytest.mark.slow
+def test_unsettled_systems_fall_back_to_gdm():
+    """A batch stopped short leaves its systems unconverged; with the
+    fallback each is re-solved alone, as gdm would."""
+    kss = [_ks("water"), _ks("hf")]
+    raw = gdm_batched(kss, max_iter=2, fallback=False)
+    assert not bool(np.any(raw.converged)) and not bool(np.any(raw.fallback))
+    res = gdm_batched(kss, max_iter=2)
+    assert bool(np.all(res.fallback))
+    for i, ks in enumerate(kss):
+        assert float(res.e_tot[i]) == pytest.approx(gdm(ks, max_iter=2).e_tot,
+                                                    abs=1e-10)

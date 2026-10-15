@@ -149,6 +149,7 @@ def main():
                conv_scf=int(sum(r.converged for r in r_scf)),
                conv_gdm=int(sum(r.converged for r in r_gdm)),
                conv_batched=int(r_b.converged.sum()),
+               fallback_batched=int(np.sum(r_b.fallback)),
                max_de_gdm=float(de_gdm), max_de_batched=float(de_b),
                device=jax.devices()[0].device_kind)
     print(f"{n} molecules ({args.basis}, PBE), builds {build_s:.1f} s")
@@ -158,7 +159,8 @@ def main():
             ("batched gdm", t_b, cold_batch, row["conv_batched"])):
         print(f"  {label:15s} warm {t:7.2f} s  ({n / t:7.1f} mol/s)  "
               f"first pass {cold:7.2f} s  converged {conv}/{n}")
-    print(f"  max |E - E_scf|: gdm {de_gdm:.1e}, batched {de_b:.1e}")
+    print(f"  max |E - E_scf|: gdm {de_gdm:.1e}, batched {de_b:.1e}; "
+          f"batched fell back to gdm for {row['fallback_batched']}/{n}")
     print(f"  warm build + solve: scf {(build_warm_s + t_scf) / n * 1e3:.1f} "
           f"ms/mol, batched gdm {(build_warm_s + t_b) / n * 1e3:.1f} ms/mol")
     if args.out:

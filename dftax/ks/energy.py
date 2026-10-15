@@ -53,7 +53,9 @@ import equinox as eqx
 from jaxtyping import Array, Float, Scalar
 
 from dftax.energy.d3 import D3BJSpec, _resolve_dispersion
-from dftax.energy.gto import BasisData, extract_basis_data, eval_gto_and_grad
+from dftax.energy.gto import (
+    BasisData, eval_gto_and_grad, extract_basis_data, static_fingerprint,
+)
 from dftax.energy.xc import XCFunctional
 from dftax.grid import Becke, Points, becke, becke_grid
 from dftax.integrals import (
@@ -471,6 +473,37 @@ def _build_integrals_shared(basis, coords, charges, grid_coords, aux_basis,
     return (S, T + V, ao, dao, e_nn, None, int3c, None, None, int3c_lr, None)
 
 
+# The hybrid (see _build_integrals_shared): a structure's first build in a
+# process runs the shared class programs, which need no per-molecule compile,
+# while its fused _build_integrals compiles on a background thread; once that
+# is done, later builds of the same structure take the fused program, which
+# is about twice as fast warm (cubane: 59 against 117 ms for the 3-center
+# tensor). A new process repeats the background compile, but the fused XLA
+# executable is then a persistent-cache hit, so only its tracing is paid, off
+# the critical path.
+_FUSED_BUILDS: dict = {}
+_FUSED_POOL = None
+
+
+def _fused_ready(key):
+    fut = _FUSED_BUILDS.get(key)
+    return fut is not None and fut.done() and fut.exception() is None
+
+
+def _schedule_fused(key, call):
+    """Compile (and run once) the fused build for ``key`` in the background."""
+    global _FUSED_POOL
+    if key in _FUSED_BUILDS:
+        return
+    if _FUSED_POOL is None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        _FUSED_POOL = ThreadPoolExecutor(max_workers=1,
+                                         thread_name_prefix="dftax-fused")
+    _FUSED_BUILDS[key] = _FUSED_POOL.submit(
+        lambda: jax.block_until_ready(call()))
+
+
 @eqx.filter_jit
 def _build_integrals(
     basis, coords, charges, grid_coords, aux_basis, materialize_ao, materialize_int3c,
@@ -772,6 +805,26 @@ class KS(eqx.Module):
         # and skips the per-molecule _build_integrals program altogether.
         bucketed = (os.environ.get("DFTAX_BUCKETED") == "1" and whiten
                     and not spec.packed and devices is None)
+        fused_args = (
+            basis, coords, charges, grid_coords, aux_basis,
+            devices is None and grid_chunk is None,  # sharded AO grid below
+            (not shard_df) and not (is_df and spec.chunk is not None),
+            quartets, qof, (not is_df) and spec.stream,
+            (omega if hf_lr != 0.0
+             and not isinstance(spec, ExternalCoulombSpec) else None),
+            eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan, whiten,
+            whiten and spec.packed,
+        )
+        if bucketed:
+            # everything static in the fused call, so a hit means the fused
+            # program for exactly this structure is compiled
+            key = (static_fingerprint(basis), static_fingerprint(aux_basis),
+                   tuple(grid_coords.shape), int(coords.shape[0]),
+                   eri3c_plan, pair_plan, aux_pair_plan, fused_args[5],
+                   fused_args[10], whiten)
+            bucketed = not _fused_ready(key)
+            if bucketed:
+                _schedule_fused(key, lambda: _build_integrals(*fused_args))
         if bucketed:
             (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
              eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals_shared(
@@ -780,16 +833,7 @@ class KS(eqx.Module):
                 omega if hf_lr != 0.0 else None)
         else:
             (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
-             eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(
-                basis, coords, charges, grid_coords, aux_basis,
-                devices is None and grid_chunk is None,  # sharded AO grid below
-                (not shard_df) and not (is_df and spec.chunk is not None),
-                quartets, qof, (not is_df) and spec.stream,
-                (omega if hf_lr != 0.0
-                 and not isinstance(spec, ExternalCoulombSpec) else None),
-                eri3c_plan, pair_plan, aux_pair_plan, eri4c_plan, whiten,
-                whiten and spec.packed,
-            )
+             eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(*fused_args)
         # Dispersion is P-independent: a scalar of the (traced) coordinates,
         # mirroring e_nn, so the rebuilt energies in forces/batched carry its
         # gradient automatically. Atomic numbers come from the charges (works

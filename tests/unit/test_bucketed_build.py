@@ -97,3 +97,28 @@ def test_ks_with_shared_programs_matches(monkeypatch):
     C = (U / jnp.sqrt(s)) @ U.T
     P = (2.0 * C[:, :n] @ C[:, :n].T)[None]
     assert abs(float(ks.total(P) - ref.total(P))) < 1e-9
+
+
+@pytest.mark.float64
+def test_hybrid_switches_to_the_fused_build(monkeypatch):
+    """A structure's first build runs the shared programs and schedules the
+    fused one; once it is compiled, the next build of the structure takes it,
+    and both give the same KS."""
+    import dftax.ks.energy as energy_mod
+
+    monkeypatch.setenv("DFTAX_BUCKETED", "1")
+    monkeypatch.setattr(energy_mod, "_FUSED_BUILDS", {})
+    shared = []
+    orig = energy_mod._build_integrals_shared
+    monkeypatch.setattr(energy_mod, "_build_integrals_shared",
+                        lambda *a: (shared.append(1), orig(*a))[1])
+    mol = Molecule.from_xyz(WATER, "6-31g*")
+    first = KS(mol, PBE())
+    assert len(shared) == 1 and len(energy_mod._FUSED_BUILDS) == 1
+    (fut,) = energy_mod._FUSED_BUILDS.values()
+    fut.result()
+    second = KS(mol, PBE())
+    assert len(shared) == 1                       # took the fused program
+    np.testing.assert_allclose(second.S, first.S, rtol=0, atol=1e-11)
+    np.testing.assert_allclose(second.coulomb.B.sum(), first.coulomb.B.sum(),
+                               rtol=1e-12)

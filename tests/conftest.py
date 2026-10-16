@@ -96,8 +96,8 @@ _RSS_BUDGET_GIB = float(os.environ.get("DFTAX_TEST_RSS_GB", "12"))
 # reuses them), so a plain "over budget" test would clear after every test
 # once the process has crossed the budget once. Clear again only when RSS has
 # grown this much past where the last clear left it, or, whatever the last
-# clear left, past twice the budget (a hard ceiling: 24 GiB by default, 12 on
-# the 16 GB CI runner).
+# clear left, past twice the budget (a hard ceiling: 24 GiB by default).
+# DFTAX_TEST_RSS_GB=0 clears after every test, as CI does on its 16 GB runner.
 _RSS_HEADROOM_GIB = 4.0
 _rss_after_clear = 0.0
 
@@ -110,6 +110,12 @@ def _clear_programs():
     jax.clear_caches()
     clear_programs()
     gc.collect()
+    try:                    # hand the freed heap back to the OS (glibc)
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 @pytest.fixture(autouse=True)

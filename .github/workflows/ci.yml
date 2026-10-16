@@ -24,9 +24,9 @@ jobs:
     env:
       OMP_NUM_THREADS: "2"
       XLA_PYTHON_CLIENT_PREALLOCATE: "false"
-      # the hosted runner has 16 GB: clear compiled programs from 6 GiB, and
-      # after every test past 12 (tests/conftest.py)
-      DFTAX_TEST_RSS_GB: "6"
+      # clear compiled programs after every test (tests/conftest.py): the
+      # hosted runner's 16 GB does not hold the whole suite's shared programs
+      DFTAX_TEST_RSS_GB: "0"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.2.0

@@ -61,11 +61,25 @@ H 0.0000 0.0000 0.7414
 """
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--shard", default=None, metavar="I/N",
+        help="run the I-th of N shards (1-based) of whole modules, balanced "
+             "by tests/shard_weights.json (seconds per module), else by test "
+             "count; CI runs the shards on parallel runners")
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
     config.addinivalue_line("markers", "pyscf: marks tests requiring PySCF molecule setup")
     config.addinivalue_line("markers", "float64: marks tests requiring float64 precision")
     config.addinivalue_line("markers", "default_grid: keep dftax's real default grid (no canonical test grid)")
+    shard = config.getoption("--shard")
+    if shard:
+        i, n = (int(x) for x in shard.split("/"))
+        if not 1 <= i <= n:
+            raise pytest.UsageError(f"--shard {shard}: need 1 <= I <= N")
+        config.pluginmanager.register(_Shard(i, n), "dftax-shard")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -74,6 +88,45 @@ def pytest_collection_modifyitems(config, items):
         modname = item.module.__name__.rsplit(".", 1)[-1]
         if modname in _SLOW_MODULES:
             item.add_marker(pytest.mark.slow)
+
+
+class _Shard:
+    """Keep one shard of the selected tests. Whole modules stay together, so a
+    module's tests share their compiled programs, and modules go to the
+    lightest shard, heaviest first. It runs after the marker deselection, so
+    the balance is over the tests that run."""
+
+    def __init__(self, i, n):
+        self.i, self.n = i, n
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_collection_modifyitems(self, config, items):
+        import json
+
+        path = os.path.join(os.path.dirname(__file__), "shard_weights.json")
+        try:
+            with open(path) as fh:
+                seconds = json.load(fh)
+        except (OSError, ValueError):
+            seconds = {}
+        counts = {}
+        for item in items:
+            mod = item.module.__name__.rsplit(".", 1)[-1]
+            counts[mod] = counts.get(mod, 0) + 1
+        # an unmeasured module counts 10 s a test
+        weight = {m: float(seconds.get(m, 10.0 * c)) for m, c in counts.items()}
+        loads, owner = [0.0] * self.n, {}
+        for mod in sorted(weight, key=lambda m: (-weight[m], m)):
+            k = min(range(self.n), key=lambda s: (loads[s], s))
+            owner[mod] = k
+            loads[k] += weight[mod]
+        keep, drop = [], []
+        for item in items:
+            mod = item.module.__name__.rsplit(".", 1)[-1]
+            (keep if owner[mod] == self.i - 1 else drop).append(item)
+        if drop:
+            config.hook.pytest_deselected(items=drop)
+        items[:] = keep
 
 
 def _rss_gib() -> float | None:

@@ -8,6 +8,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/dftax.svg)](https://pypi.org/project/dftax/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/andresguzco/dftax/actions/workflows/ci.yml/badge.svg)](https://github.com/andresguzco/dftax/actions/workflows/ci.yml)
+[![Nightly](https://github.com/andresguzco/dftax/actions/workflows/nightly.yml/badge.svg)](https://github.com/andresguzco/dftax/actions/workflows/nightly.yml)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue.svg)](https://andresguzco.github.io/dftax/)
 
 </div>

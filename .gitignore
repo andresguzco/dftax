@@ -225,3 +225,6 @@ third_party/
 !dftax/energy/data/
 !dftax/energy/data/d3bj.npz
 !dftax/energy/data/d4.npz
+
+# the CI runners' persistent JAX compilation cache
+.jax-cache/

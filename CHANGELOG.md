@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **`becke_grid` compiles in one partition pass.** The fuzzy-Voronoi weights
+  of every atom's points are one chunked pass (`becke_weights`, the owner's
+  normalized cell per point), the cell-size matrix `a_AB` is built in the
+  graph from the natom Bragg radii (`size_adjustment`), and each element's
+  point template is one constant. Before, a pass per atom put natom loops in
+  the program, each embedding the natom² `a_AB` as a constant: 3.9 GB of
+  constants and a 3-minute compile at 784 atoms, about 165 GB at 2,742.
+  Points, weights and their coordinate gradient are unchanged.
+
 ## [0.9.0] - 2026-10-16
 
 ### Added

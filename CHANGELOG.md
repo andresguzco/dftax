@@ -6,7 +6,7 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.9.0] - 2026-10-15
+## [0.9.0] - 2026-10-16
 
 ### Added
 - **Direct minimization.** `gdm(ks, ...)` minimizes the KS energy by L-BFGS

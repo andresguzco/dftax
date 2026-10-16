@@ -40,6 +40,7 @@ coordinates padded too.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
 
@@ -54,7 +55,7 @@ from dftax.ks.energy import KS
 from dftax.ks.gdm import (
     KAPPA_RESET, _lbfgs_direction, _occupied, _tdot, gdm, rotate_full,
 )
-from dftax.ks.guess import density_from_guess
+from dftax.ks.guess import GuessSpec, density_from_guess
 from dftax.ks.scf import canonical_orthonormalizer
 from dftax.ks.terms import (
     DFCoulomb, GridXC, PackedDFCoulomb, WhitenedDFCoulomb,
@@ -461,12 +462,14 @@ def _solve_group(kss, b, guess, max_iter, e_tol, d_tol, max_step, gap_floor,
              for i, ks in enumerate(kss)], unsettled)
 
 
-def gdm_batched(kss, *, max_iter: int = 200, e_tol: float = 1e-8,
-                d_tol: float = 1e-6, history: int = 20, max_step: float = 0.5,
-                gap_floor: float = 0.05, guess=None,
+def gdm_batched(kss: Sequence[KS], *, max_iter: int = 200,
+                e_tol: float = 1e-8, d_tol: float = 1e-6, history: int = 20,
+                max_step: float = 0.5, gap_floor: float = 0.05,
+                guess: GuessSpec | jax.Array | None = None,
                 bucket: Bucket | None = None,
                 fallback: bool = True) -> BatchedGDMResult:
-    """Minimize the KS energy of every system in ``kss`` at once.
+    """Minimize the KS energy of every system in ``kss`` at once. The
+    tolerances and step controls are those of :func:`~dftax.ks.gdm.gdm`.
 
     Args:
         kss: built :class:`~dftax.ks.energy.KS` objects (materialized DF and
@@ -484,7 +487,6 @@ def gdm_batched(kss, *, max_iter: int = 200, e_tol: float = 1e-8,
             the guess frame and can settle in an excited stationary state on
             hard cases such as Cr2; :func:`~dftax.ks.gdm.gdm` re-diagonalizes
             at its resets). Marked in ``BatchedGDMResult.fallback``.
-        The tolerances and step controls are those of :func:`~dftax.ks.gdm.gdm`.
     """
     kss = list(kss)
     # one batch per spin type and functional: both are static metadata of

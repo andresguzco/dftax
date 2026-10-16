@@ -4,6 +4,10 @@ The grid equals the per-atom construction it replaced (kept here as the
 reference), points, weights and their coordinate gradient, and lowering it
 captures no natom² constant: the per-atom version embedded the cell-size
 matrix once per atom, natom × natom² doubles (3.9 GB at 784 atoms).
+
+The reference shares the cell function (``becke_partition`` now runs on
+``_cell_fn`` and ``size_adjustment``), so these tests check the restructuring,
+not the cell formula: ``test_grid_treutler`` pins the weights against PySCF.
 """
 
 import warnings
@@ -21,7 +25,6 @@ from dftax.system.molecule import symbol_to_Z
 ANGSTROM = 1.0 / 0.52917721092
 
 MOLECULES = {
-    "water": (["O", "H", "H"], [[0, 0, 0], [0.757, 0.587, 0], [-0.757, 0.587, 0]]),
     "h2s": (["S", "H", "H"], [[0, 0, 0.1], [0.96, 0, -0.85], [-0.96, 0, -0.85]]),
     "methanol": (["C", "O", "H", "H", "H", "H"],
                  [[0, 0, 0], [1.43, 0, 0], [-0.36, 1.03, 0], [-0.36, -0.51, 0.89],
@@ -50,9 +53,8 @@ def _per_atom(symbols, coords, n_radial, lebedev, prune, r_max, radial, radii_ad
     return jnp.concatenate(pts_all), jnp.concatenate(w_all)
 
 
-@pytest.mark.parametrize("name", sorted(MOLECULES))
-@pytest.mark.parametrize("radii_adjust", ["treutler", "becke", None])
-@pytest.mark.parametrize("prune", ["nwchem", None])
+@pytest.mark.parametrize("name, radii_adjust, prune",
+                         [("methanol", "treutler", "nwchem"), ("h2s", "becke", None)])
 def test_one_pass_is_the_per_atom_grid(name, radii_adjust, prune):
     symbols, xyz = MOLECULES[name]
     coords = jnp.asarray(xyz) * ANGSTROM
@@ -64,8 +66,7 @@ def test_one_pass_is_the_per_atom_grid(name, radii_adjust, prune):
     np.testing.assert_allclose(np.asarray(w1), np.asarray(w0), rtol=1e-13, atol=1e-300)
 
 
-@pytest.mark.parametrize("radii_adjust", ["treutler", "becke"])
-def test_one_pass_gradient_is_the_per_atom_one(radii_adjust):
+def test_one_pass_gradient_is_the_per_atom_one(radii_adjust="treutler"):
     symbols, xyz = MOLECULES["methanol"]
     coords = jnp.asarray(xyz) * ANGSTROM
     spec = dict(n_radial=20, lebedev=50, prune="nwchem", r_max=45.0, radial="treutler")

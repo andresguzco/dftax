@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-15
+
 ### Added
 - **Direct minimization.** `gdm(ks, ...)` minimizes the KS energy by L-BFGS
   over occupied-virtual rotations, evaluated through the occupied orbitals
@@ -122,7 +124,11 @@ to [Semantic Versioning](https://semver.org/).
   contraction against the overcomplete jkfit metric, whose kept band
   amplifies rounding about 1e7: about 1e-9 Ha at a fixed density, 1.1e-7 in
   cubane's converged energy. Against a well-conditioned aux set the two
-  agree to 1e-14. The parity gate is re-baselined for this release.
+  agree to 1e-14.
+- **The parity gate is re-baselined.** The default grid moves every case
+  (fixed-density energies by 5.6e-7 to 5.9e-5 Ha, 1.2e-3 on the coarse
+  wB97X-V case, forces by 3e-5), and whitening adds about 1e-9 on the DF
+  cases.
 - Becke's cell-size adjustment converges slowly, and not monotonically, in
   the angular order: on bicyclo[2.2.2]octane its (200, 770) energy is ~7e-6
   below the limit that both cell schemes reach at 974 and 1202 points, while

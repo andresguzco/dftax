@@ -10,6 +10,7 @@ The reference shares the cell function (``becke_partition`` now runs on
 not the cell formula: ``test_grid_treutler`` pins the weights against PySCF.
 """
 
+import re
 import warnings
 
 import jax
@@ -17,7 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from dftax.grid import becke_grid, lebedev_grid
+from dftax.grid import becke_grid, becke_grid_size, lebedev_grid
 from dftax.grid.becke import becke_partition, bragg_radius, size_adjustment
 from dftax.grid.grid import _atom_shell_blocks
 from dftax.system.molecule import symbol_to_Z
@@ -63,7 +64,8 @@ def test_one_pass_is_the_per_atom_grid(name, radii_adjust, prune):
     p0, w0 = _per_atom(symbols, coords, spec["n_radial"], spec["lebedev"], prune, spec["r_max"],
                        spec["radial"], radii_adjust)
     np.testing.assert_allclose(np.asarray(p1), np.asarray(p0), rtol=0, atol=1e-14)
-    np.testing.assert_allclose(np.asarray(w1), np.asarray(w0), rtol=1e-13, atol=1e-300)
+    w1, w0 = np.asarray(w1), np.asarray(w0)       # equal to rounding: XLA orders the two programs' sums
+    np.testing.assert_allclose(w1, w0, rtol=1e-12, atol=1e-15 * np.abs(w0).max())
 
 
 def test_one_pass_gradient_is_the_per_atom_one(radii_adjust="treutler"):
@@ -90,20 +92,37 @@ def test_size_adjustment_is_the_numpy_formula(radii_adjust):
         chi = chi if radii_adjust == "becke" else np.sqrt(chi)
         u = (chi - 1.0) / (chi + 1.0)
         ref = np.clip(u / (u * u - 1.0), -bound, bound)
-    a = np.asarray(size_adjustment(bragg, radii_adjust))
-    np.testing.assert_allclose(a, ref, rtol=1e-15, atol=0)
+    a = np.asarray(size_adjustment(bragg, radii_adjust))     # |a| ≤ 1/2; XLA divides by a
+    np.testing.assert_allclose(a, ref, rtol=0, atol=1e-15)   # reciprocal, so ~1 ulp apart
+
+
+def _water_cluster(n_w):
+    side = int(np.ceil(n_w ** (1 / 3)))
+    cells = np.stack(np.meshgrid(*[np.arange(side)] * 3, indexing="ij"), -1).reshape(-1, 3)[:n_w]
+    water = np.array([[0, 0, 0], [0.757, 0.587, 0], [-0.757, 0.587, 0]])
+    xyz = (cells[:, None, :] * 3.1 + water[None]).reshape(-1, 3)
+    return ["O", "H", "H"] * n_w, jnp.asarray(xyz) * ANGSTROM
+
+
+def test_becke_grid_temporaries_stay_linear_in_the_grid():
+    """XLA's estimate of the compiled grid's temporaries, at 180 atoms (about
+    10⁶ points), within a linear budget: no (n_grid, n_grid) or (n_grid, natom)
+    array anywhere in the program."""
+    symbols, coords = _water_cluster(60)
+    G = becke_grid_size(symbols)
+    lowered = jax.jit(lambda c: becke_grid(symbols, c)).lower(coords)
+    mem = lowered.compile().memory_analysis()
+    if mem is None:
+        pytest.skip("no memory analysis on this backend")
+    dims = set(re.findall(r"tensor<(\d+(?:x\d+)+)x", lowered.as_text()))
+    big = sorted(dims, key=lambda d: -int(np.prod([int(x) for x in d.split("x")])))[:5]
+    assert mem.temp_size_in_bytes < 64 * 8 * G, (mem.temp_size_in_bytes, G, big)
 
 
 def test_becke_grid_captures_no_atom_pair_constant():
     """360 atoms: the per-atom build captured 360 × 1 MB; the one pass, a few
     small per-element templates and the natom radii."""
-    n_w = 120
-    side = int(np.ceil(n_w ** (1 / 3)))
-    cells = np.stack(np.meshgrid(*[np.arange(side)] * 3, indexing="ij"), -1).reshape(-1, 3)[:n_w]
-    water = np.array([[0, 0, 0], [0.757, 0.587, 0], [-0.757, 0.587, 0]])
-    xyz = (cells[:, None, :] * 3.1 + water[None]).reshape(-1, 3)
-    symbols = ["O", "H", "H"] * n_w
-    coords = jnp.asarray(xyz) * ANGSTROM
+    symbols, coords = _water_cluster(120)
     n = len(symbols)
     try:
         old = jax.config.jax_captured_constants_warn_bytes

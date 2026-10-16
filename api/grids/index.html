@@ -2218,6 +2218,31 @@ Becke's mapping, so a coarse grid spends more of them where the density is.</p>
 <div class="doc doc-object doc-function">
 
 
+<h5 id="dftax.grid.becke.size_adjustment" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">size_adjustment</span><span class="p">(</span><span class="n">bragg</span><span class="p">,</span> <span class="n">radii_adjust</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#dftax.grid.becke.size_adjustment" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Heteronuclear cell-size parameters <code>a_AB</code> (antisymmetric, natom²) from
+the atoms' Bragg radii <code>bragg</code> (natom,).</p>
+<p>Becke 1988, App. A: <code>a = u / (u² - 1)</code> with <code>u = (chi-1)/(chi+1)</code>.
+<code>"becke"</code> takes <code>chi</code> as the Bragg-radius ratio and bounds <code>|a|</code> by
+0.45; <code>"treutler"</code> takes the square root of that ratio (JCP 102, 346)
+and bounds <code>|a|</code> by 1/2, as PySCF does; <code>None</code> leaves the cells
+unadjusted. In jnp, so under <code>jit</code> the natom² matrix is computed from
+the natom radii rather than embedded as a constant.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h5 id="dftax.grid.becke.becke_partition" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">becke_partition</span><span class="p">(</span><span class="n">points</span><span class="p">,</span> <span class="n">coords</span><span class="p">,</span> <span class="n">Zs</span><span class="p">,</span> <span class="n">radii_adjust</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'becke'</span><span class="p">)</span></code>
 
@@ -2228,11 +2253,35 @@ Becke's mapping, so a coarse grid spends more of them where the density is.</p>
 
         <p>Unnormalized Becke cell functions <code>P_A(point)</code>, shape (n_grid, n_atom).</p>
 <p>Vectorized JAX (differentiable w.r.t. <code>coords</code>); includes the heteronuclear
-size adjustment selected by <code>radii_adjust</code> (see :func:<code>_size_adjustment</code>).
+size adjustment selected by <code>radii_adjust</code> (see :func:<code>size_adjustment</code>).
 Points are processed in budget-derived chunks so the per-point
 <code>(chunk, A, B)</code> transient stays bounded for large molecules
 (checkpointed, so the backward pass used by the forces rematerializes each
 chunk instead of storing them all).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h5 id="dftax.grid.becke.becke_weights" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">becke_weights</span><span class="p">(</span><span class="n">points</span><span class="p">,</span> <span class="n">owners</span><span class="p">,</span> <span class="n">coords</span><span class="p">,</span> <span class="n">Zs</span><span class="p">,</span> <span class="n">radii_adjust</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'becke'</span><span class="p">)</span></code>
+
+<a href="#dftax.grid.becke.becke_weights" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Becke weight factors <code>P_owner(p) / Σ_A P_A(p)</code> of points <code>p</code> owned
+by atoms <code>owners</code> (int, (n_grid,)), shape (n_grid,).</p>
+<p>One chunked pass over every atom's points with the pair quantities formed
+once, so a molecule's grid is one loop in the compiled program (a pass per
+atom was natom loops, each with its own natom² constants) and the
+(n_grid, n_atom) cell functions are never held. Differentiable w.r.t.
+<code>coords</code>, checkpointed like :func:<code>becke_partition</code>.</p>
 
 
     </div>
@@ -2287,9 +2336,11 @@ partition, its cells sized per <code>radii_adjust</code>.</p>
 <code>(n_grid,)</code>, differentiable w.r.t. <code>coords_bohr</code>. Shapes depend only
 on <code>symbols</code> and the spec constants, so this can run under <code>jit</code> /
 <code>vmap</code> with traced coordinates.</p>
-<p>Jitted, because eagerly this dispatches one chunked partition per atom
-plus the per-shell assembly. One compiled program per (symbols, spec)
-shape serves every geometry.</p>
+<p>Jitted, one compiled program per (symbols, spec) shape for every
+geometry. The partition is one chunked pass over all atoms' points
+(:func:<code>~dftax.grid.becke.becke_weights</code>), and each element's point
+template is one constant, so the program and its constants grow with the
+number of elements, not of atoms.</p>
 
 
     </div>

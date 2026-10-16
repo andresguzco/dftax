@@ -33,7 +33,7 @@ import jax.numpy as jnp
 from dftax.system.molecule import symbol_to_Z
 from dftax.grid.lebedev import lebedev_grid
 from dftax.grid.becke import (
-    becke_partition, becke_radial, bragg_radius, treutler_radial, treutler_xi,
+    becke_radial, becke_weights, bragg_radius, treutler_radial, treutler_xi,
 )
 
 
@@ -310,40 +310,38 @@ def becke_grid(
     on ``symbols`` and the spec constants, so this can run under ``jit`` /
     ``vmap`` with traced coordinates.
 
-    Jitted, because eagerly this dispatches one chunked partition per atom
-    plus the per-shell assembly. One compiled program per (symbols, spec)
-    shape serves every geometry.
+    Jitted, one compiled program per (symbols, spec) shape for every
+    geometry. The partition is one chunked pass over all atoms' points
+    (:func:`~dftax.grid.becke.becke_weights`), and each element's point
+    template is one constant, so the program and its constants grow with the
+    number of elements, not of atoms.
     """
     coords = jnp.asarray(coords_bohr).reshape(-1, 3)
     Zs = [symbol_to_Z(s) for s in symbols]
     r_max = None if r_max is None else float(r_max)
 
-    points_blocks: list = []
-    w_blocks: list = []
-
-    for A, Z in enumerate(Zs):
-        pts_A: list = []
-        w_A: list = []
+    # Each element's points relative to its nucleus and their quadrature
+    # weights, built once per element (numpy, then one constant per element).
+    templates = {}
+    for Z in dict.fromkeys(Zs):
+        rel, wq = [], []
         for r, wr, order in _atom_shell_blocks(
             Z, n_radial, lebedev, prune, r_max, radial
         ):
             ang_pts, ang_w = lebedev_grid(order)         # numpy constants
-            ang_pts = jnp.asarray(ang_pts)
-            ang_w_full = jnp.asarray(4.0 * np.pi * ang_w)   # full surface weight
-            r_j = jnp.asarray(r)
-            wr_j = jnp.asarray(wr)
-            pts = coords[A][None, None, :] + r_j[:, None, None] * ang_pts[None, :, :]
-            pts_A.append(pts.reshape(-1, 3))             # depends on coords
-            w_A.append((wr_j[:, None] * ang_w_full[None, :]).reshape(-1))
-        pts = jnp.concatenate(pts_A, axis=0)
-        raw_w = jnp.concatenate(w_A, axis=0)
-        # Fuzzy-Voronoi weights per atom block: the partition transient is
-        # bounded by the chunked evaluation inside becke_partition, and doing
-        # it per atom block keeps this loop's live set at one atom's grid.
-        P = becke_partition(pts, coords, Zs, radii_adjust)   # (ng_A, n_atom)
-        w_blocks.append(raw_w * P[:, A] / P.sum(axis=1))
-        points_blocks.append(pts)
+            rel.append((r[:, None, None] * ang_pts[None, :, :]).reshape(-1, 3))
+            wq.append((wr[:, None] * (4.0 * np.pi * ang_w)[None, :]).reshape(-1))
+        templates[Z] = (jnp.asarray(np.concatenate(rel)), jnp.asarray(np.concatenate(wq)))
 
-    points = jnp.concatenate(points_blocks, axis=0)      # (ng, 3)
-    weights = jnp.concatenate(w_blocks, axis=0)
+    points = jnp.concatenate(
+        [coords[A][None, :] + templates[Z][0] for A, Z in enumerate(Zs)], axis=0
+    )                                                    # (ng, 3), depends on coords
+    raw_w = jnp.concatenate([templates[Z][1] for Z in Zs], axis=0)
+    sizes = np.array([templates[Z][1].shape[0] for Z in Zs])
+    owners = jnp.repeat(jnp.arange(len(Zs)), jnp.asarray(sizes),
+                        total_repeat_length=int(sizes.sum()))
+    # Fuzzy-Voronoi weights of every atom's points in one chunked pass
+    # (becke_weights): one loop in the compiled program, the pair quantities
+    # formed once, and only the owner's normalized cell kept per point.
+    weights = raw_w * becke_weights(points, owners, coords, Zs, radii_adjust)
     return points, weights

@@ -122,52 +122,46 @@ def treutler_radial(n: int, xi: float) -> tuple[np.ndarray, np.ndarray]:
     return r, w
 
 
-def _size_adjustment(Zs, radii_adjust: str | None) -> np.ndarray:
-    """Heteronuclear cell-size parameters ``a_AB`` (antisymmetric, natom²).
+def size_adjustment(bragg, radii_adjust: str | None):
+    """Heteronuclear cell-size parameters ``a_AB`` (antisymmetric, natom²) from
+    the atoms' Bragg radii ``bragg`` (natom,).
 
     Becke 1988, App. A: ``a = u / (u² - 1)`` with ``u = (chi-1)/(chi+1)``.
     ``"becke"`` takes ``chi`` as the Bragg-radius ratio and bounds ``|a|`` by
     0.45; ``"treutler"`` takes the square root of that ratio (JCP 102, 346)
     and bounds ``|a|`` by 1/2, as PySCF does; ``None`` leaves the cells
-    unadjusted.
+    unadjusted. In jnp, so under ``jit`` the natom² matrix is computed from
+    the natom radii rather than embedded as a constant.
     """
-    n_atom = len(Zs)
+    bragg = jnp.asarray(bragg)
+    n_atom = bragg.shape[0]
     if radii_adjust is None:
-        return np.zeros((n_atom, n_atom))
-    bragg = np.asarray([bragg_radius(Z) for Z in Zs])
+        return jnp.zeros((n_atom, n_atom), bragg.dtype)
     chi = bragg[:, None] / bragg[None, :]
     if radii_adjust == "becke":
         bound = 0.45
     elif radii_adjust == "treutler":
-        chi = np.sqrt(chi)
+        chi = jnp.sqrt(chi)
         bound = 0.5
     else:
         raise ValueError(
             f"unknown radii_adjust {radii_adjust!r}; use 'becke', 'treutler' or None."
         )
     u = (chi - 1.0) / (chi + 1.0)
-    return np.clip(u / (u * u - 1.0), -bound, bound)
+    return jnp.clip(u / (u * u - 1.0), -bound, bound)
 
 
-def becke_partition(points, coords, Zs, radii_adjust: str | None = "becke"):
-    """Unnormalized Becke cell functions ``P_A(point)``, shape (n_grid, n_atom).
-
-    Vectorized JAX (differentiable w.r.t. ``coords``); includes the heteronuclear
-    size adjustment selected by ``radii_adjust`` (see :func:`_size_adjustment`).
-    Points are processed in budget-derived chunks so the per-point
-    ``(chunk, A, B)`` transient stays bounded for large molecules
-    (checkpointed, so the backward pass used by the forces rematerializes each
-    chunk instead of storing them all).
-    """
+def _cell_fn(coords, Zs, radii_adjust):
+    """``p -> P_A(p)`` (natom,), the unnormalized Becke cell functions at one
+    point, with the pair quantities (R_AB, a_AB) formed once for all points."""
     coords = jnp.asarray(coords)
     n_atom = coords.shape[0]
-
     # Pair quantities, computed once (natom²).
     dAB = coords[:, None, :] - coords[None, :, :]
     # +eye makes the diagonal sqrt(1) with a finite (zero) gradient; the
     # diagonal entries are masked out of the product below.
     RAB = jnp.sqrt(jnp.sum(dAB * dAB, axis=2) + jnp.eye(n_atom))
-    a = jnp.asarray(_size_adjustment(Zs, radii_adjust))
+    a = size_adjustment(np.asarray([bragg_radius(Z) for Z in Zs]), radii_adjust)
     eye = jnp.eye(n_atom, dtype=bool)
 
     def cell(p):
@@ -186,5 +180,41 @@ def becke_partition(points, coords, Zs, radii_adjust: str | None = "becke"):
         s = jnp.where(eye, 1.0, s)
         return jnp.prod(s, axis=1)                            # P_A = Π_{B≠A} s(ν_AB)
 
+    return cell
+
+
+def becke_partition(points, coords, Zs, radii_adjust: str | None = "becke"):
+    """Unnormalized Becke cell functions ``P_A(point)``, shape (n_grid, n_atom).
+
+    Vectorized JAX (differentiable w.r.t. ``coords``); includes the heteronuclear
+    size adjustment selected by ``radii_adjust`` (see :func:`size_adjustment`).
+    Points are processed in budget-derived chunks so the per-point
+    ``(chunk, A, B)`` transient stays bounded for large molecules
+    (checkpointed, so the backward pass used by the forces rematerializes each
+    chunk instead of storing them all).
+    """
+    n_atom = len(Zs)
     chunk = max(1, _PARTITION_BUDGET // (n_atom * n_atom))
+    cell = _cell_fn(coords, Zs, radii_adjust)
     return _chunked_vmap(cell, chunk_size=chunk, checkpoint=True)(points)
+
+
+def becke_weights(points, owners, coords, Zs, radii_adjust: str | None = "becke"):
+    """Becke weight factors ``P_owner(p) / Σ_A P_A(p)`` of points ``p`` owned
+    by atoms ``owners`` (int, (n_grid,)), shape (n_grid,).
+
+    One chunked pass over every atom's points with the pair quantities formed
+    once, so a molecule's grid is one loop in the compiled program (a pass per
+    atom was natom loops, each with its own natom² constants) and the
+    (n_grid, n_atom) cell functions are never held. Differentiable w.r.t.
+    ``coords``, checkpointed like :func:`becke_partition`.
+    """
+    cell = _cell_fn(coords, Zs, radii_adjust)
+    n_atom = len(Zs)
+
+    def weight(p, owner):
+        P = cell(p)
+        return P[owner] / P.sum()
+
+    chunk = max(1, _PARTITION_BUDGET // (n_atom * n_atom))
+    return _chunked_vmap(weight, chunk_size=chunk, checkpoint=True)(points, owners)

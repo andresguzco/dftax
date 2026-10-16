@@ -100,7 +100,8 @@ def test_gdm_matches_scf_hybrid():
 @pytest.mark.float64
 @pytest.mark.slow
 def test_gdm_matches_scf_open_shell():
-    mol = Molecule.from_xyz("O 0 0 0; H 0 0 0.97", "6-31g", spin=1)
+    # NH2: OH's degenerate pi shell is a knife edge for the DIIS reference
+    mol = Molecule.from_xyz("N 0 0 0; H 1.01 0 0; H -0.26 0.98 0", "6-31g", spin=1)
     _parity(KS(mol, PBE(), grid=becke(35, 50), spin=1))
 
 

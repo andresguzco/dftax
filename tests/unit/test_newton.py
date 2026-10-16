@@ -3,7 +3,7 @@
 
 import pytest
 
-from dftax import KS, Molecule, becke, newton, sad, scf
+from dftax import KS, Molecule, becke, newton, scf
 from dftax.energy.xc import PBE
 
 WATER = "O 0 0 0; H 0.76 0 0.50; H 0.76 0 -0.50"
@@ -23,20 +23,14 @@ def test_newton_matches_scf_on_easy_case():
 
 @pytest.mark.float64
 def test_newton_warm_start_is_quadratic_cleanup():
-    """From a converged density the Newton step count is O(1) (Fe/sto-3g,
-    the open-shell case where ADIIS is unfavorable).
-
-    guess=sad() explicitly, because this case is where the guesses disagree
-    about *which* stationary point they find, and the test needs a converged
-    density rather than a particular one. Measured with plain DIIS: core
-    converges in 84 to -1249.82658286, sad in 124 and the default (minao) in
-    235 to -1249.82658689, i.e. the minao/sad solution is 4e-6 Ha lower and
-    the core one is not the same fixed point. sad reaches the lower solution
-    without the 235-iteration wait.
-    """
-    mol = Molecule.from_xyz("Fe 0 0 0", "sto-3g", spin=4)
-    ks = KS(mol, PBE(), grid=becke(35, 50), spin=4)
-    r0 = scf(ks, guess=sad(), max_iter=200)
+    """From a converged density the Newton step count is O(1), on an open
+    shell (the O2 triplet). Not the Fe atom it used to be: there plain DIIS
+    reaches different stationary points from different guesses and, on CPU,
+    none inside 200 iterations, so the test stood on its reference solver
+    rather than on Newton."""
+    mol = Molecule.from_xyz("O 0 0 0; O 0 0 1.21", "sto-3g", spin=2)
+    ks = KS(mol, PBE(), grid=becke(35, 50), spin=2)
+    r0 = scf(ks)
     r1 = newton(ks, guess=r0.P)
     assert r0.converged and r1.converged
     assert r1.n_iter <= 3

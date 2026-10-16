@@ -217,4 +217,4 @@ def becke_weights(points, owners, coords, Zs, radii_adjust: str | None = "becke"
         return P[owner] / P.sum()
 
     chunk = max(1, _PARTITION_BUDGET // (n_atom * n_atom))
-    return _chunked_vmap(weight, chunk_size=chunk, checkpoint=True)(points, owners)
+    return _chunked_vmap(weight, in_axes=(0, 0), chunk_size=chunk, checkpoint=True)(points, owners)

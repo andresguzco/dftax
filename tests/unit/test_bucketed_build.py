@@ -28,6 +28,7 @@ def _bases(atoms, spherical=True):
 
 
 @pytest.mark.float64
+@pytest.mark.slow    # PR tier: every KS test runs the square shared path
 def test_bucketed_tensor_is_the_bucketed_build():
     basis, aux = _bases(WATER)
     plan0 = plan_eri3c(basis, aux, tol=0.0)
@@ -76,6 +77,7 @@ def test_pair_integrals_are_the_bucketed_build():
 
 
 @pytest.mark.float64
+@pytest.mark.slow    # PR tier: every KS test runs the shared programs (default)
 def test_ks_with_shared_programs_matches(monkeypatch):
     """The whole eager build from shared class programs: the same KS, to
     rounding, as the per-molecule build (energy and Fock at a fixed
@@ -113,7 +115,7 @@ def test_hybrid_switches_to_the_fused_build(monkeypatch):
     orig = energy_mod._build_integrals_shared
     monkeypatch.setattr(energy_mod, "_build_integrals_shared",
                         lambda *a, **k: (shared.append(1), orig(*a, **k))[1])
-    mol = Molecule.from_xyz(WATER, "6-31g*")
+    mol = Molecule.from_xyz(WATER, "sto-3g")
     first = KS(mol, PBE())
     assert len(shared) == 1 and not energy_mod._FUSED_BUILDS  # seen once
     KS(mol, PBE())

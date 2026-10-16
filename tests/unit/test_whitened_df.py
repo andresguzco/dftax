@@ -73,7 +73,7 @@ def test_matches_plain_df_to_machine_precision(aux):
 def test_same_functional_through_every_entry_point(xc, geom, spin):
     """Energy, Fock and orbital gradient against DFCoulomb at the jkfit floor,
     and the closed-form orbital gradient against autodiff of the energy."""
-    plain, white = _pair(geom, "6-31g", xc(), spin=spin)
+    plain, white = _pair(geom, "sto-3g", xc(), spin=spin)
     Cs, P = _orbitals(plain)
     assert abs(float(plain.total(P) - white.total(P))) < 1e-8
     (e0, F0), (e1, F1) = plain.energy_and_fock(P), white.energy_and_fock(P)
@@ -157,7 +157,7 @@ def test_packed_is_the_square_whitened_term(xc, geom, spin):
     """Packing changes the storage, not the contractions: energy, Fock and
     orbital gradient agree with the square whitened term to rounding, the
     Fock is exactly symmetric, and the closed-form gradient is autodiff's."""
-    mol = Molecule.from_xyz(geom, "6-31g*", spin=spin or 0)
+    mol = Molecule.from_xyz(geom, "sto-3g", spin=spin or 0)
     kw = dict(grid=becke(35, 50), spin=spin)
     sq = KS(mol, xc(), coulomb=df(chunk=None), **kw)
     pk = KS(mol, xc(), coulomb=df(chunk=None, packed=True), **kw)

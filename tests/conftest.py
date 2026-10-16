@@ -102,6 +102,16 @@ _RSS_HEADROOM_GIB = 4.0
 _rss_after_clear = 0.0
 
 
+def _clear_programs():
+    """JAX's compiled programs and dftax's ahead-of-time compiled shared
+    integral programs, which jax.clear_caches does not hold."""
+    from dftax.integrals.bucketed import clear_programs
+
+    jax.clear_caches()
+    clear_programs()
+    gc.collect()
+
+
 @pytest.fixture(autouse=True)
 def _free_jax_memory():
     """Release JAX's compilation caches when the process is over budget.
@@ -117,8 +127,7 @@ def _free_jax_memory():
     if rss is not None and rss > _RSS_BUDGET_GIB and (
             rss > _rss_after_clear + _RSS_HEADROOM_GIB
             or rss > 2 * _RSS_BUDGET_GIB):
-        jax.clear_caches()
-        gc.collect()
+        _clear_programs()
         _rss_after_clear = _rss_gib() or 0.0
 
 
@@ -127,8 +136,7 @@ def _free_jax_memory_per_module():
     """The fallback where RSS cannot be read (not Linux): clear per module."""
     yield
     if _rss_gib() is None:
-        jax.clear_caches()
-        gc.collect()
+        _clear_programs()
 
 
 # Every grid dftax fills in by default (KS(mol, xc) and the forces, Hessian,

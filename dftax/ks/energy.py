@@ -522,8 +522,12 @@ def _schedule_fused(key, call):
 
         _FUSED_POOL = ThreadPoolExecutor(max_workers=1,
                                          thread_name_prefix="dftax-fused")
-    _FUSED_BUILDS[key] = _FUSED_POOL.submit(
-        lambda: jax.block_until_ready(call()))
+    def compile_once():
+        # run it once so its executable is compiled and cached; keep nothing,
+        # the outputs are a whole integral build (S, the AO grid, the DF tensor)
+        jax.block_until_ready(call())
+
+    _FUSED_BUILDS[key] = _FUSED_POOL.submit(compile_once)
 
 
 @eqx.filter_jit

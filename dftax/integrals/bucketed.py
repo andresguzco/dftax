@@ -126,6 +126,15 @@ def _workers() -> int:
 _WARM: set = set()
 
 
+def clear_programs():
+    """Drop every compiled shared program held in this process (their
+    serialized exports stay on disk). ``jax.clear_caches`` does not reach
+    them: they are compiled ahead of time and held here."""
+    class_program.cache_clear()
+    pair_program.cache_clear()
+    _WARM.clear()
+
+
 def warm(jobs):
     """Compile every program ``build(*key)`` of ``jobs`` (``(build, key)``
     pairs) side by side. XLA compiles release the GIL, so the programs of a

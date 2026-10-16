@@ -47,8 +47,9 @@ def test_class_programs_are_shared_across_molecules():
         return {k for _, k in class_jobs(basis, aux,
                                          plan_eri3c(basis, aux, tol=0.0))}
 
-    water, methanol = keys(WATER), keys(METHANOL)
-    assert water <= methanol and len(methanol) > len(water)
+    # in 6-31g* carbon's shells have oxygen's (l, nprim) types, so methanol
+    # needs no program water did not
+    assert keys(WATER) <= keys(METHANOL)
 
 
 @pytest.mark.float64

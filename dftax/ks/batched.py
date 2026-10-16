@@ -28,6 +28,7 @@ with independent per-device convergence loops and no collectives.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 import equinox as eqx
@@ -151,6 +152,8 @@ def scf_batched(
         else template.centers.shape[0]
     )
     if isinstance(coulomb, DFSpec):
+        if coulomb.screen == "auto":       # batched geometries never screen
+            coulomb = dataclasses.replace(coulomb, screen=None)
         if coulomb.screen is not None:
             raise ValueError(
                 "scf_batched cannot use df(screen=...): Schwarz pair "
@@ -206,14 +209,16 @@ def scf_batched(
     )
     xc_chunk = _resolve_chunk(
         grid.chunk,
-        becke_grid_size(symbols, grid.n_radial, grid.lebedev, grid.prune, grid.r_max),
+        becke_grid_size(symbols, grid.n_radial, grid.lebedev, grid.prune,
+                        grid.r_max, grid.radial),
         nao_final,
     )
 
     def _build(coords):
         basis = eqx.tree_at(lambda b: b.centers, template, coords[atom_idx])
         gc, gw = becke_grid(
-            symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max
+            symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max,
+            grid.radial, grid.radii_adjust,
         )
         spec = coulomb
         if aux_t is not None:

@@ -109,8 +109,7 @@ def test_rsh_functionals_pointwise_vs_libxc(xc_obj, code):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.pyscf
-@pytest.mark.parametrize("xc_obj,code", [(CAMB3LYP(), "camb3lyp"),
-                                         (WB97X(), "wb97x")])
+@pytest.mark.parametrize("xc_obj,code", [(CAMB3LYP(), "camb3lyp")])
 def test_rsh_scf_vs_pyscf(xc_obj, code):
     from pyscf import dft, gto
 

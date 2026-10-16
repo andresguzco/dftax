@@ -65,6 +65,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
     config.addinivalue_line("markers", "pyscf: marks tests requiring PySCF molecule setup")
     config.addinivalue_line("markers", "float64: marks tests requiring float64 precision")
+    config.addinivalue_line("markers", "default_grid: keep dftax's real default grid (no canonical test grid)")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -75,17 +76,106 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.slow)
 
 
+def _rss_gib() -> float | None:
+    """Current resident set size of this process (Linux), or None."""
+    try:
+        with open("/proc/self/statm") as fh:
+            pages = int(fh.read().split()[1])
+        return pages * os.sysconf("SC_PAGE_SIZE") / 2**30
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+# Clear JAX's compilation caches only when the process has grown past this
+# (GiB; lower it on a small CI runner). Clearing after every test, as the suite
+# used to, kept memory flat but made every test re-trace and re-compile every
+# program it touched, identical ones included: hours of a suite whose systems
+# are a handful of sto-3g molecules.
+_RSS_BUDGET_GIB = float(os.environ.get("DFTAX_TEST_RSS_GB", "12"))
+# RSS rarely shrinks after a clear (the allocator keeps the freed pages and
+# reuses them), so a plain "over budget" test would clear after every test
+# once the process has crossed the budget once. Clear again only when RSS has
+# grown this much past where the last clear left it, or, whatever the last
+# clear left, past twice the budget (a hard ceiling: 24 GiB by default).
+# DFTAX_TEST_RSS_GB=0 clears after every test, as CI does on its 16 GB runner.
+_RSS_HEADROOM_GIB = 4.0
+_rss_after_clear = 0.0
+
+
+def _clear_programs():
+    """JAX's compiled programs and dftax's ahead-of-time compiled shared
+    integral programs, which jax.clear_caches does not hold."""
+    from dftax.integrals.bucketed import clear_programs
+
+    jax.clear_caches()
+    clear_programs()
+    gc.collect()
+    try:                    # hand the freed heap back to the OS (glibc)
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
+
+
 @pytest.fixture(autouse=True)
 def _free_jax_memory():
-    """Release JAX's compilation cache and collect garbage after each test.
+    """Release JAX's compilation caches when the process is over budget.
 
-    The suite compiles a fresh XLA executable per SCF/grad test; without this the
-    cached executables accumulate and OOM a small CI runner mid-run (the cause of
-    the exit-143 kills). Clearing per test bounds memory at a small per-test cost.
+    Cached executables accumulate and can OOM a small runner (the cause of the
+    old exit-143 kills), so memory stays bounded, but programs are shared
+    between tests while it fits. Where RSS cannot be read the caches are
+    cleared per module instead (``_free_jax_memory_per_module``).
     """
+    global _rss_after_clear
     yield
-    jax.clear_caches()
-    gc.collect()
+    rss = _rss_gib()
+    if rss is not None and rss > _RSS_BUDGET_GIB and (
+            rss > _rss_after_clear + _RSS_HEADROOM_GIB
+            or rss > 2 * _RSS_BUDGET_GIB):
+        _clear_programs()
+        _rss_after_clear = _rss_gib() or 0.0
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _free_jax_memory_per_module():
+    """The fallback where RSS cannot be read (not Linux): clear per module."""
+    yield
+    if _rss_gib() is None:
+        _clear_programs()
+
+
+# Every grid dftax fills in by default (KS(mol, xc) and the forces, Hessian,
+# batched and property rebuilds) is this one in the tests: one grid shape for
+# the whole suite, so the programs built on it are shared, and small. A test
+# about the default grid itself opts out with @pytest.mark.default_grid.
+CANONICAL_GRID = dict(n_radial=35, lebedev=50)
+
+
+@pytest.fixture(autouse=True)
+def _canonical_default_grid(request, monkeypatch):
+    if request.node.get_closest_marker("default_grid"):
+        yield
+        return
+    import dftax.grid.grid as grid_mod
+    import dftax.ks.batched
+    import dftax.ks.energy
+    import dftax.ks.forces
+    import dftax.ks.guess
+    import dftax.ks.hessian
+    import dftax.ks.properties
+
+    orig = grid_mod.becke
+
+    def canonical(*args, **kwargs):
+        if not args and "n_radial" not in kwargs and "lebedev" not in kwargs:
+            kwargs = {**CANONICAL_GRID, **kwargs}
+        return orig(*args, **kwargs)
+
+    for mod in (dftax.ks.energy, dftax.ks.forces, dftax.ks.hessian,
+                dftax.ks.batched, dftax.ks.guess, dftax.ks.properties):
+        monkeypatch.setattr(mod, "becke", canonical, raising=False)
+    yield
 
 
 @pytest.fixture

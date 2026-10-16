@@ -24,6 +24,7 @@ TOL = dict(e_tol=1e-11, d_tol=1e-9)
 
 
 @pytest.mark.float64
+@pytest.mark.default_grid      # against PySCF and finite fields on one grid
 class TestDipole:
     def test_dipole_vs_finite_field(self):
         """μ_i == -dE/dE_i (consistency of dipole integrals + field coupling)."""

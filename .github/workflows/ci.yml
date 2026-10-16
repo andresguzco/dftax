@@ -24,6 +24,9 @@ jobs:
     env:
       OMP_NUM_THREADS: "2"
       XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+      # clear compiled programs after every test (tests/conftest.py): the
+      # hosted runner's 16 GB does not hold the whole suite's shared programs
+      DFTAX_TEST_RSS_GB: "0"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.2.0
@@ -33,7 +36,11 @@ jobs:
       - name: Sync (test deps)
         run: uv sync --extra test
       - name: Unit tests (fast subset)
-        run: uv run --extra test pytest tests/unit -q -m "not slow"
+        # memory in the log once a minute: a runner that runs out of it is
+        # reported only as "canceled"
+        run: |
+          (while sleep 60; do echo "runner memory: $(free -m | awk 'NR==2{print $3"/"$2" MiB"}')"; done) &
+          uv run --extra test pytest tests/unit -q -m "not slow"
 
   # Confirm the package installs and runs on the lower bound of requires-python.
   # Core deps only (no PySCF), so this is a cheap import + tiny-calc smoke.

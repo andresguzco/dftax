@@ -75,8 +75,11 @@ def test_df_materialized_screen_compact_gather():
                  "O 12 0 0; H 12.76 0 0.59; H 11.24 0 0.59")
     mol = gto.M(atom=two_water, basis="def2-svp").build()
 
-    ks_dense = KS(mol, LDA(), coulomb=df(AUX))
-    ks_screen = KS(mol, LDA(), coulomb=df(AUX, screen=1e-6))
+    # the plain square term, whose int3c this reads (screening alone would
+    # select the packed whitened term)
+    ks_dense = KS(mol, LDA(), coulomb=df(AUX, whiten=False, packed=False))
+    ks_screen = KS(mol, LDA(), coulomb=df(AUX, screen=1e-6, whiten=False,
+                                          packed=False))
     assert isinstance(ks_screen.coulomb, DFCoulomb)
 
     dense = np.asarray(ks_dense.coulomb.int3c)

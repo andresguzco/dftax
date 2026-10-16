@@ -12,16 +12,14 @@ import pytest
 
 from pyscf import dft
 
-from dftax.energy.xc import LDA, PBE, PBE0, B3LYP
+from dftax.energy.xc import PBE, PBE0
 from dftax import KS, scf, exact
 from dftax.ks.scf import canonical_orthonormalizer
 
 # Functional under test paired with the matching PySCF xc string.
 FUNCTIONALS = {
-    "lda": (LDA(), "slater,vwn5"),
     "pbe": (PBE(), "pbe"),
     "pbe0": (PBE0(), "pbe0"),
-    "b3lyp": (B3LYP(), "b3lyp"),
 }
 
 

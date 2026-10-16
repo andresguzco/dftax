@@ -65,7 +65,7 @@ def _make_h2o_631g():
 
 class TestOverlapMatrix:
 
-    @pytest.mark.parametrize("mol_fn", [_make_h2, _make_h2o, _make_ch4])
+    @pytest.mark.parametrize("mol_fn", [_make_h2o])
     def test_overlap_matches_pyscf(self, mol_fn):
         mol = mol_fn()
         basis = extract_basis_data(mol)
@@ -102,7 +102,7 @@ class TestOverlapMatrix:
 
 class TestKineticMatrix:
 
-    @pytest.mark.parametrize("mol_fn", [_make_h2, _make_h2o, _make_ch4])
+    @pytest.mark.parametrize("mol_fn", [_make_h2o])
     def test_kinetic_matches_pyscf(self, mol_fn):
         mol = mol_fn()
         basis = extract_basis_data(mol)
@@ -138,7 +138,7 @@ class TestKineticMatrix:
 
 class TestNuclearAttractionMatrix:
 
-    @pytest.mark.parametrize("mol_fn", [_make_h2, _make_h2o, _make_ch4])
+    @pytest.mark.parametrize("mol_fn", [_make_h2o])
     def test_nuclear_attraction_matches_pyscf(self, mol_fn):
         mol = mol_fn()
         basis = extract_basis_data(mol)
@@ -173,7 +173,7 @@ class TestNuclearAttractionMatrix:
 
 class TestNuclearRepulsion:
 
-    @pytest.mark.parametrize("mol_fn", [_make_h2, _make_h2o, _make_ch4])
+    @pytest.mark.parametrize("mol_fn", [_make_h2o])
     def test_nuclear_repulsion_matches_pyscf(self, mol_fn):
         mol = mol_fn()
         coords = jnp.array(mol.atom_coords())

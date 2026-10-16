@@ -57,8 +57,8 @@ def test_lebedev_new_orders_match_pyscf(order):
 def test_nwchem_prune_matches_pyscf_rule():
     """Per-shell angular orders equal PySCF's nwchem_prune for the same radial
     nodes. Even n_radial: odd counts place a Chebyshev node exactly on a
-    region boundary, where either side is a valid quadrature and the two
-    libraries' last-bit radii constants may disagree."""
+    region boundary, where either side is a valid quadrature and float
+    rounding picks one."""
     from pyscf.dft import gen_grid
 
     for Z in list(range(1, 37)) + [54]:
@@ -68,14 +68,16 @@ def test_nwchem_prune_matches_pyscf_rule():
             ref = gen_grid.nwchem_prune(Z, r, n_ang)
             ours = np.concatenate([
                 [order] * rr.shape[0]
-                for rr, _, order in _atom_shell_blocks(Z, n_rad, n_ang, "nwchem", None)
+                for rr, _, order in _atom_shell_blocks(
+                    Z, n_rad, n_ang, "nwchem", None, "becke"
+                )
             ])
             assert np.array_equal(ref, ours), (Z, n_rad, n_ang)
 
 
 def test_prune_rejects_unknown_scheme():
     with pytest.raises(ValueError, match="unknown prune scheme"):
-        _atom_shell_blocks(8, 75, 302, "sg9", None)
+        _atom_shell_blocks(8, 75, 302, "sg9", None, "becke")
 
 
 # ---------------------------------------------------------------------------
@@ -83,16 +85,21 @@ def test_prune_rejects_unknown_scheme():
 # ---------------------------------------------------------------------------
 
 def test_pruned_grid_size_and_tail():
+    # Becke's mapping: its tail is what r_max cuts (Treutler's ends inside).
     mol = Molecule.from_xyz(WATER, "sto-3g")
     syms, coords = mol.symbols, mol.atom_coords()
-    gc_p, gw_p = becke_grid(syms, coords)                        # pruned default
-    gc_f, gw_f = becke_grid(syms, coords, prune=None, r_max=None)
+    becke_kw = dict(radial="becke", radii_adjust="becke")
+    gc_p, gw_p = becke_grid(syms, coords, 75, 302, **becke_kw)  # pruned
+    gc_f, gw_f = becke_grid(syms, coords, 75, 302, prune=None, r_max=None,
+                            **becke_kw)
     assert gc_p.shape[0] < 0.6 * gc_f.shape[0]
-    assert gc_p.shape[0] == becke_grid_size(syms)                # static size helper
+    assert gc_p.shape[0] == becke_grid_size(syms, 75, 302, radial="becke")
+    assert becke_grid(syms, coords)[0].shape[0] == becke_grid_size(syms)
     assert float(jnp.abs(gc_p).max()) <= 45.0 + float(jnp.abs(jnp.asarray(coords)).max())
     assert float(jnp.abs(gc_f).max()) > 100.0                    # the old tail
 
 
+@pytest.mark.default_grid      # compares the default grid with the full one
 def test_pruned_energy_matches_full_grid():
     mol = Molecule.from_xyz(WATER, "sto-3g")
     e_pruned = scf(KS(mol, PBE())).e_tot                         # all defaults
@@ -101,25 +108,45 @@ def test_pruned_energy_matches_full_grid():
 
 
 @pytest.mark.pyscf
+@pytest.mark.default_grid      # it is about the default grid itself
 def test_pruned_energy_vs_pyscf_reference(water_mol, water_ks):
     from dftax import exact
 
     # exact Coulomb: the PySCF reference is exact-ERI, tighter than RI error.
+    # For water the default grid is PySCF's default grid, so only the SCF
+    # convergence is left (4e-11 measured; Becke's scheme sits 4e-7 away).
     ks = KS(water_mol, PBE(), coulomb=exact())                   # pruned default
     res = scf(ks)
     assert res.converged
-    assert abs(res.e_tot - water_ks.e_tot) < 5e-5
+    assert abs(res.e_tot - water_ks.e_tot) < 1e-8
 
 
-def test_weight_cutoff_compresses_eager_path():
+@pytest.mark.default_grid      # the default grid against itself uncut
+def test_weight_cutoff_zeroes_weights_and_keeps_points():
+    """The cutoff zeroes negligible weights rather than dropping points, so
+    the point count does not change and neither does the energy."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     # exact(): this compares two separately converged SCF runs, and the test
     # targets the weight cutoff; on the DF backend the stopping-tolerance
     # flap through the RI metric (~5e-9) would drown the 1e-9 bound.
     ks_cut = KS(mol, PBE(), coulomb=exact())                     # cutoff=1e-15
     ks_all = KS(mol, PBE(), grid=becke(cutoff=None), coulomb=exact())
-    assert ks_cut.xc_term.ao.shape[0] < ks_all.xc_term.ao.shape[0]
+    w_cut = np.asarray(ks_cut.xc_term.weights)
+    assert w_cut.shape == ks_all.xc_term.weights.shape
+    assert np.any(w_cut == 0.0) and np.all(np.abs(w_cut[w_cut != 0]) > 1e-15)
     assert abs(scf(ks_cut).e_tot - scf(ks_all).e_tot) < 1e-9
+
+
+def test_grid_shape_does_not_depend_on_the_geometry():
+    """Two geometries of one molecule get grids of one size, so the second
+    build reuses every program the first compiled. Dropping the points under
+    the weight cutoff made the size, and so the compiled build, a function of
+    the coordinates."""
+    a = KS(Molecule.from_xyz(WATER, "sto-3g"), PBE())
+    b = KS(Molecule.from_xyz("O 0 0 0.03; H 0.79 0.02 0.47; H 0.74 -0.01 "
+                             "-0.53", "sto-3g"), PBE())
+    assert a.xc_term.weights.shape == b.xc_term.weights.shape
+    assert a.xc_term.ao.shape == b.xc_term.ao.shape
 
 
 # ---------------------------------------------------------------------------
@@ -165,12 +192,13 @@ def test_resolve_chunk_policy():
     assert _resolve_chunk(4096, 10, 10) == 4096                  # explicit passthrough
 
 
+@pytest.mark.default_grid      # monkeypatch.undo() would drop the test grid
 def test_auto_chunk_selects_backend(monkeypatch):
     import dftax.ks.energy as energy_mod
 
     mol = Molecule.from_xyz(WATER, "sto-3g")
     assert isinstance(KS(mol, PBE()).xc_term, GridXC)            # small: materialized
-    monkeypatch.setattr(energy_mod, "_AO_GRID_BUDGET", 1024)     # force streaming
+    monkeypatch.setattr(energy_mod, "_ao_grid_budget", lambda: 1024)  # stream
     ks_s = KS(mol, PBE())
     assert isinstance(ks_s.xc_term, StreamedGridXC)
     e_s = scf(ks_s).e_tot
@@ -196,3 +224,16 @@ def test_pruned_grid_traces_under_jit_and_vmap():
     batch = jnp.stack([coords, coords * 1.02])
     w = jax.vmap(total_weight)(batch)
     assert w.shape == (2,) and bool(jnp.isfinite(w).all())
+
+
+def test_default_grid_takes_the_screening_policy(monkeypatch):
+    """KS(mol, xc) with no grid must follow becke()'s screen="auto" gate like
+    an explicit becke() does; it used to read the policy off grid=None and
+    never screen."""
+    import dftax.grid.grid as grid_mod
+    from dftax.ks.terms import ScreenedGridXC
+
+    monkeypatch.setattr(grid_mod, "SCREEN_AUTO_MIN_ATOMS", 3)
+    mol = Molecule.from_xyz(WATER, "sto-3g")
+    assert isinstance(KS(mol, PBE()).xc_term, ScreenedGridXC)
+    assert isinstance(KS(mol, PBE(), grid=becke()).xc_term, ScreenedGridXC)

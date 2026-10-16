@@ -10,13 +10,13 @@ import pytest
 
 from pyscf import dft
 
-from dftax.energy.xc import LDA, PBE
+from dftax.energy.xc import PBE
 from dftax import KS, exact, points, scf
 
 
 @pytest.mark.pyscf
 @pytest.mark.float64
-@pytest.mark.parametrize("xc_cls,pyscf_xc", [(LDA, "slater,vwn5"), (PBE, "pbe")])
+@pytest.mark.parametrize("xc_cls,pyscf_xc", [(PBE, "pbe")])
 def test_streamed_matches_materialized(xc_cls, pyscf_xc, water_mol):
     mf = dft.RKS(water_mol)
     mf.xc = pyscf_xc

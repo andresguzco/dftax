@@ -543,15 +543,33 @@ class SAPGuess(eqx.Module):
     exps: Float[Array, "natom kmax"]
     coefs: Float[Array, "natom kmax"]
     symbols: tuple[str, ...] = eqx.field(static=True)
-    n_radial: int = eqx.field(static=True)
-    lebedev: int = eqx.field(static=True)
+    n_radial: int | str = eqx.field(static=True)
+    lebedev: int | str = eqx.field(static=True)
     prune: str | None = eqx.field(static=True)
     r_max: float | None = eqx.field(static=True)
+    radial: str = eqx.field(static=True)
+    radii_adjust: str | None = eqx.field(static=True)
 
 
-def _superposition_density(symbols, basis, atom_coords, block_fn):
+# Assembled superposition densities, keyed on the element sequence and the
+# basis structure. The block-diagonal P depends on neither the geometry nor
+# anything else, yet assembling it costs host work per call (shell-to-atom
+# matching, sub-basis slicing, transfers): 5.7 ms a small molecule, the
+# largest part of setting up a batched gdm once its padding was compiled. A
+# trajectory or a conformer set asks for the same one every time.
+_SUPERPOSITION_CACHE: dict = {}
+_SUPERPOSITION_CACHE_MAX = 256
+
+
+def _superposition_density(symbols, basis, atom_coords, block_fn, key=None):
     """Assemble the block-diagonal ``P_tot`` from per-element density blocks
-    (``block_fn(symbol, sub_basis)``), computed once per unique element."""
+    (``block_fn(symbol, sub_basis)``), computed once per unique element, and
+    memoized on ``key`` (with the symbols and the basis structure) when given."""
+    if key is not None:
+        key = (key, tuple(symbols), static_fingerprint(basis))
+        hit = _SUPERPOSITION_CACHE.get(key)
+        if hit is not None:
+            return jnp.asarray(hit)
     slices = _atom_slices(basis, atom_coords)
     nao = (
         basis.cart2sph.shape[1]
@@ -564,6 +582,10 @@ def _superposition_density(symbols, basis, atom_coords, block_fn):
         if sym not in cache:
             cache[sym] = np.asarray(block_fn(sym, _atom_subbasis(basis, cart_sl, fin_sl)))
         P[fin_sl, fin_sl] = cache[sym]
+    if key is not None:
+        if len(_SUPERPOSITION_CACHE) >= _SUPERPOSITION_CACHE_MAX:
+            _SUPERPOSITION_CACHE.clear()
+        _SUPERPOSITION_CACHE[key] = P
     return jnp.asarray(P)
 
 
@@ -583,12 +605,14 @@ def _resolve_guess(spec, symbols, basis, atom_coords):
         P = _superposition_density(
             symbols, basis, atom_coords,
             lambda s, sb: _minao_block(s, sb, spec.basis),
+            key=("minao", spec.basis),
         )
         return DensityGuess(P=P)
     if isinstance(spec, SADSpec):
         P = _superposition_density(
             symbols, basis, atom_coords,
             lambda s, sb: _atomic_hf_density(s, sb)[0],
+            key=("sad",),
         )
         return DensityGuess(P=P)
     if isinstance(spec, SAPSpec):
@@ -603,7 +627,8 @@ def _resolve_guess(spec, symbols, basis, atom_coords):
         return SAPGuess(
             exps=jnp.asarray(exps), coefs=jnp.asarray(coefs),
             symbols=tuple(symbols), n_radial=g.n_radial, lebedev=g.lebedev,
-            prune=g.prune, r_max=g.r_max,
+            prune=g.prune, r_max=g.r_max, radial=g.radial,
+            radii_adjust=g.radii_adjust,
         )
     raise TypeError(f"unknown guess spec: {spec!r}")
 
@@ -640,6 +665,7 @@ def _initial_density(resolved, ks, X):
             list(resolved.symbols), ks.atom_coords,
             resolved.n_radial, resolved.lebedev,
             resolved.prune, resolved.r_max,
+            resolved.radial, resolved.radii_adjust,
         )
         V = _sap_matrix(
             ks.basis, ks.atom_coords, resolved.exps, resolved.coefs, gc, gw

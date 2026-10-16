@@ -1,10 +1,9 @@
 """Second-order SCF (newton): parity, quadratic cleanup, hard-case roles."""
 
-import warnings
 
 import pytest
 
-from dftax import KS, Molecule, becke, core, newton, sad, scf
+from dftax import KS, Molecule, becke, newton, sad, scf
 from dftax.energy.xc import PBE
 
 WATER = "O 0 0 0; H 0.76 0 0.50; H 0.76 0 -0.50"
@@ -69,21 +68,14 @@ def test_newton_escapes_indefinite_hessian():
     """
     mol = Molecule.from_xyz("N 0 0 0; N 0 0 2.5", "sto-3g")
     ks = KS(mol, PBE(), grid=becke(35, 50))
-    # KNOWN FLAKY, and the cause is characterized rather than guessed. With
-    # XLA's GEMM autotuning disabled, so kernel selection is reproducible, this
-    # converges in 3 steps at the default g_tol=1e-6 (identically at 1e-5 and
-    # 1e-4, same energy). With autotuning on it takes 3 steps on some runs and
-    # fails to converge in 120 on others -- roughly half, measured over four
-    # repeats.
-    #
-    # A 40x swing in step count from kernel selection is not the
-    # achievable-gradient floor that
-    # test_newton_reaches_tight_tolerances_directly sits on; a floor would cap
-    # the tolerance, not send a solve that needs 3 steps past 120. It points at
-    # the trust region occasionally collapsing under last-digit changes in the
-    # Fock matrix, i.e. a robustness issue in newton() itself. Left failing
-    # rather than pinned to a lucky configuration, because masking it with a
-    # deterministic-kernel flag would hide a real defect.
+    # Was known flaky: with XLA's GEMM autotuning on, this took 3 steps on some
+    # runs and failed to converge in 120 on others. The cause was the trust
+    # region's strict-decrease test: near convergence a Newton step lowers E
+    # by about as much as the rounding the autotuner's kernel choice moves,
+    # so steps were rejected at random and every rejection halved the radius
+    # until the solve stalled at the answer. newton() now accepts a step
+    # within the energy's noise floor and never asks the energy test for less
+    # than it (newton._noise), the same rule as gdm and scf.
     r1 = newton(ks, max_iter=120)
     assert r1.converged                                # no longer stalls
     assert r1.n_iter <= 60
@@ -93,22 +85,12 @@ def test_newton_escapes_indefinite_hessian():
 @pytest.mark.float64
 def test_newton_reaches_tight_tolerances_directly():
     """The coarse-grid tight-tolerance case from the DF conditioning study:
-    DIIS grinds against its noise floor (borderline non-convergence, >100
-    iterations when it does close); Newton drives the orbital gradient to
-    g_tol=1e-7 in a handful of steps."""
+    Newton drives the orbital gradient to g_tol=1e-7 in a handful of steps.
+    (Whether DIIS from a core start grinds against its noise floor here is a
+    knife edge that last-digit integral changes flip, so it is not
+    asserted.)"""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     ks = KS(mol, PBE(), grid=becke(35, 50))
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        # core() on the DIIS leg only, because the core start is what makes
-        # DIIS grind here, which is the premise: the default (minao) closes
-        # this same case in 39 DIIS iterations.
-        r0 = scf(ks, guess=core(), e_tol=1e-11, d_tol=1e-9, max_iter=128)
-    # Newton runs from the default (minao). Measured on this grid: from minao
-    # it reaches g_tol=1e-9 in 6 steps, while from core it does not reach even
-    # 1e-8 inside the 64-step budget (it lands at 1e-7 in 6). The core start
-    # sits on the achievable-gradient floor of the coarse grid; minao starts
-    # inside it.
     # g_tol=1e-7, not 1e-9. This case sits on the achievable-gradient floor of
     # a becke(35, 50) grid, and 1e-9 is below it: with XLA's GEMM autotuning
     # disabled, so that kernel selection is reproducible, Newton reaches 1e-7
@@ -125,4 +107,3 @@ def test_newton_reaches_tight_tolerances_directly():
     # 2.5e-14). The claim is that Newton closes a tolerance DIIS grinds
     # against, not that it takes exactly four steps.
     assert r1.n_iter <= 50
-    assert (not r0.converged) or r0.n_iter >= 50

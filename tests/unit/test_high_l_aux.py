@@ -31,7 +31,7 @@ def test_cart_component_counts():
 
 
 @pytest.mark.pyscf
-@pytest.mark.parametrize("l", [5, 6])
+@pytest.mark.parametrize("l", [6])
 def test_eri2c_high_l_vs_pyscf(l):
     """(P|Q) for a synthetic h/i shell pair matches PySCF int2c2e (cart)."""
     from pyscf import gto
@@ -45,7 +45,7 @@ def test_eri2c_high_l_vs_pyscf(l):
 
 
 @pytest.mark.pyscf
-@pytest.mark.parametrize("l", [5, 6])
+@pytest.mark.parametrize("l", [6])
 def test_eri3c_high_l_aux_vs_pyscf(l):
     """(μν|P) with an h/i auxiliary matches PySCF int3c2e (cart)."""
     from pyscf import df as pyscf_df

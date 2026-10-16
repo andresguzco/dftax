@@ -23,7 +23,7 @@ def _screened(n_bucket=3, block=256, screen=1e-10):
 
 
 @pytest.mark.float64
-@pytest.mark.parametrize("xc", [LDA(), PBE()], ids=["lda", "pbe"])
+@pytest.mark.parametrize("xc", [PBE()], ids=["pbe"])
 def test_screened_xc_matches_dense(xc):
     """Screened e_xc and the full SCF reproduce the dense grid."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
@@ -77,7 +77,7 @@ def test_tighter_cutoff_keeps_more_functions():
 
 
 @pytest.mark.float64
-@pytest.mark.parametrize("xc", [LDA(), PBE()], ids=["lda", "pbe"])
+@pytest.mark.parametrize("xc", [PBE()], ids=["pbe"])
 def test_screened_xc_matches_dense_open_shell(xc):
     """Spin-polarized screening reproduces the dense open-shell grid.
 

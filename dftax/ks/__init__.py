@@ -19,11 +19,13 @@ from dftax.ks.shard import mesh, MeshSpec
 from dftax.ks.terms import (
     exact, df,
     CoulombTerm, ExactCoulomb, StreamedExactCoulomb, DFCoulomb, StreamedDFCoulomb,
+    WhitenedDFCoulomb, PackedDFCoulomb,
     XCTerm, GridXC, StreamedGridXC,
 )
 from dftax.ks.scf import scf, adiis, fermi, KSResult
 from dftax.ks.newton import newton, roks
 from dftax.ks.minimize import minimize
+from dftax.ks.gdm import gdm
 from dftax.ks.forces import forces
 from dftax.ks.batched import scf_batched, BatchedResult
 from dftax.ks.properties import (
@@ -36,9 +38,10 @@ __all__ = [
     "KS", "System", "exact", "df", "mesh",
     "distributed", "is_coordinator", "barrier",
     "core", "sad", "minao", "sap",
-    "scf", "minimize", "forces", "scf_batched", "KSResult", "BatchedResult",
+    "scf", "minimize", "gdm", "forces", "scf_batched", "KSResult", "BatchedResult",
     "CoulombTerm", "ExactCoulomb", "StreamedExactCoulomb", "DFCoulomb",
-    "StreamedDFCoulomb", "XCTerm", "GridXC", "StreamedGridXC",
+    "StreamedDFCoulomb", "WhitenedDFCoulomb", "PackedDFCoulomb",
+    "XCTerm", "GridXC", "StreamedGridXC",
     "dipole", "polarizability", "hessian", "vibrations", "ir_spectrum",
     "raman_spectrum", "alchemical_deriv",
     "Vibrations", "IRSpectrum", "RamanSpectrum",

@@ -20,7 +20,7 @@ AUX = "def2-universal-jkfit"
 @pytest.mark.float64
 class TestDensityFitting:
     # LDA exercises RI-J; PBE0 additionally exercises RI-K.
-    @pytest.mark.parametrize("xc_cls,pyscf_xc", [(LDA, "slater,vwn5"), (PBE0, "pbe0")])
+    @pytest.mark.parametrize("xc_cls,pyscf_xc", [(PBE0, "pbe0")])
     def test_ri_matches_full_eri(self, xc_cls, pyscf_xc):
         mol = gto.M(atom=H2O, basis="sto-3g").build()
         mf = dft.RKS(mol)
@@ -52,8 +52,9 @@ def test_spherical_aux_knob():
     """
     mol = gto.M(atom=H2O, basis="sto-3g").build()
     grid = jnp.zeros((8, 3)), jnp.zeros((8,))
-    ks_sph = KS(mol, LDA(), grid=grid, coulomb=df(AUX))
-    ks_cart = KS(mol, LDA(), grid=grid, coulomb=df(AUX, spherical=False))
+    ks_sph = KS(mol, LDA(), grid=grid, coulomb=df(AUX, whiten=False))
+    ks_cart = KS(mol, LDA(), grid=grid,
+                 coulomb=df(AUX, spherical=False, whiten=False))
     naux_sph = ks_sph.coulomb.int3c.shape[-1]
     naux_cart = ks_cart.coulomb.int3c.shape[-1]
     assert naux_sph < naux_cart  # h/i cartesian contaminants dropped

@@ -4,6 +4,138 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.9.0] - 2026-10-16
+
+### Added
+- **Direct minimization.** `gdm(ks, ...)` minimizes the KS energy by L-BFGS
+  over occupied-virtual rotations, evaluated through the occupied orbitals
+  instead of a Fock build per step: closed-form `exp(κ)` with no `expm`, an
+  orbital-energy-difference preconditioner, a line search aware of the
+  energy's rounding, and the SCF commutator as the stopping test. On an A100
+  (def2-svp) it matches DIIS warm (cubane PBE 71 against 69 ms,
+  bicyclo[2.2.2]octane PBE0 186 against 198 ms) and converges where DIIS does not (Cr2 at
+  1.68 Å in 80 to 93 steps).
+- **`gdm_batched(kss)`**: different molecules padded to common sizes and
+  minimized in one compiled program (closed and open shells, pure and hybrid,
+  range-separated included). Padding is inert by construction. A system left
+  unconverged or in a non-aufbau state is re-solved alone by `gdm`
+  (`BatchedGDMResult.fallback`). 24 small molecules, 6-31g: every energy equal
+  to the sequential SCF to 6e-13.
+- **Orbital-route evaluation**: `KS.energy_and_grad_orbitals` (the XC density
+  from `ψ = ao·C`, DF exchange through the orbitals with a closed-form
+  gradient) and `KS.occupations()`.
+- **Whitened density fitting, on by default.** `WhitenedDFCoulomb` stores
+  `B = Lᵀ T` with `L Lᵀ = V⁺`, whitened in place inside the build, so neither
+  RI-J nor RI-K multiplies by the metric again: bicyclo[2.2.2]octane PBE0
+  Fock 13.46 to 12.88 ms, gdm 152 to 135 ms. `df(whiten=None)` whitens
+  concrete single-device materialized builds; traced builds (forces, Hessian,
+  `scf_batched`) keep `DFCoulomb`.
+- **Packed, pair-screened DF tensor.** `PackedDFCoulomb` stores `(naux,
+  npair)` over the kept shell pairs, the same functional as the square
+  whitened term to 1e-14. `df(packed="auto")` packs when pair screening is on
+  or only the packed tensor fits the device; `df(screen="auto")` screens at
+  1e-10 relative from 50 atoms. Forces and the analytic Hessian take the
+  packed tensor too.
+- **Exact shell-pair Schwarz factors** from the diagonal quartets alone
+  (`shell_pair_schwarz`): the same keep sets as the flat path, cubane 348 s to
+  22 s on CPU, cholesterol 0.75 s to 0.054 s on GPU.
+- **Shared integral programs across molecules.** An eager whitened build
+  assembles its one-electron integrals, metric and 3-center tensor from
+  per-class programs keyed by the shell class alone, compiled ahead of time
+  side by side and serialized (`jax.export`) next to the compilation cache, so
+  a molecule reuses every program an earlier molecule compiled. A structure's
+  repeat builds switch to its fused per-molecule program once that has
+  compiled in the background. A100, def2-svp:
+
+  | | shared programs | per-molecule program |
+  |---|---:|---:|
+  | cubane, empty cache | 189 s | 188 s |
+  | bicyclo[2.2.2]octane after cubane | **26 s** | 195 s |
+  | either, new process, warm cache | **12 s** | 50 to 56 s |
+
+  `DFTAX_BUCKETED=0` turns it off.
+- **Grid choices** on `becke(...)` and `becke_grid(...)`: `radial`
+  (`"treutler"` or `"becke"`), `radii_adjust` (`"treutler"`, `"becke"` or
+  `None`), and `"pyscf"` as a value of `n_radial` and `lebedev` for PySCF's
+  level-3 counts per period. With `lebedev="pyscf"` the grid reproduces
+  PySCF's default `Grids`, pruned or not (checked on water, methane, ammonia
+  and H2S: points to 4e-15 Bohr, weights to 1e-13).
+- **Scripts**: `solver_ab.py`, `batch_throughput.py`, `batched_profile.py`,
+  `batched_hard.py`, `xc_backend_ab.py`, `xc_orbital_ab.py`,
+  `whiten_ab.py`, `scale_profile.py`, `build_profile.py`,
+  `compile_probe.py`, `grid_scheme_bench.py`, and `scripts/bench/` against
+  GPU4PySCF.
+
+### Changed
+- **The default grid is PySCF's scheme.** `becke()` now maps its radial
+  shells with Treutler-Ahlrichs M4 (`radial="treutler"`), sizes the Becke
+  cells with Treutler's adjustment (`radii_adjust="treutler"`) and takes
+  PySCF's level-3 shell counts per element (`n_radial="pyscf"`: 50 for H, 75
+  for Li-Ne, 80 for Na-Ar); still 302 Lebedev points, NWChem-pruned. Through
+  Ne this is PySCF's default `Grids` point for point, up to the
+  negligible-weight points the build drops. On bicyclo[2.2.2]octane /
+  def2-svp / PBE the default grid's error against the converged energy
+  (Treutler cells at (200, 770)) goes from 8.7e-5 Ha to 1.1e-5, with 8% fewer
+  points (225k against 245k after the weight cutoff); at (75, 302) unpruned
+  it goes from 9.3e-5 to 9.5e-6. Energies on the default grid move by about
+  that much (7.6e-5 there). The previous default is `becke(75, 302,
+  radial="becke", radii_adjust="becke")`.
+- **Bragg radii at full precision.** The table held PySCF's values rounded to
+  eight decimals. The old grid moves by ~1e-13 in the parity gate's
+  exact-ERI energies, within its tolerances.
+- **The grid's shape no longer depends on the geometry.** The weight cutoff
+  zeroes negligible weights instead of dropping their points, so a new
+  geometry of a molecule reuses its compiled programs (water, warm process:
+  48.6 s to 26.3 ms per new geometry), at about 8% more points.
+- **Shell pairs are oriented by type**, `(l, nprim)`, so the integral class set
+  depends on the basis and the elements, not on the atom order: cubane 161 to
+  100 3-center classes, cold end to end 280 s to 207 s, host peak 7.1 to
+  5.1 GiB.
+- **The factored 3-center planner** stores a class as bra pairs x aux shells:
+  coronene plans in 0.03 s instead of 5.1 s, with a 91 MiB module instead of
+  588 MiB. The square build is bit-identical.
+- **The materialized AO grid is sized to the device** (an eighth of its pool,
+  never below the old fixed budget), so mid-size molecules keep their AO
+  values instead of recomputing them every iteration: bicyclo[2.2.2]octane
+  PBE Fock 23.2 to 8.8 ms.
+- **The grid screening planner is vectorized**: cholesterol 2.45 s to 0.43 s,
+  the same plan.
+- **New dependency: `flatbuffers`**, for the serialized integral programs.
+- **The test suite** checks one case per code path (no functional, molecule or
+  basis sweeps), runs every default grid at one small canonical size, and
+  shares compiled programs between tests.
+
+### Fixed
+- **The default grid never screened.** `KS(mol, xc)` read the screening policy
+  off an unfilled grid spec, so the screened XC that `becke()` turns on from
+  50 atoms never applied to the default grid.
+- **Newton and ROKS stalled at random near convergence.** The trust region
+  accepted only a strict energy decrease, and a final step lowers the energy
+  by about as much as run-to-run GEMM rounding. Both now accept a step within
+  the energy's noise floor (`1e-10 |E| + 1e-12`), as `scf` and `gdm` do.
+- **Spec rebuilds** (`_resolve_aux`, properties, Hessian) keep every `DFSpec`
+  field.
+- The DF memory budget prices both tensors of a range-separated hybrid.
+
+### Notes
+- **Energies move at the density-fitting floor.** Whitening reorders the
+  contraction against the overcomplete jkfit metric, whose kept band
+  amplifies rounding about 1e7: about 1e-9 Ha at a fixed density, 1.1e-7 in
+  cubane's converged energy. Against a well-conditioned aux set the two
+  agree to 1e-14.
+- **The parity gate is re-baselined.** The default grid moves every case
+  (fixed-density energies by 5.6e-7 to 5.9e-5 Ha, 1.2e-3 on the coarse
+  wB97X-V case, forces by 3e-5), and whitening adds about 1e-9 on the DF
+  cases.
+- Becke's cell-size adjustment converges slowly, and not monotonically, in
+  the angular order: on bicyclo[2.2.2]octane its (200, 770) energy is ~7e-6
+  below the limit that both cell schemes reach at 974 and 1202 points, while
+  Treutler's is within 3e-7 of it at 770 and both radial mappings are
+  converged at 200 shells. Against that limit the old (75, 302) error is
+  9.3e-5 rather than the 8.6e-5 it showed against its own (200, 770).
+
 ## [0.8.1] - 2026-09-21
 
 ### Changed

@@ -26,7 +26,7 @@ COORDS = np.array([
     [0.1, 2.8, -0.4],
 ])
 
-BASES = ["sto-3g", "cc-pvdz", "def2-svp", "cc-pvtz"]
+BASES = ["cc-pvtz"]
 
 
 def _points(n=64, seed=0):

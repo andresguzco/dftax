@@ -4,7 +4,7 @@ basis.
 For cc-pVDZ the two ship different contractions of the same space: BSE gives
 carbon's s block as the canonical general contraction, PySCF's file splits the
 diffuse primitive out. The invariant is therefore span equivalence, not matrix
-equality; the overlaps differ, the variational energy does not.
+equality; the overlaps differ, the Rayleigh-Ritz values do not.
 
 ``test_native_pipeline`` covers the segmented case (sto-3g) elementwise.
 """
@@ -15,12 +15,11 @@ import pytest
 
 from pyscf import gto
 
-from dftax import KS, exact, minao, scf
 from dftax.basis.loader import build_basis_data
 from dftax.energy.gto import extract_basis_data
-from dftax.energy.xc import LDA
-from dftax.integrals import overlap_matrix
-from dftax.system.molecule import Molecule
+from dftax.integrals import (
+    kinetic_matrix, nuclear_attraction_matrix, overlap_matrix,
+)
 
 
 H2O = "O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043"
@@ -67,26 +66,22 @@ def test_general_contraction_differs_elementwise():
 
 @pytest.mark.pyscf
 @pytest.mark.float64
-@pytest.mark.slow
 def test_general_contraction_spans_the_same_space():
-    """Same span, same variational energy. Both sides run through dftax on one
-    shared grid and the exact 4-center backend, so the only difference is which
-    contraction of cc-pVDZ was used."""
-    from pyscf import dft
+    """Same span, same Rayleigh-Ritz values: the core Hamiltonian's
+    generalized eigenvalues ``h c = e S c`` are a property of the space, not
+    of the contraction, so they agree although S and h differ (above). A
+    different span moves them at the 1e-3 level the overlaps differ by."""
+    pmol, native, pyscf_side = _pair("cc-pvdz")
+    X = jnp.asarray(pmol.atom_coords())
+    Z = jnp.asarray(pmol.atom_charges(), dtype=jnp.float64)
 
-    pmol = gto.M(atom=H2O, basis="cc-pvdz").build()
-    mf = dft.RKS(pmol)
-    mf.xc, mf.grids.level, mf.verbose = "slater,vwn5", 3, 0
-    mf.kernel()
-    grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
+    def ritz(b):
+        S = np.asarray(overlap_matrix(b))
+        h = np.asarray(kinetic_matrix(b) + nuclear_attraction_matrix(b, X, Z))
+        s, U = np.linalg.eigh(S)
+        Xs = U / np.sqrt(s)
+        return np.linalg.eigvalsh(Xs.T @ h @ Xs)
 
-    nmol = Molecule(["O", "H", "H"], pmol.atom_coords(), "cc-pvdz",
-                    spherical=True)
-    e_native = scf(KS(nmol, LDA(), grid=grid, coulomb=exact()),
-                   guess=minao()).e_tot
-    e_pyscf = scf(KS(pmol, LDA(), grid=grid, coulomb=exact()),
-                  guess=minao()).e_tot
-
-    # Loose against the 2.6e-11 measured, because both sides stop at their
-    # own SCF tolerance.
-    assert abs(float(e_native) - float(e_pyscf)) < 1e-8
+    # relative 1e-7: the two sides publish the basis to 8 and 10 digits
+    np.testing.assert_allclose(ritz(native), ritz(pyscf_side), rtol=1e-7,
+                               atol=1e-7)

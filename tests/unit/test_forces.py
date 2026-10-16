@@ -186,6 +186,35 @@ class TestDensityFittingForces:
         fd = -(energy(cp) - energy(cm)) / (2 * eps)
         assert abs(float(F[1, 2]) - fd) < 1e-4, f"F={float(F[1,2])} fd={fd}"
 
+    def test_materialized_df_forces_take_the_packed_path(self, monkeypatch):
+        """Materialized DF forces build the packed tensor at the traced
+        coordinates (with frozen-orbital exchange), not the square one; a
+        hybrid's packed forces match the streamed frozen-orbital forces to
+        machine precision on a well-conditioned auxiliary metric."""
+        import importlib
+
+        from dftax.energy.xc import PBE0
+
+        # the module, not the re-exported forces() function of the same name
+        forces_mod = importlib.import_module("dftax.ks.forces")
+
+        calls = []
+        orig = forces_mod._packed_forces_tensors
+        monkeypatch.setattr(forces_mod, "_packed_forces_tensors",
+                            lambda *a: (calls.append(1), orig(*a))[1])
+        xc = PBE0()
+        mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.9; H 0 0.2 1.8", "sto-3g",
+                                spin=1)
+        res = scf(KS(mol, xc, grid=becke(NR, LEB), coulomb=df("sto-3g")),
+                  e_tol=1e-10, d_tol=1e-8)
+        Zs = (res.mo_coeff[0][:, :2], res.mo_coeff[1][:, :1])
+        Fp = forces(mol, xc, Zs, grid=becke(NR, LEB),
+                    coulomb=df("sto-3g", chunk=None, spherical=False))
+        assert calls
+        Fs = forces(mol, xc, Zs, grid=becke(NR, LEB),
+                    coulomb=df("sto-3g", chunk=4))
+        assert float(jnp.max(jnp.abs(Fp - Fs))) < 1e-12
+
     def test_streamed_df_forces_match_materialized(self):
         """The streamed DF force path (aux-slabbed, 3-center recomputed; the
         forces-OOM fix) must reproduce the materialized-tensor forces.
@@ -202,7 +231,10 @@ class TestDensityFittingForces:
                     coulomb=df(self.AUX, chunk=None, spherical=False))
         Fs = forces(mol, xc, Zs, grid=becke(NR, LEB),
                     coulomb=df(self.AUX, chunk=4))
-        assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-9
+        # 1e-8, as for the hybrid below: the jkfit metric's pseudo-inverse
+        # amplifies rounding by ~1e7, and on an A100 this gap moves between
+        # 1e-11 and 4e-9 with the radial shell count alone.
+        assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-8
 
     def test_streamed_df_forces_hybrid(self):
         """Hybrid streamed forces route exchange through the frozen-orbital
@@ -293,10 +325,15 @@ class TestDensityFittingForces:
             terms, "_streamed_df_rij_slabs",
             lambda *a, **k: (calls.append(1), orig(*a, **k))[1],
         )
-        monkeypatch.setattr(energy_mod, "_DF_BUDGET", 0)
+        # Patch the budget function the "auto" policy calls, not the
+        # _DF_BUDGET floor: on a GPU the budget is a fraction of the device's
+        # memory pool (_df_materialize_budget), so a zero floor never forced
+        # streaming there and the test only passed on CPU.
+        monkeypatch.setattr(energy_mod, "_df_materialize_budget", lambda: 16)
         F_auto = forces(mol, xc, Zs, grid=becke(NR, LEB), coulomb=df(self.AUX))
         assert calls                                      # streamed path taken
-        assert float(jnp.max(jnp.abs(F_auto - F_mat))) < 1e-9
+        # 1e-8: the jkfit pseudo-inverse rounding band, as above.
+        assert float(jnp.max(jnp.abs(F_auto - F_mat))) < 1e-8
 
     def test_streamed_screened_forces_match_dense(self):
         """Plan-level Schwarz screening composes with streamed forces: the
@@ -337,7 +374,11 @@ class TestDensityFittingForces:
                     coulomb=df("sto-3g", chunk=None, spherical=False))
         Fs = forces(mol, xc, res, grid=becke(NR, LEB),
                     coulomb=df("sto-3g", chunk=6))
-        assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-12
+        # 1e-8, as for the integer-occupation streamed/materialized checks
+        # above: the two backends contract in different orders, which on CPU
+        # agree to ~1e-12 but on an A100 to 9.7e-10 (the cross-backend
+        # rounding band of density-fitted forces, see _metric_pinv).
+        assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-8
 
         with pytest.raises(NotImplementedError, match="smeared"):
             forces(mol, PBE0(), res, grid=becke(NR, LEB),

@@ -8,10 +8,21 @@ on:
 
 jobs:
   # Gate the release on the suite: a tag must never publish a failing build.
+  # The same four shards as ci.yml, warm from main's compilation caches (a tag
+  # run can read the default branch's caches, and the tagged code is main's).
   test:
+    name: test (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
-      DFTAX_TEST_RSS_GB: "0"     # clear after every test, see ci.yml
+      OMP_NUM_THREADS: "2"
+      XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+      DFTAX_TEST_RSS_GB: "6"     # see ci.yml
+      JAX_COMPILATION_CACHE_DIR: ${{ github.workspace }}/.jax-cache
+      JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS: "0"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.2.0
@@ -21,8 +32,15 @@ jobs:
         run: uv sync --extra test
       - name: Lint
         run: uv run ruff check .
-      - name: Test
-        run: uv run pytest tests/unit -m "not slow" -q
+      - name: JAX compilation cache
+        uses: actions/cache/restore@v6
+        with:
+          path: .jax-cache
+          key: jax-${{ runner.os }}-shard${{ matrix.shard }}of4-${{ hashFiles('pyproject.toml', 'dftax/**/*.py', 'tests/**') }}
+          restore-keys: |
+            jax-${{ runner.os }}-shard${{ matrix.shard }}of4-
+      - name: Test (shard ${{ matrix.shard }} of 4)
+        run: uv run pytest tests/unit -m "not slow" -q --shard ${{ matrix.shard }}/4
 
   publish:
     needs: [test]

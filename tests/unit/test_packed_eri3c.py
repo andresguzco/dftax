@@ -32,7 +32,11 @@ def _bases(spherical):
 
 
 @pytest.mark.float64
-@pytest.mark.parametrize("spherical, screen", [(True, 1e-3), (False, None)])
+@pytest.mark.parametrize("spherical, screen", [
+    (True, 1e-3),
+    # PR tier: test_bucketed_build checks the cartesian packed tensor
+    pytest.param(False, None, marks=pytest.mark.slow),
+])
 def test_packed_unpacks_to_the_square_tensor(spherical, screen):
     basis, aux = _bases(spherical)
     keep = None if screen is None else _shell_pair_keep(basis, screen)

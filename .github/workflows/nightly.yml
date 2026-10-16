@@ -2,9 +2,9 @@ name: Nightly (full suite)
 
 # The full test suite (including the modules auto-marked `slow`: SCF sweeps,
 # finite-difference properties, CPHF, density fitting and streaming, the d-shell
-# ERI compile) is too heavy for every PR, so it runs once a day and on demand.
-# DFTAX_TEST_RSS_GB=0 clears compiled programs after every test, which keeps
-# memory bounded on the 16 GB runner (tests/conftest.py).
+# ERI compile) is too heavy for every PR, so it runs once a day and on demand,
+# on eight parallel runners (tests/conftest.py --shard), each with its own
+# persistent JAX compilation cache. One runner took longer than the job limit.
 on:
   schedule:
     - cron: "0 6 * * *"   # 06:00 UTC daily
@@ -12,12 +12,20 @@ on:
 
 jobs:
   full:
+    name: full (${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # the hosted maximum: the full suite overran 120 every night
+    timeout-minutes: 360   # the hosted maximum
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
       OMP_NUM_THREADS: "2"
       XLA_PYTHON_CLIENT_PREALLOCATE: "false"
-      DFTAX_TEST_RSS_GB: "0"
+      # clear compiled programs from 6 GiB, and after every test past 12
+      DFTAX_TEST_RSS_GB: "6"
+      JAX_COMPILATION_CACHE_DIR: ${{ github.workspace }}/.jax-cache
+      JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS: "0"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.2.0
@@ -26,5 +34,14 @@ jobs:
           cache-dependency-glob: "pyproject.toml"
       - name: Sync (test deps)
         run: uv sync --extra test
-      - name: Full test suite (including slow)
-        run: uv run --extra test pytest tests/unit -q
+      - name: JAX compilation cache
+        uses: actions/cache@v6
+        with:
+          path: .jax-cache
+          key: jax-${{ runner.os }}-nightly${{ matrix.shard }}of8-${{ hashFiles('pyproject.toml', 'dftax/**/*.py', 'tests/**') }}
+          restore-keys: |
+            jax-${{ runner.os }}-nightly${{ matrix.shard }}of8-
+      - name: Full test suite (including slow, shard ${{ matrix.shard }} of 8)
+        run: |
+          (while sleep 300; do echo "runner memory: $(free -m | awk 'NR==2{print $3"/"$2" MiB"}')"; done) &
+          uv run --extra test pytest tests/unit -q --shard ${{ matrix.shard }}/8 --durations=0 --durations-min=5

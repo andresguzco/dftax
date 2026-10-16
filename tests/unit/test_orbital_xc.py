@@ -38,7 +38,7 @@ def _orbitals(ks, seed=0):
 def test_orbital_gradient_is_the_chain_rule(xc, atoms, spin, chunk):
     """Materialized grid (chunk=None, the orbital route) and streamed grid
     (the density-matrix default) both match 2 w F C from energy_and_fock."""
-    mol = Molecule.from_xyz(atoms, "6-31g*", spin=spin)
+    mol = Molecule.from_xyz(atoms, "sto-3g", spin=spin)
     ks = KS(mol, xc(), grid=becke(35, 50, chunk=chunk),
             spin=spin if spin else None)
     Cs, _ = _orbitals(ks)
@@ -91,7 +91,7 @@ def test_gdm_orbital_route_matches_fock_route(atoms, spin):
 def test_hybrid_orbital_route_is_the_chain_rule(name, atoms, spin):
     """The DF exchange from the orbitals (no orbital recovery from P) against
     energy_and_fock, global and range-separated."""
-    mol = Molecule.from_xyz(atoms, "6-31g*", spin=spin)
+    mol = Molecule.from_xyz(atoms, "sto-3g", spin=spin)
     ks = KS(mol, functional(name), grid=becke(35, 50),
             coulomb=df(chunk=None), spin=spin if spin else None)
     Cs, _ = _orbitals(ks, seed=5)

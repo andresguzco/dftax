@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a pull request cancels the run on its previous commit, which
+# would otherwise finish (and report) on code that has already changed. Runs
+# on main are never cancelled.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -19,14 +26,27 @@ jobs:
       - name: Ruff
         run: uv run ruff check dftax scripts examples tests
 
+  # The fast subset on four parallel runners (free on a public repository):
+  # each runs a quarter of the modules (tests/conftest.py --shard), so it can
+  # keep its compiled programs between tests within the runner's 16 GB, and
+  # each keeps a persistent JAX compilation cache across runs, restored from
+  # main's on a pull request. The suite is compile-bound, so a warm cache is
+  # most of the speed.
   test:
+    name: test (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
       OMP_NUM_THREADS: "2"
       XLA_PYTHON_CLIENT_PREALLOCATE: "false"
-      # clear compiled programs after every test (tests/conftest.py): the
-      # hosted runner's 16 GB does not hold the whole suite's shared programs
-      DFTAX_TEST_RSS_GB: "0"
+      # clear compiled programs from 6 GiB, and after every test past 12
+      DFTAX_TEST_RSS_GB: "6"
+      JAX_COMPILATION_CACHE_DIR: ${{ github.workspace }}/.jax-cache
+      # cache every program: the suite compiles thousands of small ones
+      JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS: "0"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.2.0
@@ -35,12 +55,19 @@ jobs:
           cache-dependency-glob: "pyproject.toml"
       - name: Sync (test deps)
         run: uv sync --extra test
-      - name: Unit tests (fast subset)
+      - name: JAX compilation cache
+        uses: actions/cache@v6
+        with:
+          path: .jax-cache
+          key: jax-${{ runner.os }}-shard${{ matrix.shard }}of4-${{ hashFiles('pyproject.toml', 'dftax/**/*.py', 'tests/**') }}
+          restore-keys: |
+            jax-${{ runner.os }}-shard${{ matrix.shard }}of4-
+      - name: Unit tests (fast subset, shard ${{ matrix.shard }} of 4)
         # memory in the log once a minute: a runner that runs out of it is
         # reported only as "canceled"
         run: |
           (while sleep 60; do echo "runner memory: $(free -m | awk 'NR==2{print $3"/"$2" MiB"}')"; done) &
-          uv run --extra test pytest tests/unit -q -m "not slow"
+          uv run --extra test pytest tests/unit -q -m "not slow" --shard ${{ matrix.shard }}/4 --durations=0 --durations-min=2
 
   # Confirm the package installs and runs on the lower bound of requires-python.
   # Core deps only (no PySCF), so this is a cheap import + tiny-calc smoke.

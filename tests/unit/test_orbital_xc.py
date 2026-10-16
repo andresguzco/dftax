@@ -18,6 +18,7 @@ from dftax.ks.scf import canonical_orthonormalizer
 
 WATER = "O 0 0 0; H 0.76 0 0.50; H 0.76 0 -0.50"
 OH = "O 0 0 0; H 0 0 0.97"
+NH2 = "N 0 0 0; H 1.01 0 0; H -0.26 0.98 0"
 
 
 def _orbitals(ks, seed=0):
@@ -72,7 +73,8 @@ def test_commutator_from_the_orbital_gradient():
 
 @pytest.mark.float64
 @pytest.mark.slow
-@pytest.mark.parametrize("atoms,spin", [(WATER, 0), (OH, 1)])
+# NH2, not OH: OH's degenerate pi shell is a knife edge for the DIIS reference
+@pytest.mark.parametrize("atoms,spin", [(WATER, 0), (NH2, 1)])
 def test_gdm_orbital_route_matches_fock_route(atoms, spin):
     mol = Molecule.from_xyz(atoms, "6-31g*", spin=spin)
     ks = KS(mol, PBE(), grid=becke(35, 50), spin=spin if spin else None)

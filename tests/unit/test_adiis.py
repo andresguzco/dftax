@@ -54,8 +54,9 @@ def test_degenerate_cr_atom_converges_with_smearing():
 
 @pytest.mark.float64
 def test_adiis_open_shell_parity():
-    """Spin-polarized channel stacking under ADIIS (OH radical)."""
-    mol = Molecule.from_xyz("O 0 0 0; H 0 0 0.97", "sto-3g", spin=1)
+    """Spin-polarized channel stacking under ADIIS (NH2 radical: OH's
+    degenerate pi shell is a knife edge for the plain DIIS reference)."""
+    mol = Molecule.from_xyz("N 0 0 0; H 1.01 0 0; H -0.26 0.98 0", "sto-3g", spin=1)
     ks = KS(mol, PBE(), grid=becke(35, 50), spin=1)
     r0 = scf(ks)
     r1 = scf(ks, accel=adiis())

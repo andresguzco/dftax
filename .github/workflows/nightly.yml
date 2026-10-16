@@ -38,7 +38,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .jax-cache
-          key: jax-${{ runner.os }}-nightly${{ matrix.shard }}of8-${{ hashFiles('pyproject.toml', 'dftax/**/*.py') }}
+          key: jax-${{ runner.os }}-nightly${{ matrix.shard }}of8-${{ hashFiles('pyproject.toml', 'dftax/**/*.py', 'tests/**') }}
           restore-keys: |
             jax-${{ runner.os }}-nightly${{ matrix.shard }}of8-
       - name: Full test suite (including slow, shard ${{ matrix.shard }} of 8)

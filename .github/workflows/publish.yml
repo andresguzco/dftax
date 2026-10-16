@@ -36,7 +36,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: .jax-cache
-          key: jax-${{ runner.os }}-shard${{ matrix.shard }}of4-${{ hashFiles('pyproject.toml', 'dftax/**/*.py') }}
+          key: jax-${{ runner.os }}-shard${{ matrix.shard }}of4-${{ hashFiles('pyproject.toml', 'dftax/**/*.py', 'tests/**') }}
           restore-keys: |
             jax-${{ runner.os }}-shard${{ matrix.shard }}of4-
       - name: Test (shard ${{ matrix.shard }} of 4)

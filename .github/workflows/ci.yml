@@ -52,7 +52,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .jax-cache
-          key: jax-${{ runner.os }}-shard${{ matrix.shard }}of4-${{ hashFiles('pyproject.toml', 'dftax/**/*.py') }}
+          key: jax-${{ runner.os }}-shard${{ matrix.shard }}of4-${{ hashFiles('pyproject.toml', 'dftax/**/*.py', 'tests/**') }}
           restore-keys: |
             jax-${{ runner.os }}-shard${{ matrix.shard }}of4-
       - name: Unit tests (fast subset, shard ${{ matrix.shard }} of 4)

@@ -64,7 +64,8 @@ def test_one_pass_is_the_per_atom_grid(name, radii_adjust, prune):
     p0, w0 = _per_atom(symbols, coords, spec["n_radial"], spec["lebedev"], prune, spec["r_max"],
                        spec["radial"], radii_adjust)
     np.testing.assert_allclose(np.asarray(p1), np.asarray(p0), rtol=0, atol=1e-14)
-    w1, w0 = np.asarray(w1), np.asarray(w0)       # equal to rounding: XLA orders the two programs' sums
+    # Equal to rounding: XLA orders the two programs' sums differently.
+    w1, w0 = np.asarray(w1), np.asarray(w0)
     np.testing.assert_allclose(w1, w0, rtol=1e-12, atol=1e-15 * np.abs(w0).max())
 
 

@@ -3,7 +3,8 @@ name: Nightly (full suite)
 # The full test suite (including the modules auto-marked `slow`: SCF sweeps,
 # finite-difference properties, CPHF, density fitting and streaming, the d-shell
 # ERI compile) is too heavy for every PR, so it runs once a day and on demand.
-# The conftest per-test JAX cache release keeps memory bounded on the runner.
+# DFTAX_TEST_RSS_GB=0 clears compiled programs after every test, which keeps
+# memory bounded on the 16 GB runner (tests/conftest.py).
 on:
   schedule:
     - cron: "0 6 * * *"   # 06:00 UTC daily
@@ -12,10 +13,11 @@ on:
 jobs:
   full:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360   # the hosted maximum: the full suite overran 120 every night
     env:
       OMP_NUM_THREADS: "2"
       XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+      DFTAX_TEST_RSS_GB: "0"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.2.0

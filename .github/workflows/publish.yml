@@ -10,6 +10,8 @@ jobs:
   # Gate the release on the suite: a tag must never publish a failing build.
   test:
     runs-on: ubuntu-latest
+    env:
+      DFTAX_TEST_RSS_GB: "6"     # see ci.yml
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.2.0

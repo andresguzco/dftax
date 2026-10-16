@@ -95,7 +95,9 @@ _RSS_BUDGET_GIB = float(os.environ.get("DFTAX_TEST_RSS_GB", "12"))
 # RSS rarely shrinks after a clear (the allocator keeps the freed pages and
 # reuses them), so a plain "over budget" test would clear after every test
 # once the process has crossed the budget once. Clear again only when RSS has
-# grown this much past where the last clear left it.
+# grown this much past where the last clear left it, or, whatever the last
+# clear left, past twice the budget (a hard ceiling: 24 GiB by default, 12 on
+# the 16 GB CI runner).
 _RSS_HEADROOM_GIB = 4.0
 _rss_after_clear = 0.0
 
@@ -112,8 +114,9 @@ def _free_jax_memory():
     global _rss_after_clear
     yield
     rss = _rss_gib()
-    if rss is not None and rss > max(_RSS_BUDGET_GIB,
-                                     _rss_after_clear + _RSS_HEADROOM_GIB):
+    if rss is not None and rss > _RSS_BUDGET_GIB and (
+            rss > _rss_after_clear + _RSS_HEADROOM_GIB
+            or rss > 2 * _RSS_BUDGET_GIB):
         jax.clear_caches()
         gc.collect()
         _rss_after_clear = _rss_gib() or 0.0

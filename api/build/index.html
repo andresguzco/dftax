@@ -2143,6 +2143,53 @@ consumer (forces, the Hessian, Newton, direct minimization).</p>
 <div class="doc doc-object doc-function">
 
 
+<h5 id="dftax.ks.energy.KS.energy_and_grad_orbitals" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">energy_and_grad_orbitals</span><span class="p">(</span><span class="n">Cs</span><span class="p">,</span> <span class="n">idempotent</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span></code>
+
+<a href="#dftax.ks.energy.KS.energy_and_grad_orbitals" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p><code>(E_total, ∂E/∂C_σ)</code> for the occupied orbitals of each channel.</p>
+<p>The density is <code>P_σ = C_σ diag(w_σ) C_σᵀ</code> with the occupations of
+:meth:<code>occupations</code> (<code>2</code> closed shell, <code>1</code> per spin channel), so
+<code>∂E/∂C_σ = 2 F_σ C_σ diag(w_σ)</code> with <code>F = sym(∂E/∂P)</code>.
+The one-electron and two-electron parts take that route, through
+their (cheap) potentials; the XC part, almost all of an iteration,
+comes straight from the orbitals
+(:meth:<code>~dftax.ks.terms.XCTerm.energy_and_grad_orbitals</code>), which never
+forms the <code>nao x nao</code> XC potential. What a direct minimizer
+(:func:<code>~dftax.ks.gdm.gdm</code>) needs, and nothing more.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h5 id="dftax.ks.energy.KS.occupations" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">occupations</span><span class="p">()</span></code>
+
+<a href="#dftax.ks.energy.KS.occupations" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Occupation of each channel's occupied orbitals: 2 each for a
+closed shell, 1 each per spin channel. A padded system
+(:mod:<code>dftax.ks.batched_gdm</code>) gives its padding slots 0.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h5 id="dftax.ks.energy.KS.density" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">density</span><span class="p">(</span><span class="n">P</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'nspin nao nao'</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">ng</span><span class="p">],</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'ng 3'</span><span class="p">]]</span></code>
 

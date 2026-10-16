@@ -1727,8 +1727,11 @@ Becke specs are accepted.</p>
                 <p>a :func:<code>~dftax.ks.terms.df</code> spec (default, matching the KS
 default backend) or a plain materialized
 :func:<code>~dftax.ks.terms.exact</code>. <code>df(chunk="auto")</code> materializes
-the nao²×naux 3-center tensor when it fits the memory budget and
-otherwise streams the geometry gradient over shell-aligned
+the 3-center tensor when it fits the memory budget, packed over
+the kept shell pairs with exchange at the frozen occupied
+coefficients (:class:<code>~dftax.ks.terms.PackedDFForcesCoulomb</code>;
+smeared hybrids keep the square tensor), and otherwise streams
+the geometry gradient over shell-aligned
 auxiliary slabs (RI-J by plain autodiff, RI-K at the frozen
 occupied coefficients; see
 :func:<code>dftax.ks.terms._streamed_df_rik_frozen</code>); an int <code>chunk</code>

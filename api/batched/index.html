@@ -1276,6 +1276,45 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#batched-direct-minimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batched direct minimization
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Batched direct minimization">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dftax.ks.batched_gdm.gdm_batched" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;gdm_batched
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dftax.ks.batched_gdm.BatchedGDMResult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;BatchedGDMResult
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1905,6 +1944,492 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 <code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="fm">__repr__</span><span class="p">()</span></code>
 
 <a href="#dftax.ks.batched.BatchedResult.__repr__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="batched-direct-minimization">Batched direct minimization<a class="headerlink" href="#batched-direct-minimization" title="Permanent link">¤</a></h2>
+<p>Different molecules padded to common sizes and minimized in one compiled
+program, closed and open shells, pure and hybrid. A system left unconverged
+or in a non-aufbau state is re-solved alone by <code>gdm</code>
+(<code>BatchedGDMResult.fallback</code>).</p>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.batched_gdm.gdm_batched" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">batched_gdm</span><span class="o">.</span><span class="n">gdm_batched</span><span class="p">(</span><span class="n">kss</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">KS</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">max_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">200</span><span class="p">,</span> <span class="n">e_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-08</span><span class="p">,</span> <span class="n">d_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-06</span><span class="p">,</span> <span class="n">history</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">20</span><span class="p">,</span> <span class="n">max_step</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span> <span class="n">gap_floor</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.05</span><span class="p">,</span> <span class="n">guess</span><span class="p">:</span> <span class="n">GuessSpec</span> <span class="o">|</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">bucket</span><span class="p">:</span> <span class="n">Bucket</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">fallback</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">BatchedGDMResult</span></code>
+
+<a href="#dftax.ks.batched_gdm.gdm_batched" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Minimize the KS energy of every system in <code>kss</code> at once. The
+tolerances and step controls are those of :func:<code>~dftax.ks.gdm.gdm</code>.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>kss</code>
+            </td>
+            <td>
+                  <code><span title="collections.abc.Sequence">Sequence</span>[<a class="autorefs autorefs-internal" title="            dftax.ks.energy.KS" href="../build/#dftax.ks.energy.KS">KS</a>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>built :class:<code>~dftax.ks.energy.KS</code> objects (materialized DF and
+grid; see the module doc). Closed and open shells, and different
+functionals, may be mixed: they are solved as one batch per spin
+type and functional, results in input order.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>bucket</code>
+            </td>
+            <td>
+                  <code><span title="dftax.ks.batched_gdm.Bucket">Bucket</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the padded sizes, for a batch of one spin type; default the
+smallest that fits each group. Passing a fixed bucket lets batches
+of similar molecules share one compiled program.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>guess</code>
+            </td>
+            <td>
+                  <code><span title="dftax.ks.batched_gdm.GuessSpec">GuessSpec</span> | <span title="jax.Array">Array</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>a guess spec as for :func:<code>~dftax.ks.scf.scf</code>, applied per
+molecule before padding.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>fallback</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>re-solve one at a time, with :func:<code>~dftax.ks.gdm.gdm</code>,
+every system the batch leaves unconverged or converges to a
+non-aufbau state (the batched loop keeps its preconditioner in
+the guess frame and can settle in an excited stationary state on
+hard cases such as Cr2; :func:<code>~dftax.ks.gdm.gdm</code> re-diagonalizes
+at its resets). Marked in <code>BatchedGDMResult.fallback</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h4 id="dftax.ks.batched_gdm.BatchedGDMResult" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-class"></code>            <code>dftax.ks.batched_gdm.BatchedGDMResult</code>
+
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Per-system results of :func:<code>gdm_batched</code>, in input order.</p>
+<p><code>fallback</code> marks the systems the batch did not settle (not converged,
+or converged to a state whose occupied orbitals are not the lowest ones)
+and that were re-solved one at a time by :func:<code>~dftax.ks.gdm.gdm</code>; their
+<code>n_iter</code> is that solve's.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__annotations__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="vm">__annotations__</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+  </span>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__annotations__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>dict() -&gt; new empty dictionary
+dict(mapping) -&gt; new dictionary initialized from a mapping object's
+    (key, value) pairs
+dict(iterable) -&gt; new dictionary initialized as if via:
+    d = {}
+    for k, v in iterable:
+        d[k] = v
+dict(**kwargs) -&gt; new dictionary initialized with the name=value pairs
+    in the keyword argument list.  For example:  dict(one=1, two=2)</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__dataclass_fields__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="n">__dataclass_fields__</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+  </span>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__dataclass_fields__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>dict() -&gt; new empty dictionary
+dict(mapping) -&gt; new dictionary initialized from a mapping object's
+    (key, value) pairs
+dict(iterable) -&gt; new dictionary initialized as if via:
+    d = {}
+    for k, v in iterable:
+        d[k] = v
+dict(**kwargs) -&gt; new dictionary initialized with the name=value pairs
+    in the keyword argument list.  For example:  dict(one=1, two=2)</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__dataclass_params__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="n">__dataclass_params__</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+  </span>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__dataclass_params__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__dict__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="vm">__dict__</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+  </span>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__dict__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Read-only proxy of a mapping.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__doc__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="vm">__doc__</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+  </span>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__doc__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>str(object='') -&gt; str
+str(bytes_or_buffer[, encoding[, errors]]) -&gt; str</p>
+<p>Create a new string object from the given object. If encoding or
+errors is specified, then the object must expose a data buffer
+that will be decoded using the given encoding and error handler.
+Otherwise, returns the result of object.<strong>str</strong>() (if defined)
+or repr(object).
+encoding defaults to 'utf-8'.
+errors defaults to 'strict'.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__firstlineno__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="n">__firstlineno__</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+  </span>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__firstlineno__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>int([x]) -&gt; integer
+int(x, base=10) -&gt; integer</p>
+<p>Convert a number or string to an integer, or return 0 if no arguments
+are given.  If x is a number, return x.<strong>int</strong>().  For floating-point
+numbers, this truncates towards zero.</p>
+<p>If x is not a number or if base is given, then x must be a string,
+bytes, or bytearray instance representing an integer literal in the
+given base.  The literal can be preceded by '+' or '-' and be surrounded
+by whitespace.  The base defaults to 10.  Valid bases are 0 and 2-36.
+Base 0 means to interpret the base from the string as an integer
+iteral.</p>
+<blockquote>
+<blockquote>
+<blockquote>
+<p>int('0b100', base=0)
+4</p>
+</blockquote>
+</blockquote>
+</blockquote>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__match_args__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="n">__match_args__</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+  </span>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__match_args__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Built-in immutable sequence.</p>
+<p>If no argument is given, the constructor returns an empty tuple.
+If iterable is specified the tuple is initialized from iterable's items.</p>
+<p>If the argument is a tuple, the return value is the same object.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__module__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="vm">__module__</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+  </span>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__module__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>str(object='') -&gt; str
+str(bytes_or_buffer[, encoding[, errors]]) -&gt; str</p>
+<p>Create a new string object from the given object. If encoding or
+errors is specified, then the object must expose a data buffer
+that will be decoded using the given encoding and error handler.
+Otherwise, returns the result of object.<strong>str</strong>() (if defined)
+or repr(object).
+encoding defaults to 'utf-8'.
+errors defaults to 'strict'.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__static_attributes__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="n">__static_attributes__</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+  </span>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__static_attributes__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Built-in immutable sequence.</p>
+<p>If no argument is given, the constructor returns an empty tuple.
+If iterable is specified the tuple is initialized from iterable's items.</p>
+<p>If the argument is a tuple, the return value is the same object.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__weakref__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="vm">__weakref__</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__weakref__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>list of weak references to the object</p>
+
+    </div>
+
+</div>
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__eq__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="fm">__eq__</span><span class="p">(</span><span class="n">other</span><span class="p">)</span></code>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__eq__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__init__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="fm">__init__</span><span class="p">(</span><span class="n">e_tot</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">converged</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">n_iter</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">P</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span> <span class="n">fallback</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span></code>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__init__" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h5 id="dftax.ks.batched_gdm.BatchedGDMResult.__repr__" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="fm">__repr__</span><span class="p">()</span></code>
+
+<a href="#dftax.ks.batched_gdm.BatchedGDMResult.__repr__" class="headerlink" title="Permanent link">¤</a></h5>
 
 
     <div class="doc doc-contents ">

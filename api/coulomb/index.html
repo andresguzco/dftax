@@ -1594,7 +1594,7 @@ tensor (O(N²) memory, slower; incompatible with <code>screen</code>).</p>
 
 
 <h4 id="dftax.ks.terms.df" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">terms</span><span class="o">.</span><span class="n">df</span><span class="p">(</span><span class="n">auxbasis</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">BasisData</span> <span class="o">=</span> <span class="s1">'def2-universal-jkfit'</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'auto'</span><span class="p">,</span> <span class="n">screen</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">spherical</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DFSpec</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">terms</span><span class="o">.</span><span class="n">df</span><span class="p">(</span><span class="n">auxbasis</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">BasisData</span> <span class="o">=</span> <span class="s1">'def2-universal-jkfit'</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'auto'</span><span class="p">,</span> <span class="n">screen</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'auto'</span><span class="p">,</span> <span class="n">spherical</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">whiten</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'auto'</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DFSpec</span></code>
 
 <a href="#dftax.ks.terms.df" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -1661,7 +1661,7 @@ exactly that chunk.</p>
                 <code>screen</code>
             </td>
             <td>
-                  <code><span title="float">float</span> | None</code>
+                  <code><span title="float">float</span> | <span title="str">str</span> | None</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -1670,12 +1670,15 @@ pairs (survivors are O(N) for extended systems). On the
 materialized path it is a shell-pair compact gather that omits
 the screened shell-pairs from the 3-center build (they stay
 exactly zero); with an int <code>chunk</code> it restricts the streamed
-RI-J bra sum to the significant AO pairs. <code>None</code> (default)
-keeps every pair, a bit-identical build.</p>
+RI-J bra sum to the significant AO pairs. <code>None</code> keeps every
+pair, a bit-identical build. <code>"auto"</code> (default) screens at
+<code>DF_SCREEN_AUTO_CUTOFF</code> from <code>DF_SCREEN_AUTO_MIN_ATOMS</code> atoms
+up (the grid's gate) and keeps every pair below it; batched
+geometries (<code>scf_batched</code>) never screen.</p>
               </div>
             </td>
             <td>
-                  <code>None</code>
+                  <code>&#39;auto&#39;</code>
             </td>
           </tr>
           <tr class="doc-section-item">
@@ -1700,6 +1703,53 @@ it is unsupported.</p>
             </td>
             <td>
                   <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>whiten</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>fold the metric into the materialized tensor once, <code>B = Lᵀ T</code>
+with <code>L Lᵀ = V⁺</code> (:class:<code>WhitenedDFCoulomb</code>): the same energy to
+the density-fitting floor, no metric multiply per build, and an
+orbital-route exchange that never forms <code>nao x nao</code> kernels.
+<code>None</code> (default) whitens whenever the build is concrete and
+single-device materialized, and keeps :class:<code>DFCoulomb</code> where the
+geometry is traced (forces, Hessians, <code>scf_batched</code>), whose
+metric inverse carries the geometry derivative; <code>False</code> never
+whitens; <code>True</code> asserts it and raises where it cannot apply.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>packed</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span> | <span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>store the whitened tensor packed over the kept bra shell
+pairs, <code>(naux, npair)</code> (:class:<code>PackedDFCoulomb</code>): about half
+the memory before screening and only the kept pairs with it, at
+the price of unpacking one aux block per exchange evaluation.
+<code>"auto"</code> (default) packs where that pays: when pair screening
+is on (<code>screen</code>) or when the square tensor would miss the
+device budget and the packed one fits; <code>True</code> / <code>False</code>
+force it. Traced builds (no whitening) stay square.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;auto&#39;</code>
             </td>
           </tr>
       </tbody>

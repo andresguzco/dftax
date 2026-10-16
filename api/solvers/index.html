@@ -1243,6 +1243,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dftax.ks.gdm.gdm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;gdm
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#dftax.ks.newton.newton" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1639,13 +1650,14 @@
 
 
 <h1 id="solvers-and-results">Solvers and results<a class="headerlink" href="#solvers-and-results" title="Permanent link">¤</a></h1>
-<p>Four verbs over one built functional, one result type: <code>scf</code> (DIIS, with
+<p>Five verbs over one built functional, one result type: <code>scf</code> (DIIS, with
 optional <code>accel=adiis()</code> far-from-convergence extrapolation and
 <code>smearing=fermi()</code> fractional occupations reporting the Mermin free energy),
 <code>newton</code> (trust-region second order on orbital rotations, saddle-robust
 Steihaug-Toint steps), <code>roks</code> (its shared-orbital restricted open-shell
-variant), and <code>minimize</code> (direct orbital optimization with any optax
-optimizer). <code>implicit_density</code> exposes the converged density as a
+variant), <code>minimize</code> (direct orbital optimization with any optax
+optimizer), and <code>gdm</code> (direct minimization by L-BFGS over occupied-virtual
+rotations, evaluated through the occupied orbitals). <code>implicit_density</code> exposes the converged density as a
 differentiable function of the functional (CPHF via <code>custom_vjp</code>).</p>
 <p>All solvers (and <code>scf_batched</code>) take a <code>guess=</code>: an initial-density spec
 from <code>core</code> / <code>sad</code> / <code>minao</code> / <code>sap</code>, or an explicit <code>(nspin, nao, nao)</code>
@@ -2228,6 +2240,225 @@ the aufbau eigenvectors of the Fock built at that density.</p>
     <span class="n">optax</span><span class="o">.</span><span class="n">clip_by_global_norm</span><span class="p">(</span><span class="mf">1.0</span><span class="p">),</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">0.1</span><span class="p">)),</span> <span class="n">g_tol</span><span class="o">=</span><span class="mf">1e-7</span><span class="p">)</span>
 </code></pre></div>
 </details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.ks.gdm.gdm" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">ks</span><span class="o">.</span><span class="n">gdm</span><span class="o">.</span><span class="n">gdm</span><span class="p">(</span><span class="n">ks</span><span class="p">:</span> <span class="n">KS</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">max_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">200</span><span class="p">,</span> <span class="n">e_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-08</span><span class="p">,</span> <span class="n">d_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-06</span><span class="p">,</span> <span class="n">history</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">20</span><span class="p">,</span> <span class="n">max_step</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span> <span class="n">gap_floor</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.05</span><span class="p">,</span> <span class="n">lindep_thresh</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-07</span><span class="p">,</span> <span class="n">guess</span><span class="p">:</span> <span class="n">GuessSpec</span> <span class="o">|</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">orbital_xc</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KSResult</span></code>
+
+<a href="#dftax.ks.gdm.gdm" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Minimize the KS energy over orbital rotations (restricted and
+spin-polarized alike).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>ks</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.ks.energy.KS" href="../build/#dftax.ks.energy.KS">KS</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the built :class:<code>~dftax.ks.energy.KS</code> energy functional.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>max_iter</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>budget of energy evaluations (each is one Fock build).</p>
+              </div>
+            </td>
+            <td>
+                  <code>200</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>e_tol</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>convergence threshold on the energy change of an accepted
+step (Ha); same meaning and floor as in :func:<code>~dftax.ks.scf.scf</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-08</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>d_tol</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>convergence threshold on the commutator norm, measured exactly
+as :func:<code>~dftax.ks.scf.scf</code> measures it, so the two solvers stop
+at the same point.</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-06</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>history</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>L-BFGS memory depth.</p>
+              </div>
+            </td>
+            <td>
+                  <code>20</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>max_step</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>largest rotation angle (rad) any one step may take.</p>
+              </div>
+            </td>
+            <td>
+                  <code>0.5</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>gap_floor</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>smallest orbital-energy gap (Ha) the preconditioner uses,
+which keeps it positive where the current orbitals are not in
+aufbau order.</p>
+              </div>
+            </td>
+            <td>
+                  <code>0.05</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>lindep_thresh</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>overlap-eigenvalue cutoff for the orthonormalizer.</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-07</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>guess</code>
+            </td>
+            <td>
+                  <code><span title="dftax.ks.gdm.GuessSpec">GuessSpec</span> | <span title="jax.Array">Array</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>as for :func:<code>~dftax.ks.scf.scf</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>orbital_xc</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>evaluate through the occupied orbitals
+(:meth:<code>~dftax.ks.energy.KS.energy_and_grad_orbitals</code>), building
+the Fock only at the guess and at reference resets; <code>False</code>
+builds it at every evaluation.</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>verbose</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>print every energy evaluation.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+        <p><code>n_iter</code> of the result counts energy evaluations, the unit that costs.</p>
+
 
     </div>
 

@@ -1,12 +1,12 @@
 """Becke's partition against Stratmann-Scuseria-Frisch's: cost and accuracy.
 
-    python scripts/perf/partition_bench.py speed GEOM.xyz --partition stratmann [--grad]
+    python scripts/perf/partition_bench.py speed GEOM.xyz --partition stratmann [--grad] [--jit]
     python scripts/perf/partition_bench.py pyscf water|benzene|GEOM.xyz [--basis cc-pvdz]
 
 ``speed`` builds the whole grid (``becke_grid`` on PySCF's level-3 atom
-grids, jitted) and prints the compile time, two runs, and the device's peak
-memory; ``--grad`` times the coordinate gradient of a weighted sum instead
-(the force path). ``pyscf`` checks ``partition="stratmann"`` against PySCF's
+grids, eagerly as ``KS`` does; ``--jit`` compiles it first) and prints two
+calls' times and the device's peak memory; ``--grad`` times the coordinate
+gradient of a weighted sum instead (the force path). ``pyscf`` checks ``partition="stratmann"`` against PySCF's
 ``Grids`` with ``becke_scheme=gen_grid.stratmann``: the weights point by point,
 the PBE XC energy of PySCF's density on either grid, and the SCF energies and
 forces with the grid response; then the Becke-to-SSF shift in both codes.
@@ -61,22 +61,24 @@ def speed(args):
         def f(X):
             c, w = becke_grid(syms, X, partition=p, **SPEC)
             return jnp.sum(w * jnp.cos(c[:, 0]))
-        f = jax.jit(jax.value_and_grad(f))
+        f = jax.value_and_grad(f)
     else:
-        f = jax.jit(lambda X: becke_grid(syms, X, partition=p, **SPEC))
-    t = time.perf_counter()
-    g = f.lower(X).compile()
-    t_compile = time.perf_counter() - t
-    runs = []
+        f = lambda X: becke_grid(syms, X, partition=p, **SPEC)
+    t_compile = None
+    if args.jit:                 # the atom templates become constants XLA folds
+        t = time.perf_counter()
+        f = jax.jit(f).lower(X).compile()
+        t_compile = round(time.perf_counter() - t, 2)
+    runs = []                    # eager (as KS builds it): the first call compiles
     for _ in range(2):
         t = time.perf_counter()
-        out = jax.block_until_ready(g(X))
+        out = jax.block_until_ready(f(X))
         runs.append(time.perf_counter() - t)
     stats = jax.devices()[0].memory_stats() or {}
     w = None if args.grad else np.asarray(out[1])
-    emit(mode="grad" if args.grad else "grid", geom=args.geom, partition=p,
+    emit(mode="grad" if args.grad else "grid", jit=args.jit, geom=args.geom, partition=p,
          natom=len(syms), npoints=sum(becke_grid_size([s], **SPEC) for s in syms),
-         compile_s=round(t_compile, 2), run_s=[round(r, 3) for r in runs],
+         compile_s=t_compile, run_s=[round(r, 3) for r in runs],
          peak_gb=round(stats.get("peak_bytes_in_use", 0) / 2**30, 3),
          zero_weights=None if w is None else int((w == 0).sum()),
          weight_sum=None if w is None else float(w.sum()))
@@ -125,7 +127,8 @@ def pyscf_mode(args):
         emit(geom=args.geom, basis=args.basis, partition=p, natom=len(syms),
              npoints=int(pc.shape[0]), pyscf_npoints=int(g.weights.size),
              max_point_dist=float(dist.max()), unique_match=bool(np.unique(idx).size == idx.size),
-             max_dw=float(dw.max()), max_rel_dw=float((dw / np.maximum(1.0, np.abs(g.weights))).max()),
+             max_dw=float(dw.max()),
+             max_rel_dw=float((dw / np.maximum(1.0, np.abs(g.weights))).max()),
              zero_weights=int((pw == 0).sum()),
              dexc_same_dm=float(exc1 - exc0), dnelec_same_dm=float(n1 - n0),
              e_pyscf=e_ref, e_dftax=float(res.e_tot), de_codes=float(res.e_tot - e_ref),
@@ -145,6 +148,7 @@ def main():
     ap.add_argument("geom")
     ap.add_argument("--partition", default="stratmann", choices=("becke", "stratmann"))
     ap.add_argument("--grad", action="store_true")
+    ap.add_argument("--jit", action="store_true")
     ap.add_argument("--basis", default="cc-pvdz")
     args = ap.parse_args()
     speed(args) if args.mode == "speed" else pyscf_mode(args)

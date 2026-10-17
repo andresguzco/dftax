@@ -17,7 +17,7 @@ import pytest
 
 from dftax import Molecule, becke
 from dftax.grid import becke_grid, becke_grid_size
-from dftax.grid.becke import _PARTITION_BUDGET, SSF_CELLS, _ssf_weights
+from dftax.grid.becke import _PARTITION_BUDGET, SSF_CELLS, SSF_DECIDERS, _ssf_weights
 from dftax.system.molecule import symbol_to_Z
 
 MOLECULES = {
@@ -82,23 +82,25 @@ def test_default_partition_is_becke_unchanged():
     assert becke_grid_size(syms, **COARSE, partition="stratmann") == a[0].shape[0]
 
 
-# (cells, budget) of the SSF pass: the default; every cell; and small chunks
-# (16 to 64 points of methanol's grid) whose candidates fill a cell size each,
-# the larger ones in blocks of points.
-PASSES = [(SSF_CELLS, _PARTITION_BUDGET), ((), _PARTITION_BUDGET),
-          (SSF_CELLS, 2**10), ((0, 2, 4), 2**10), ((0, 1, 2, 3, 4, 5), 2**9)]
+# (cells, deciders, budget) of the SSF pass: the default (methanol's six atoms
+# all decide); every cell, no deciders; and small chunks (8 to 128 points of
+# methanol's grid) whose candidates fill each cell size, the larger ones in
+# blocks of points, with none, some or all atoms deciding.
+PASSES = [(SSF_CELLS, SSF_DECIDERS, _PARTITION_BUDGET), ((), 0, _PARTITION_BUDGET),
+          (SSF_CELLS, 0, 2**10), ((0, 2, 4), 2, 2**10), (SSF_CELLS, 1, 2**9),
+          ((0, 1, 2, 3, 4, 5), 6, 2**9)]
 
 
-@pytest.mark.parametrize("cells, budget", PASSES)
-def test_ssf_factors_are_a_partition_of_unity(cells, budget):
+@pytest.mark.parametrize("cells, deciders, budget", PASSES)
+def test_ssf_factors_are_a_partition_of_unity(cells, deciders, budget):
     """Each point's weight factor as owned by every atom in turn sums to one:
     the normalization holds every nonzero cell, whichever cells a chunk
     takes."""
     syms, X = _molecule("methanol")
     pts = becke_grid(syms, X, **COARSE)[0]
     Zs = [symbol_to_Z(s) for s in syms]
-    total = sum(_ssf_weights(pts, jnp.full(pts.shape[0], A), X, Zs, "treutler", cells, budget)
-                for A in range(len(syms)))
+    total = sum(_ssf_weights(pts, jnp.full(pts.shape[0], A), X, Zs, "treutler", cells,
+                             deciders, budget) for A in range(len(syms)))
     np.testing.assert_allclose(np.asarray(total), 1.0, rtol=0, atol=1e-13)
 
 
@@ -109,16 +111,15 @@ def test_every_cell_pass_is_the_candidate_pass():
     pts = becke_grid(syms, X, **COARSE)[0]
     own = _owners(syms, **COARSE)
     Zs = [symbol_to_Z(s) for s in syms]
-    f = lambda cells, budget: lambda c: _ssf_weights(pts + (c - X)[own], own, c, Zs,
-                                                     "treutler", cells, budget)
+    f = lambda *spec: lambda c: _ssf_weights(pts + (c - X)[own], own, c, Zs, "treutler", *spec)
     t = jnp.cos(jnp.arange(pts.shape[0]))
-    w0 = f((), _PARTITION_BUDGET)(X)
-    g0 = jax.grad(lambda c: jnp.sum(t * f((), _PARTITION_BUDGET)(c)))(X)
+    w0 = f(*PASSES[1])(X)
+    g0 = jax.grad(lambda c: jnp.sum(t * f(*PASSES[1])(c)))(X)
     assert np.abs(np.asarray(g0)).max() > 1e-3
-    for cells, budget in PASSES:
-        np.testing.assert_allclose(np.asarray(f(cells, budget)(X)), np.asarray(w0),
+    for spec in PASSES:
+        np.testing.assert_allclose(np.asarray(f(*spec)(X)), np.asarray(w0),
                                    rtol=1e-13, atol=1e-15)
-        g = jax.grad(lambda c: jnp.sum(t * f(cells, budget)(c)))(X)
+        g = jax.grad(lambda c: jnp.sum(t * f(*spec)(c)))(X)
         np.testing.assert_allclose(np.asarray(g), np.asarray(g0), rtol=1e-12, atol=1e-13)
 
 

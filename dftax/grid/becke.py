@@ -28,10 +28,13 @@ PARTITIONS = ("becke", "stratmann")
 # Stratmann, Scuseria and Frisch, CPL 257, 213 (1996), eq. 14: the cell
 # boundary's half-width in ν.
 SSF_A = 0.64
-# Cells a chunk of points takes in the SSF pass besides its owners': the
-# smallest size that holds the union of its points' candidates (0: every
-# weight is 0 or 1), every cell past the last. Exact either way.
-SSF_CELLS = (0, 32, 256)
+# The SSF pass. A point's candidates are the cells its owner's does not
+# decide that none of its SSF_DECIDERS nearest atoms zeroes; a chunk of
+# points takes up to the smallest of SSF_CELLS per point that holds every
+# point's (0: each weight is 0 or 1), or every cell past the last. Exact
+# either way: the cells left out are zero.
+SSF_CELLS = (0, 8, 32, 128)
+SSF_DECIDERS = 16
 
 # Bragg-Slater atomic radii (Slater, JCP 41, 3199 (1964)), the cell sizes of
 # the Becke partition. Tabulated in Angstrom, indexed by atomic number Z (index
@@ -267,18 +270,18 @@ def becke_weights(points, owners, coords, Zs, radii_adjust: str | None = "becke"
 
 
 def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
-                 budget=_PARTITION_BUDGET):
+                 deciders=SSF_DECIDERS, budget=_PARTITION_BUDGET):
     """SSF weight factors, each point's from its owner's cell and the cells
     that can be nonzero there.
 
     Where ``P_O(p) > 0`` (O the owner) another cell ``P_A`` holds the factor
-    ``s(ν_AO) = 1 - s(ν_OA)``, so it is nonzero only if ``|ν_OA| < a``: A is
-    one of the point's candidates. Where ``P_O(p) = 0`` the weight is 0
-    whatever the others. A chunk of points evaluates the union of its points'
-    candidates, padded to the smallest of ``cells`` that holds it (every cell
-    past the last), as one dense block, and each point sums its own. Exact:
-    the cells left out are zero, and so are their derivatives. Checkpointed
-    per chunk and per block of points.
+    ``s(ν_AO) = 1 - s(ν_OA)``, so it is nonzero only if ``|ν_OA| < a``, and
+    only if no atom N has ``ν_AN >= a``: the point's ``deciders`` nearest
+    atoms are tested. The cells left are the point's candidates, gathered
+    nearest first up to the smallest of ``cells`` that holds every point's in
+    the chunk (or every cell, past the last). Where ``P_O(p) = 0`` the weight
+    is 0 whatever the others. Exact: the cells left out are zero, and so are
+    their derivatives. Checkpointed per chunk and per block of points.
     """
     coords = jnp.asarray(coords)
     points = jnp.asarray(points)
@@ -289,31 +292,37 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
     dAB = coords[:, None, :] - coords[None, :, :]
     RAB = jnp.sqrt(jnp.sum(dAB * dAB, axis=2) + jnp.eye(n_atom))
     a = size_adjustment(np.asarray([bragg_radius(Z) for Z in Zs]), radii_adjust)
+    aT = a.T                                                  # a_AN for the deciders N
     cols = jnp.arange(n_atom)
-    sizes = sorted({min(int(c), n_atom) for c in cells} | {n_atom})
-    P = max(1, budget // (next(m for m in sizes if m > 0) * n_atom))
+    sizes = sorted({min(int(c), n_atom - 1) for c in cells})
+    tiers = sizes + ([None] if not sizes or sizes[-1] < n_atom - 1 else [])   # None: every cell
+    K = min(int(deciders), n_atom)
+    P = max(1, budget // (max(K, 1) * n_atom))
     P = n if P >= n else 1 << (P.bit_length() - 1)            # a power of two below n
 
-    def cell_sum(r, cand, idx):                               # Σ_A P_A over candidates A in idx
-        R, aa, rA, c = ((RAB, a, r, cand) if idx is None
-                        else (RAB[idx], a[idx], r[:, idx], cand[:, idx]))
-        diag = (cols if idx is None else idx)[:, None] == cols
-        mu = (rA[:, :, None] - r[:, None, :]) / R
+    def cells_sum(r, cand, k):                                # Σ_A P_A over the candidates
+        if k is None:                                         # every cell
+            R, aa, rA, ok, diag = RAB, a, r, cand, jnp.eye(n_atom, dtype=bool)
+        else:
+            key, A = lax.top_k(jnp.where(cand, -r, -jnp.inf), k)
+            R, aa, rA, ok = RAB[A], a[A], jnp.take_along_axis(r, A, 1), key > -jnp.inf
+            diag = A[..., None] == cols
+        mu = (rA[..., None] - r[:, None, :]) / R
         s = 0.5 * (1.0 - stratmann(mu + aa * (1.0 - mu * mu)))
-        return jnp.sum(jnp.where(c, jnp.prod(jnp.where(diag, 1.0, s), axis=-1), 0.0), axis=1)
+        return jnp.sum(jnp.where(ok, jnp.prod(jnp.where(diag, 1.0, s), axis=-1), 0.0), axis=1)
 
-    def tier(m):
+    def tier(k):
+        m = n_atom if k is None else k
         cap = max(1, budget // (m * n_atom)) if m else P
         b = next(d for d in range(min(cap, P), 0, -1) if P % d == 0)
 
-        def f(r, cand, u):
-            if m == 0:
+        def f(r, cand):
+            if k == 0:
                 return jnp.zeros(r.shape[0], r.dtype)
-            idx = None if m == n_atom else lax.top_k(u.astype(r.dtype), m)[1]
             if b == P:
-                return cell_sum(r, cand, idx)
+                return cells_sum(r, cand, k)
             blocks = (r.reshape(-1, b, n_atom), cand.reshape(-1, b, n_atom))
-            return lax.map(jax.checkpoint(lambda x: cell_sum(*x, idx)), blocks).reshape(-1)
+            return lax.map(jax.checkpoint(lambda x: cells_sum(*x, k)), blocks).reshape(-1)
         return f
 
     def chunk(x):
@@ -325,9 +334,15 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
         off = own[:, None] != cols
         P_own = jnp.prod(jnp.where(off, 0.5 * (1.0 - stratmann(nu)), 1.0), axis=1)
         cand = off & (jnp.abs(nu) < SSF_A) & (P_own > 0.0)[:, None]
-        u = jnp.any(cand, axis=0)
-        k = sum((jnp.sum(u) > m).astype(jnp.int32) for m in sizes[:-1])
-        Z = P_own + lax.switch(k, [tier(m) for m in sizes], r, cand, u)
+        if K:
+            N = lax.top_k(-r, K)[1]                           # the nearest atoms
+            for j in range(K):                                # cells N zeroes: ν_AN >= a
+                Nj = N[:, j]
+                m = (r - jnp.take_along_axis(r, Nj[:, None], 1)) / RAB[Nj]
+                cand &= (m + aT[Nj] * (1.0 - m * m) < SSF_A) | (cols == Nj[:, None])
+        worst = jnp.max(jnp.sum(cand, axis=1))
+        t = sum((worst > k).astype(jnp.int32) for k in sizes[: len(tiers) - 1])
+        Z = P_own + lax.switch(t, [tier(k) for k in tiers], r, cand)
         return P_own / jnp.where(Z > 0.0, Z, 1.0)             # Z = 0 only where P_own = 0
 
     pad = (-n) % P

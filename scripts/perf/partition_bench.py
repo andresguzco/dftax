@@ -77,10 +77,16 @@ def speed(args):
         f = jax.jit(f).lower(X).compile()
         t_compile = round(time.perf_counter() - t, 2)
     runs = []                    # eager (as KS builds it): the first call compiles
-    for _ in range(2):
+    for i in range(2):
         t = time.perf_counter()
-        out = jax.block_until_ready(f(X))
+        if i and args.profile:   # the second call's device time by kernel
+            with jax.profiler.trace(args.profile, create_perfetto_trace=True):
+                out = jax.block_until_ready(f(X))
+        else:
+            out = jax.block_until_ready(f(X))
         runs.append(time.perf_counter() - t)
+    if args.profile:
+        kernels(args.profile)
     stats = jax.devices()[0].memory_stats() or {}
     w = None if args.grad else np.asarray(out[1])
     emit(mode="grad" if args.grad else "grid", jit=args.jit, geom=args.geom, partition=p,
@@ -89,6 +95,25 @@ def speed(args):
          peak_gb=round(stats.get("peak_bytes_in_use", 0) / 2**30, 3),
          zero_weights=None if w is None else int((w == 0).sum()),
          weight_sum=None if w is None else float(w.sum()))
+
+
+def kernels(trace_dir, top=25):
+    """The device kernels of a perfetto trace under ``trace_dir``, by total time."""
+    import glob
+    import gzip
+    from collections import Counter
+
+    path = sorted(glob.glob(f"{trace_dir}/**/*.json.gz", recursive=True))[-1]
+    events = json.load(gzip.open(path))["traceEvents"]
+    gpu = {e["pid"] for e in events if e.get("ph") == "M" and e.get("name") == "process_name"
+           and "GPU" in str(e.get("args", {}).get("name", ""))}
+    total, calls = Counter(), Counter()
+    for e in events:
+        if e.get("ph") == "X" and e.get("pid") in gpu:
+            total[e["name"]] += e.get("dur", 0)
+            calls[e["name"]] += 1
+    emit(trace=path, device_s=round(sum(total.values()) / 1e6, 3),
+         top=[[k, round(v / 1e6, 3), calls[k]] for k, v in total.most_common(top)])
 
 
 def count(args):
@@ -213,6 +238,7 @@ def main():
     ap.add_argument("--partition", default="stratmann", choices=("becke", "stratmann"))
     ap.add_argument("--grad", action="store_true")
     ap.add_argument("--jit", action="store_true")
+    ap.add_argument("--profile", default=None, help="trace the second call into this dir")
     ap.add_argument("--basis", default="cc-pvdz")
     args = ap.parse_args()
     dict(speed=speed, count=count, pyscf=pyscf_mode)[args.mode](args)

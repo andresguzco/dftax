@@ -3,12 +3,17 @@
 Two radial schemes (Becke's and Treutler-Ahlrichs' M4) and the atomic radii
 are coordinate-independent constants; the fuzzy-Voronoi partition is written
 in JAX so it is differentiable w.r.t. nuclear coordinates (needed for analytic
-forces)."""
+forces). Two cell functions: Becke's three-fold smoothing, and
+Stratmann-Scuseria-Frisch's polynomial, which is exactly 0 or 1 past
+|ν| = 0.64, so a point's weight needs only the cells its owner's does not
+decide."""
 
 from __future__ import annotations
 
 import numpy as np
+import jax
 import jax.numpy as jnp
+from jax import lax
 
 from dftax.utils.vmap import vmap as _chunked_vmap
 
@@ -18,6 +23,14 @@ from dftax.utils.vmap import vmap as _chunked_vmap
 # ``eri3c._DF_BRA_BUDGET``). For small molecules the chunk covers the whole
 # block, so nothing changes there.
 _PARTITION_BUDGET = 2**24
+
+PARTITIONS = ("becke", "stratmann")
+# Stratmann, Scuseria and Frisch, CPL 257, 213 (1996), eq. 14: the cell
+# boundary's half-width in ν.
+SSF_A = 0.64
+# Cells per point besides the owner's in the SSF pass. A chunk with a point
+# that has more candidates takes every cell (exact either way).
+SSF_ROWS = 32
 
 # Bragg-Slater atomic radii (Slater, JCP 41, 3199 (1964)), the cell sizes of
 # the Becke partition. Tabulated in Angstrom, indexed by atomic number Z (index
@@ -151,9 +164,30 @@ def size_adjustment(bragg, radii_adjust: str | None):
     return jnp.clip(u / (u * u - 1.0), -bound, bound)
 
 
-def _cell_fn(coords, Zs, radii_adjust):
-    """``p -> P_A(p)`` (natom,), the unnormalized Becke cell functions at one
+
+def _check_partition(partition):
+    if partition not in PARTITIONS:
+        raise ValueError(
+            f"unknown partition {partition!r}; use 'becke' or 'stratmann'."
+        )
+
+
+def stratmann(nu):
+    """SSF's ``g(ν)`` (CPL 257, 213 (1996), eq. 14): with ``x = ν/a``,
+    ``(35x - 35x³ + 21x⁵ - 5x⁷)/16`` inside ``|ν| < a = 0.64`` and the sign
+    of ``ν`` outside, exactly, so a cell's factor ``(1 - g)/2`` is exactly 0
+    or 1 there with a zero derivative. Evaluated as PySCF's
+    ``gen_grid.stratmann``."""
+    x = nu / SSF_A
+    x2 = x * x
+    g = 0.0625 * (x * (35.0 + x2 * (-35.0 + x2 * (21.0 - 5.0 * x2))))
+    return jnp.where(nu <= -SSF_A, -1.0, jnp.where(nu >= SSF_A, 1.0, g))
+
+
+def _cell_fn(coords, Zs, radii_adjust, partition="becke"):
+    """``p -> P_A(p)`` (natom,), the unnormalized cell functions at one
     point, with the pair quantities (R_AB, a_AB) formed once for all points."""
+    _check_partition(partition)
     coords = jnp.asarray(coords)
     n_atom = coords.shape[0]
     # Pair quantities, computed once (natom²).
@@ -172,9 +206,12 @@ def _cell_fn(coords, Zs, radii_adjust):
         rA = jnp.sqrt(jnp.sum(dpA * dpA, axis=1) + 1e-30)     # (A,)
         mu = (rA[:, None] - rA[None, :]) / RAB                # (A, B)
         nu = mu + a * (1.0 - mu * mu)
-        f = nu
-        for _ in range(3):
-            f = 1.5 * f - 0.5 * f**3
+        if partition == "stratmann":
+            f = stratmann(nu)
+        else:
+            f = nu
+            for _ in range(3):
+                f = 1.5 * f - 0.5 * f**3
         s = 0.5 * (1.0 - f)
         # Diagonal (A == B) plays no role: s_AA = 1 leaves it out of the product.
         s = jnp.where(eye, 1.0, s)
@@ -183,32 +220,40 @@ def _cell_fn(coords, Zs, radii_adjust):
     return cell
 
 
-def becke_partition(points, coords, Zs, radii_adjust: str | None = "becke"):
-    """Unnormalized Becke cell functions ``P_A(point)``, shape (n_grid, n_atom).
+def becke_partition(points, coords, Zs, radii_adjust: str | None = "becke",
+                    partition: str = "becke"):
+    """Unnormalized cell functions ``P_A(point)``, shape (n_grid, n_atom).
 
     Vectorized JAX (differentiable w.r.t. ``coords``); includes the heteronuclear
-    size adjustment selected by ``radii_adjust`` (see :func:`size_adjustment`).
-    Points are processed in budget-derived chunks so the per-point
-    ``(chunk, A, B)`` transient stays bounded for large molecules
+    size adjustment selected by ``radii_adjust`` (see :func:`size_adjustment`)
+    and the cell function selected by ``partition`` (``"becke"`` or
+    ``"stratmann"``). Points are processed in budget-derived chunks so the
+    per-point ``(chunk, A, B)`` transient stays bounded for large molecules
     (checkpointed, so the backward pass used by the forces rematerializes each
     chunk instead of storing them all).
     """
     n_atom = len(Zs)
     chunk = max(1, _PARTITION_BUDGET // (n_atom * n_atom))
-    cell = _cell_fn(coords, Zs, radii_adjust)
+    cell = _cell_fn(coords, Zs, radii_adjust, partition)
     return _chunked_vmap(cell, chunk_size=chunk, checkpoint=True)(points)
 
 
-def becke_weights(points, owners, coords, Zs, radii_adjust: str | None = "becke"):
-    """Becke weight factors ``P_owner(p) / Σ_A P_A(p)`` of points ``p`` owned
+def becke_weights(points, owners, coords, Zs, radii_adjust: str | None = "becke",
+                  partition: str = "becke", rows: int = SSF_ROWS):
+    """Weight factors ``P_owner(p) / Σ_A P_A(p)`` of points ``p`` owned
     by atoms ``owners`` (int, (n_grid,)), shape (n_grid,).
 
     One chunked pass over every atom's points with the pair quantities formed
     once, so a molecule's grid is one loop in the compiled program (a pass per
     atom was natom loops, each with its own natom² constants) and the
     (n_grid, n_atom) cell functions are never held. Differentiable w.r.t.
-    ``coords``, checkpointed like :func:`becke_partition`.
+    ``coords``, checkpointed like :func:`becke_partition`. With
+    ``partition="stratmann"`` the normalization takes the owner's cell and at
+    most ``rows`` others per point (:func:`_ssf_weights`).
     """
+    _check_partition(partition)
+    if partition == "stratmann":
+        return _ssf_weights(points, owners, coords, Zs, radii_adjust, rows)
     cell = _cell_fn(coords, Zs, radii_adjust)
     n_atom = len(Zs)
 
@@ -218,3 +263,63 @@ def becke_weights(points, owners, coords, Zs, radii_adjust: str | None = "becke"
 
     chunk = max(1, _PARTITION_BUDGET // (n_atom * n_atom))
     return _chunked_vmap(weight, in_axes=(0, 0), chunk_size=chunk, checkpoint=True)(points, owners)
+
+
+def _ssf_weights(points, owners, coords, Zs, radii_adjust, rows):
+    """SSF weight factors, each point's from its owner's cell and the cells
+    its owner's does not decide.
+
+    Where ``P_O(p) > 0`` (O the owner) another cell ``P_A`` holds the factor
+    ``s(ν_AO) = 1 - s(ν_OA)``, so it is nonzero only if ``|ν_OA| < a``: those
+    candidates, nearest first, are the normalization's cells (``rows`` per
+    point). A chunk with a point that has more takes every cell. Where
+    ``P_O(p) = 0`` the weight is 0 whatever the others. Exact: the cells left
+    out are zero, and so are their derivatives. G·(rows + 1)·natom terms
+    instead of G·natom²; checkpointed per chunk.
+    """
+    coords = jnp.asarray(coords)
+    points = jnp.asarray(points)
+    owners = jnp.asarray(owners)
+    n_atom, n = coords.shape[0], points.shape[0]
+    if n_atom == 1:
+        return jnp.ones(n, points.dtype)
+    k = max(1, min(int(rows), n_atom - 1))
+    dAB = coords[:, None, :] - coords[None, :, :]
+    RAB = jnp.sqrt(jnp.sum(dAB * dAB, axis=2) + jnp.eye(n_atom))
+    a = size_adjustment(np.asarray([bragg_radius(Z) for Z in Zs]), radii_adjust)
+    cols = jnp.arange(n_atom)
+    cell = _cell_fn(coords, Zs, radii_adjust, "stratmann")
+    every_chunk = max(1, _PARTITION_BUDGET // (n_atom * n_atom))
+
+    def cells(r, A):                                          # P_A of cells A (P, k), r (P, natom)
+        mu = (jnp.take_along_axis(r, A, 1)[..., None] - r[:, None, :]) / RAB[A]
+        s = 0.5 * (1.0 - stratmann(mu + a[A] * (1.0 - mu * mu)))
+        return jnp.prod(jnp.where(A[..., None] == cols, 1.0, s), axis=-1)
+
+    def chunk(x):
+        p, own = x
+        d = p[:, None, :] - coords[None]
+        r = jnp.sqrt(jnp.sum(d * d, axis=2) + 1e-30)          # (P, natom)
+        mu = (jnp.take_along_axis(r, own[:, None], 1) - r) / RAB[own]
+        nu = mu + a[own] * (1.0 - mu * mu)
+        off = own[:, None] != cols
+        P_own = jnp.prod(jnp.where(off, 0.5 * (1.0 - stratmann(nu)), 1.0), axis=1)
+        cand = off & (jnp.abs(nu) < SSF_A)
+        fits = jnp.all((jnp.sum(cand, axis=1) <= k) | (P_own == 0.0))
+
+        def few(_):
+            key, A = lax.top_k(jnp.where(cand, -r, -jnp.inf), k)
+            Z = P_own + jnp.sum(jnp.where(key > -jnp.inf, cells(r, A), 0.0), axis=1)
+            return P_own / jnp.where(Z > 0.0, Z, 1.0)         # Z = 0 only where P_own = 0
+
+        def every(_):
+            w = lambda q, o: (lambda P: P[o] / P.sum())(cell(q))
+            return _chunked_vmap(w, in_axes=(0, 0), chunk_size=min(every_chunk, p.shape[0]))(p, own)
+        return lax.cond(fits, few, every, None)
+
+    P = max(1, _PARTITION_BUDGET // ((k + 1) * n_atom))
+    P = min(P, n)
+    pad = (-n) % P
+    pts = jnp.concatenate([points, jnp.broadcast_to(points[:1], (pad, 3))]).reshape(-1, P, 3)
+    own = jnp.concatenate([owners, jnp.broadcast_to(owners[:1], (pad,))]).reshape(-1, P)
+    return lax.map(jax.checkpoint(chunk), (pts, own)).reshape(-1)[:n]

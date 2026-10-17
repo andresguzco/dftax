@@ -6,6 +6,19 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Stratmann-Scuseria-Frisch partition.** `becke(partition="stratmann")`
+  (and the `partition` argument of `becke_grid`, `becke_weights` and
+  `becke_partition`) shapes the cells with SSF's polynomial (CPL 257, 213
+  (1996)), whose factors are exactly 0 or 1 past `|ν| = 0.64`. As in PySCF the
+  radii adjustment is applied to μ first, so the grid is PySCF's `Grids` with
+  `becke_scheme=gen_grid.stratmann` to rounding. A point's weight takes its
+  owner's cell and only the cells whose factor in it is strictly between 0
+  and 1, up to `SSF_ROWS = 32` per point (a chunk with more takes every
+  cell): G·33·natom terms instead of G·natom², the same weights and
+  gradients. The default stays Becke's (`partition="becke"`, unchanged), and
+  the points are the same either way.
+
 ## [0.9.1] - 2026-10-16
 
 ### Fixed

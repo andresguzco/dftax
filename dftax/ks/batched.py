@@ -218,7 +218,7 @@ def scf_batched(
         basis = eqx.tree_at(lambda b: b.centers, template, coords[atom_idx])
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max,
-            grid.radial, grid.radii_adjust,
+            grid.radial, grid.radii_adjust, partition=grid.partition,
         )
         spec = coulomb
         if aux_t is not None:

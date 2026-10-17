@@ -301,7 +301,7 @@ def _resolve_grid(grid, symbols, coords):
             )
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max,
-            grid.radial, grid.radii_adjust,
+            grid.radial, grid.radii_adjust, partition=grid.partition,
         )
         if grid.cutoff is not None:
             # Zero the negligible weights; do not drop their points. Which

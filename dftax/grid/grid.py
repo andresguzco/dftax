@@ -15,10 +15,12 @@ constants, never on the coordinates, so grid shapes are static under
 traced coordinates).
 
 The radial mapping (Becke or Treutler-Ahlrichs M4), the cell-size adjustment
-of the partition, and the per-element shell counts are spec choices. The
-default is PySCF's scheme: Treutler's mapping and cell sizes at PySCF's
-level-3 radial counts; with ``lebedev="pyscf"`` as well, the grid is PySCF's
-default ``Grids``.
+and the cell function of the partition (Becke's or Stratmann-Scuseria-
+Frisch's), and the per-element shell counts are spec choices. The default is
+PySCF's scheme: Treutler's mapping and cell sizes at PySCF's level-3 radial
+counts, Becke's cells; with ``lebedev="pyscf"`` as well, the grid is PySCF's
+default ``Grids``, and with ``partition="stratmann"`` its ``Grids`` with
+``becke_scheme=gen_grid.stratmann``.
 """
 
 from __future__ import annotations
@@ -33,7 +35,8 @@ import jax.numpy as jnp
 from dftax.system.molecule import symbol_to_Z
 from dftax.grid.lebedev import lebedev_grid
 from dftax.grid.becke import (
-    becke_radial, becke_weights, bragg_radius, treutler_radial, treutler_xi,
+    _check_partition, becke_radial, becke_weights, bragg_radius, treutler_radial,
+    treutler_xi,
 )
 
 
@@ -51,6 +54,7 @@ class Becke:
     lebedev: int | str = 302
     radial: str = "treutler"
     radii_adjust: str | None = "treutler"
+    partition: str = "becke"
     chunk: int | str | None = "auto"
     prune: str | None = "nwchem"
     r_max: float | None = 45.0
@@ -75,6 +79,7 @@ def becke(
     *,
     radial: str = "treutler",
     radii_adjust: str | None = "treutler",
+    partition: str = "becke",
     chunk: int | str | None = "auto",
     prune: str | None = "nwchem",
     r_max: float | None = 45.0,
@@ -104,6 +109,12 @@ def becke(
             partition: ``"treutler"`` (default; square root of the
             Bragg-radius ratio, as in PySCF), ``"becke"`` (the ratio itself,
             Becke 1988) or ``None`` for unadjusted cells.
+        partition: the cell function: ``"becke"`` (default; Becke's
+            three-fold smoothing, PySCF's default) or ``"stratmann"``
+            (Stratmann-Scuseria-Frisch, CPL 257, 213 (1996): exactly 0 or 1
+            past ``|ν| = 0.64``, so each point's weight takes only the cells
+            its owner's does not decide; PySCF's ``gen_grid.stratmann``). The
+            same points either way; only the weights differ.
         chunk: XC-integral streaming. ``"auto"`` (default) materializes the AO
             grid values when they fit a memory budget and streams over grid
             chunks otherwise; ``None`` forces the materialized AO grid; an int
@@ -136,7 +147,7 @@ def becke(
             everything to a single shape recovers nothing.
     """
     return Becke(n_radial=n_radial, lebedev=lebedev, radial=radial,
-                 radii_adjust=radii_adjust, chunk=chunk,
+                 radii_adjust=radii_adjust, partition=partition, chunk=chunk,
                  prune=prune, r_max=r_max, cutoff=cutoff, screen=screen,
                  screen_block=screen_block, screen_buckets=screen_buckets)
 
@@ -270,13 +281,16 @@ def becke_grid_size(
     prune: str | None = "nwchem",
     r_max: float | None = 45.0,
     radial: str = "treutler",
+    partition: str = "becke",
 ) -> int:
     """Number of grid points :func:`becke_grid` will emit (static per spec).
 
     Lets callers that build the grid under ``jit``/``vmap`` (forces, the
     batched solver) make eager, shape-dependent decisions, e.g. resolving the
-    ``chunk="auto"`` streaming policy.
+    ``chunk="auto"`` streaming policy. The partition changes the weights
+    only, never the points.
     """
+    _check_partition(partition)
     return sum(
         r.shape[0] * order
         for s in symbols
@@ -297,13 +311,15 @@ def becke_grid(
     r_max: float | None = 45.0,
     radial: str = "treutler",
     radii_adjust: str | None = "treutler",
+    partition: str = "becke",
 ):
     """Build a molecular quadrature grid (points in Bohr, weights).
 
     Each atom contributes ``n_radial`` radial shells (mapped per ``radial``)
     times a Lebedev angular grid whose order is pruned per radial region (see
-    :func:`becke`); the per-atom grids are merged with Becke's fuzzy-Voronoi
-    partition, its cells sized per ``radii_adjust``.
+    :func:`becke`); the per-atom grids are merged with a fuzzy-Voronoi
+    partition, its cells sized per ``radii_adjust`` and shaped per
+    ``partition`` (Becke's or Stratmann-Scuseria-Frisch's).
 
     Returns ``(coords, weights)`` as JAX arrays of shape ``(n_grid, 3)`` and
     ``(n_grid,)``, differentiable w.r.t. ``coords_bohr``. Shapes depend only
@@ -316,6 +332,7 @@ def becke_grid(
     template is one constant, so the program and its constants grow with the
     number of elements, not of atoms.
     """
+    _check_partition(partition)
     coords = jnp.asarray(coords_bohr).reshape(-1, 3)
     Zs = [symbol_to_Z(s) for s in symbols]
     r_max = None if r_max is None else float(r_max)
@@ -343,5 +360,5 @@ def becke_grid(
     # Fuzzy-Voronoi weights of every atom's points in one chunked pass
     # (becke_weights): one loop in the compiled program, the pair quantities
     # formed once, and only the owner's normalized cell kept per point.
-    weights = raw_w * becke_weights(points, owners, coords, Zs, radii_adjust)
+    weights = raw_w * becke_weights(points, owners, coords, Zs, radii_adjust, partition)
     return points, weights

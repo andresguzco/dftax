@@ -549,6 +549,7 @@ class SAPGuess(eqx.Module):
     r_max: float | None = eqx.field(static=True)
     radial: str = eqx.field(static=True)
     radii_adjust: str | None = eqx.field(static=True)
+    partition: str = eqx.field(static=True, default="becke")
 
 
 # Assembled superposition densities, keyed on the element sequence and the
@@ -628,7 +629,7 @@ def _resolve_guess(spec, symbols, basis, atom_coords):
             exps=jnp.asarray(exps), coefs=jnp.asarray(coefs),
             symbols=tuple(symbols), n_radial=g.n_radial, lebedev=g.lebedev,
             prune=g.prune, r_max=g.r_max, radial=g.radial,
-            radii_adjust=g.radii_adjust,
+            radii_adjust=g.radii_adjust, partition=g.partition,
         )
     raise TypeError(f"unknown guess spec: {spec!r}")
 
@@ -665,7 +666,7 @@ def _initial_density(resolved, ks, X):
             list(resolved.symbols), ks.atom_coords,
             resolved.n_radial, resolved.lebedev,
             resolved.prune, resolved.r_max,
-            resolved.radial, resolved.radii_adjust,
+            resolved.radial, resolved.radii_adjust, partition=resolved.partition,
         )
         V = _sap_matrix(
             ks.basis, ks.atom_coords, resolved.exps, resolved.coefs, gc, gw

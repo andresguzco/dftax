@@ -371,11 +371,13 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
         Z = P_own + lax.switch(t, [tier(k) for k in tiers], r, cand)
         return P_own / jnp.where(Z > 0.0, Z, 1.0)             # Z = 0 only where P_own = 0
 
-    m = n - n % P                                             # whole chunks, then the rest
-    w = lax.map(jax.checkpoint(chunk), (points[:m].reshape(-1, P, 3), owners[:m].reshape(-1, P)))
-    if m == n:
+    def chunk_at(i):                                          # the grid sliced in place, the
+        s = jnp.minimum(i * P, n - P)                         # last chunk ending at n
+        return chunk((lax.dynamic_slice_in_dim(points, s, P),
+                      lax.dynamic_slice_in_dim(owners, s, P)))
+
+    nc = -(-n // P)
+    w = lax.map(jax.checkpoint(chunk_at), jnp.arange(nc))
+    if nc * P == n:
         return w.reshape(-1)
-    pad = P - (n - m)                                         # the rest padded to a chunk
-    rest = (jnp.concatenate([points[m:], jnp.broadcast_to(points[m:m + 1], (pad, 3))]),
-            jnp.concatenate([owners[m:], jnp.broadcast_to(owners[m:m + 1], (pad,))]))
-    return jnp.concatenate([w.reshape(-1), jax.checkpoint(chunk)(rest)[: n - m]])
+    return jnp.concatenate([w[:-1].reshape(-1), w[-1, nc * P - n:]])

@@ -2,7 +2,7 @@
 
     python scripts/perf/partition_bench.py speed GEOM.xyz --partition stratmann [--grad] [--jit]
     python scripts/perf/partition_bench.py count GEOM.xyz
-    python scripts/perf/partition_bench.py pyscf water|benzene|GEOM.xyz [--basis cc-pvdz]
+    python scripts/perf/partition_bench.py pyscf water|benzene|GEOM.xyz [--basis cc-pvdz] [--df AUX]
 
 ``speed`` builds the whole grid (``becke_grid`` on PySCF's level-3 atom
 grids, eagerly as ``KS`` does; ``--jit`` compiles it first) and prints two
@@ -178,7 +178,7 @@ def pyscf_mode(args):
     from pyscf.dft import gen_grid
     from scipy.spatial import cKDTree
 
-    from dftax import KS, Molecule, becke, exact, forces, functional, scf
+    from dftax import KS, Molecule, becke, df, exact, forces, functional, scf
     from dftax.grid import becke_grid
 
     syms, X = geometry(args.geom)
@@ -195,6 +195,8 @@ def pyscf_mode(args):
         dist, idx = cKDTree(pc).query(g.coords)
         dw = np.abs(pw[idx] - g.weights)
         mf = dft.RKS(mol, xc="pbe")
+        if args.df:                                       # both codes fit with one set
+            mf = mf.density_fit(auxbasis=args.df)
         mf.grids.becke_scheme = scheme
         mf.small_rho_cutoff = 0.0
         mf.conv_tol = 1e-12
@@ -210,8 +212,9 @@ def pyscf_mode(args):
         xc = functional("pbe")
         spec = becke(partition=p, **SPEC)
         m = Molecule.from_xyz(atom, args.basis, unit="bohr", spherical=True)    # as PySCF
-        res = scf(KS(m, xc, grid=spec, coulomb=exact()), e_tol=1e-12, d_tol=1e-10)
-        f = np.asarray(forces(m, xc, res, grid=spec, coulomb=exact()))
+        coul = df(args.df, screen=None) if args.df else exact()
+        res = scf(KS(m, xc, grid=spec, coulomb=coul), e_tol=1e-12, d_tol=1e-10)
+        f = np.asarray(forces(m, xc, res, grid=spec, coulomb=coul))
         out[p] = dict(e_ref=e_ref, f_ref=f_ref, e=float(res.e_tot), f=f)
         emit(geom=args.geom, basis=args.basis, partition=p, natom=len(syms),
              npoints=int(pc.shape[0]), pyscf_npoints=int(g.weights.size),
@@ -240,6 +243,7 @@ def main():
     ap.add_argument("--jit", action="store_true")
     ap.add_argument("--profile", default=None, help="trace the second call into this dir")
     ap.add_argument("--basis", default="cc-pvdz")
+    ap.add_argument("--df", default=None, help="fit the Coulomb term with this auxiliary set")
     args = ap.parse_args()
     dict(speed=speed, count=count, pyscf=pyscf_mode)[args.mode](args)
 

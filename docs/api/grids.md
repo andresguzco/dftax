@@ -23,11 +23,12 @@ from Na on, where PySCF uses 434 angular points.
 PySCF's) or Stratmann, Scuseria and Frisch's (`"stratmann"`, PySCF's
 `becke_scheme=gen_grid.stratmann`), whose factors are exactly 0 or 1 away from
 the cell boundaries, so each point's weight takes only the few cells that can
-be nonzero there. The points are the same; the weights move the energy by
-~1e-7 Ha and the forces by ~1e-5 Ha/bohr. It is the large-system choice: on
+be nonzero there. The points are the same; on water, benzene and alanine
+dipeptide (PBE/cc-pVDZ) the weights move the energy by up to 1.4e-6 Ha and
+the forces by up to 4.6e-5 Ha/bohr. It pays off at protein size: on
 an A100 the weights of a 2,742-atom protein (32.8M points) take 82 s against
-2,819 s, and the coordinate gradient of insulin's (784 atoms) 57 s against
-2,135 s, at the same peak memory.
+2,819 s, and the coordinate gradient of insulin's (784 atoms) 58 s against
+2,135 s, at the same peak memory (within 5%).
 
 `screen` is the large-system knob. With it, the grid is reordered into compact
 blocks and each block keeps only the shells that actually reach it, so the XC

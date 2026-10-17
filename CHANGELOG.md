@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-17
+
 ### Added
 - **Stratmann-Scuseria-Frisch partition, opt-in.** `becke(partition="stratmann")`
   (and `partition=` on `becke_grid`, `becke_weights` and `becke_partition`,

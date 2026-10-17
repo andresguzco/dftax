@@ -6,10 +6,11 @@
 ``speed`` builds the whole grid (``becke_grid`` on PySCF's level-3 atom
 grids, eagerly as ``KS`` does; ``--jit`` compiles it first) and prints two
 calls' times and the device's peak memory; ``--grad`` times the coordinate
-gradient of a weighted sum instead (the force path). ``pyscf`` checks ``partition="stratmann"`` against PySCF's
-``Grids`` with ``becke_scheme=gen_grid.stratmann``: the weights point by point,
-the PBE XC energy of PySCF's density on either grid, and the SCF energies and
-forces with the grid response; then the Becke-to-SSF shift in both codes.
+gradient of a weighted sum instead (the force path). ``pyscf`` checks
+``partition="stratmann"`` against PySCF's ``Grids`` with
+``becke_scheme=gen_grid.stratmann``: the weights point by point, the PBE XC
+energy of PySCF's density on either grid, and the SCF energies and forces
+with the grid response; then the Becke-to-SSF shift in both codes.
 One JSON line per result. An xyz file may omit the count and comment lines.
 """
 

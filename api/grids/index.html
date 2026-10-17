@@ -1551,6 +1551,16 @@ given accuracy with fewer radial shells) or Becke's (dftax's default through
 PySCF's level-3 count per period. With <code>becke(lebedev="pyscf")</code> the grid is
 PySCF's default <code>Grids</code>, point for point; it differs from the default only
 from Na on, where PySCF uses 434 angular points.</p>
+<p><code>partition</code> chooses the cell function: Becke's (<code>"becke"</code>, the default and
+PySCF's) or Stratmann, Scuseria and Frisch's (<code>"stratmann"</code>, PySCF's
+<code>becke_scheme=gen_grid.stratmann</code>), whose factors are exactly 0 or 1 away from
+the cell boundaries, so each point's weight takes only the few cells that can
+be nonzero there. The points are the same; on water, benzene and alanine
+dipeptide (PBE/cc-pVDZ) the weights move the energy by up to 1.4e-6 Ha and
+the forces by up to 4.6e-5 Ha/bohr. It pays off at protein size: on
+an A100 the weights of a 2,742-atom protein (32.8M points) take 82 s against
+2,819 s, and the coordinate gradient of insulin's (784 atoms) 58 s against
+2,135 s, at the same peak memory (within 5%).</p>
 <p><code>screen</code> is the large-system knob. With it, the grid is reordered into compact
 blocks and each block keeps only the shells that actually reach it, so the XC
 term costs <code>ng·nsub²</code> instead of <code>ng·nao²</code>. It is off by default because the
@@ -1576,7 +1586,10 @@ the streamed dense path at def2-svp, it is a ~10% <em>loss</em> at 23 atoms, 1.5
 <p>Two radial schemes (Becke's and Treutler-Ahlrichs' M4) and the atomic radii
 are coordinate-independent constants; the fuzzy-Voronoi partition is written
 in JAX so it is differentiable w.r.t. nuclear coordinates (needed for analytic
-forces).</p>
+forces). Two cell functions: Becke's three-fold smoothing, and
+Stratmann-Scuseria-Frisch's polynomial, which is exactly 0 or 1 past
+|ν| = 0.64, so a point's weight needs only the cells its owner's does not
+decide.</p>
 
 
 
@@ -1725,6 +1738,118 @@ array([[0.0e+000, 0.0e+000], # random
 ...            offset=np.int_().itemsize,
 ...            dtype=np.int_) # offset = 1*itemsize, i.e. skip first element
 array([2, 3])</p>
+</blockquote>
+</blockquote>
+</blockquote>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.grid.becke.PARTITIONS" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="n">PARTITIONS</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-module-attribute"><code>module-attribute</code></small>
+  </span>
+
+<a href="#dftax.grid.becke.PARTITIONS" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Built-in immutable sequence.</p>
+<p>If no argument is given, the constructor returns an empty tuple.
+If iterable is specified the tuple is initialized from iterable's items.</p>
+<p>If the argument is a tuple, the return value is the same object.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.grid.becke.SSF_A" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="n">SSF_A</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-module-attribute"><code>module-attribute</code></small>
+  </span>
+
+<a href="#dftax.grid.becke.SSF_A" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Convert a string or number to a floating-point number, if possible.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.grid.becke.SSF_CELLS" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="n">SSF_CELLS</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-module-attribute"><code>module-attribute</code></small>
+  </span>
+
+<a href="#dftax.grid.becke.SSF_CELLS" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Built-in immutable sequence.</p>
+<p>If no argument is given, the constructor returns an empty tuple.
+If iterable is specified the tuple is initialized from iterable's items.</p>
+<p>If the argument is a tuple, the return value is the same object.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h5 id="dftax.grid.becke.SSF_DECIDERS" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="n">SSF_DECIDERS</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-module-attribute"><code>module-attribute</code></small>
+  </span>
+
+<a href="#dftax.grid.becke.SSF_DECIDERS" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>int([x]) -&gt; integer
+int(x, base=10) -&gt; integer</p>
+<p>Convert a number or string to an integer, or return 0 if no arguments
+are given.  If x is a number, return x.<strong>int</strong>().  For floating-point
+numbers, this truncates towards zero.</p>
+<p>If x is not a number or if base is given, then x must be a string,
+bytes, or bytearray instance representing an integer literal in the
+given base.  The literal can be preceded by '+' or '-' and be surrounded
+by whitespace.  The base defaults to 10.  Valid bases are 0 and 2-36.
+Base 0 means to interpret the base from the string as an integer
+iteral.</p>
+<blockquote>
+<blockquote>
+<blockquote>
+<p>int('0b100', base=0)
+4</p>
 </blockquote>
 </blockquote>
 </blockquote>
@@ -2243,19 +2368,42 @@ the natom radii rather than embedded as a constant.</p>
 <div class="doc doc-object doc-function">
 
 
+<h5 id="dftax.grid.becke.stratmann" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">stratmann</span><span class="p">(</span><span class="n">nu</span><span class="p">)</span></code>
+
+<a href="#dftax.grid.becke.stratmann" class="headerlink" title="Permanent link">¤</a></h5>
+
+
+    <div class="doc doc-contents ">
+
+        <p>SSF's <code>g(ν)</code> (CPL 257, 213 (1996), eq. 14): with <code>x = ν/a</code>,
+<code>(35x - 35x³ + 21x⁵ - 5x⁷)/16</code> inside <code>|ν| &lt; a = 0.64</code> and the sign
+of <code>ν</code> outside, exactly, so a cell's factor <code>(1 - g)/2</code> is exactly 0
+or 1 there with a zero derivative. Evaluated as PySCF's
+<code>gen_grid.stratmann</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h5 id="dftax.grid.becke.becke_partition" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">becke_partition</span><span class="p">(</span><span class="n">points</span><span class="p">,</span> <span class="n">coords</span><span class="p">,</span> <span class="n">Zs</span><span class="p">,</span> <span class="n">radii_adjust</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'becke'</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">becke_partition</span><span class="p">(</span><span class="n">points</span><span class="p">,</span> <span class="n">coords</span><span class="p">,</span> <span class="n">Zs</span><span class="p">,</span> <span class="n">radii_adjust</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'becke'</span><span class="p">,</span> <span class="n">partition</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'becke'</span><span class="p">)</span></code>
 
 <a href="#dftax.grid.becke.becke_partition" class="headerlink" title="Permanent link">¤</a></h5>
 
 
     <div class="doc doc-contents ">
 
-        <p>Unnormalized Becke cell functions <code>P_A(point)</code>, shape (n_grid, n_atom).</p>
+        <p>Unnormalized cell functions <code>P_A(point)</code>, shape (n_grid, n_atom).</p>
 <p>Vectorized JAX (differentiable w.r.t. <code>coords</code>); includes the heteronuclear
-size adjustment selected by <code>radii_adjust</code> (see :func:<code>size_adjustment</code>).
-Points are processed in budget-derived chunks so the per-point
-<code>(chunk, A, B)</code> transient stays bounded for large molecules
+size adjustment selected by <code>radii_adjust</code> (see :func:<code>size_adjustment</code>)
+and the cell function selected by <code>partition</code> (<code>"becke"</code> or
+<code>"stratmann"</code>). Points are processed in budget-derived chunks so the
+per-point <code>(chunk, A, B)</code> transient stays bounded for large molecules
 (checkpointed, so the backward pass used by the forces rematerializes each
 chunk instead of storing them all).</p>
 
@@ -2268,20 +2416,22 @@ chunk instead of storing them all).</p>
 
 
 <h5 id="dftax.grid.becke.becke_weights" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">becke_weights</span><span class="p">(</span><span class="n">points</span><span class="p">,</span> <span class="n">owners</span><span class="p">,</span> <span class="n">coords</span><span class="p">,</span> <span class="n">Zs</span><span class="p">,</span> <span class="n">radii_adjust</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'becke'</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">becke_weights</span><span class="p">(</span><span class="n">points</span><span class="p">,</span> <span class="n">owners</span><span class="p">,</span> <span class="n">coords</span><span class="p">,</span> <span class="n">Zs</span><span class="p">,</span> <span class="n">radii_adjust</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'becke'</span><span class="p">,</span> <span class="n">partition</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'becke'</span><span class="p">)</span></code>
 
 <a href="#dftax.grid.becke.becke_weights" class="headerlink" title="Permanent link">¤</a></h5>
 
 
     <div class="doc doc-contents ">
 
-        <p>Becke weight factors <code>P_owner(p) / Σ_A P_A(p)</code> of points <code>p</code> owned
+        <p>Weight factors <code>P_owner(p) / Σ_A P_A(p)</code> of points <code>p</code> owned
 by atoms <code>owners</code> (int, (n_grid,)), shape (n_grid,).</p>
 <p>One chunked pass over every atom's points with the pair quantities formed
 once, so a molecule's grid is one loop in the compiled program (a pass per
 atom was natom loops, each with its own natom² constants) and the
 (n_grid, n_atom) cell functions are never held. Differentiable w.r.t.
-<code>coords</code>, checkpointed like :func:<code>becke_partition</code>.</p>
+<code>coords</code>, checkpointed like :func:<code>becke_partition</code>. With
+<code>partition="stratmann"</code> the normalization takes only the cells that can
+be nonzero (:func:<code>_ssf_weights</code>).</p>
 
 
     </div>
@@ -2320,7 +2470,7 @@ atom was natom loops, each with its own natom² constants) and the
 
 
 <h4 id="dftax.grid.becke_grid" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">becke_grid</span><span class="p">(</span><span class="n">symbols</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">coords_bohr</span><span class="p">,</span> <span class="n">n_radial</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'pyscf'</span><span class="p">,</span> <span class="n">lebedev</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">=</span> <span class="mi">302</span><span class="p">,</span> <span class="n">prune</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'nwchem'</span><span class="p">,</span> <span class="n">r_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mf">45.0</span><span class="p">,</span> <span class="n">radial</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'treutler'</span><span class="p">,</span> <span class="n">radii_adjust</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'treutler'</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">becke_grid</span><span class="p">(</span><span class="n">symbols</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">coords_bohr</span><span class="p">,</span> <span class="n">n_radial</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'pyscf'</span><span class="p">,</span> <span class="n">lebedev</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">=</span> <span class="mi">302</span><span class="p">,</span> <span class="n">prune</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'nwchem'</span><span class="p">,</span> <span class="n">r_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mf">45.0</span><span class="p">,</span> <span class="n">radial</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'treutler'</span><span class="p">,</span> <span class="n">radii_adjust</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'treutler'</span><span class="p">,</span> <span class="n">partition</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'becke'</span><span class="p">)</span></code>
 
 <a href="#dftax.grid.becke_grid" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -2330,8 +2480,9 @@ atom was natom loops, each with its own natom² constants) and the
         <p>Build a molecular quadrature grid (points in Bohr, weights).</p>
 <p>Each atom contributes <code>n_radial</code> radial shells (mapped per <code>radial</code>)
 times a Lebedev angular grid whose order is pruned per radial region (see
-:func:<code>becke</code>); the per-atom grids are merged with Becke's fuzzy-Voronoi
-partition, its cells sized per <code>radii_adjust</code>.</p>
+:func:<code>becke</code>); the per-atom grids are merged with a fuzzy-Voronoi
+partition, its cells sized per <code>radii_adjust</code> and shaped per
+<code>partition</code> (Becke's or Stratmann-Scuseria-Frisch's).</p>
 <p>Returns <code>(coords, weights)</code> as JAX arrays of shape <code>(n_grid, 3)</code> and
 <code>(n_grid,)</code>, differentiable w.r.t. <code>coords_bohr</code>. Shapes depend only
 on <code>symbols</code> and the spec constants, so this can run under <code>jit</code> /
@@ -2351,7 +2502,7 @@ number of elements, not of atoms.</p>
 
 
 <h4 id="dftax.grid.becke_grid_size" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">becke_grid_size</span><span class="p">(</span><span class="n">symbols</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">n_radial</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'pyscf'</span><span class="p">,</span> <span class="n">lebedev</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">=</span> <span class="mi">302</span><span class="p">,</span> <span class="n">prune</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'nwchem'</span><span class="p">,</span> <span class="n">r_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mf">45.0</span><span class="p">,</span> <span class="n">radial</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'treutler'</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">becke_grid_size</span><span class="p">(</span><span class="n">symbols</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">n_radial</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'pyscf'</span><span class="p">,</span> <span class="n">lebedev</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">=</span> <span class="mi">302</span><span class="p">,</span> <span class="n">prune</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s1">'nwchem'</span><span class="p">,</span> <span class="n">r_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mf">45.0</span><span class="p">,</span> <span class="n">radial</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'treutler'</span><span class="p">,</span> <span class="n">partition</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'becke'</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span></code>
 
 <a href="#dftax.grid.becke_grid_size" class="headerlink" title="Permanent link">¤</a></h4>
 
@@ -2361,7 +2512,8 @@ number of elements, not of atoms.</p>
         <p>Number of grid points :func:<code>becke_grid</code> will emit (static per spec).</p>
 <p>Lets callers that build the grid under <code>jit</code>/<code>vmap</code> (forces, the
 batched solver) make eager, shape-dependent decisions, e.g. resolving the
-<code>chunk="auto"</code> streaming policy.</p>
+<code>chunk="auto"</code> streaming policy. The partition changes the weights
+only, never the points.</p>
 
 
     </div>

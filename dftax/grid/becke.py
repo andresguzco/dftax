@@ -338,7 +338,7 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
 
     def tier(k):
         m = n_atom if k is None else k
-        cap = max(1, 4 * budget // (m * n_atom)) if m else P  # the cells' block: 4x the budget
+        cap = max(1, budget // (m * n_atom)) if m else P
         b = next(d for d in range(min(cap, P), 0, -1) if P % d == 0)
         g = jax.checkpoint(lambda x: cells_sum(*x, k))        # no residuals per branch
 

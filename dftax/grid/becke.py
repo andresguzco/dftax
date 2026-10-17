@@ -317,9 +317,9 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
     P = max(1, budget // (max(K, 1) * n_atom))
     P = n if P >= n else 1 << (P.bit_length() - 1)            # a power of two below n
 
-    def dist(XA, diag):                                       # R_AB from the coordinates, not
-        dd = XA[..., None, :] - coords                        # a gather of RAB: its transpose
-        return jnp.sqrt(jnp.sum(dd * dd, axis=-1) + diag)     # is a scatter-add (atomics)
+    def dist(XA, diag):     # |X_A - X_B| from the coordinates, an axis at a time: no gather
+        d2 = sum((XA[..., c, None] - coords[:, c]) ** 2 for c in range(3))   # of RAB (its
+        return jnp.sqrt(d2 + diag)  # transpose is a scatter-add), no (..., natom, 3) arrays
 
     def cells_sum(r, cand, k):                                # Σ_A P_A over the candidates
         if k is None:                                         # every cell
@@ -353,8 +353,7 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
 
     def chunk(x):
         p, own = x
-        d = p[:, None, :] - coords[None]
-        r = jnp.sqrt(jnp.sum(d * d, axis=2) + 1e-30)          # (P, natom)
+        r = dist(p, 1e-30)                                    # (P, natom)
         off = own[:, None] != cols
         mu = (jnp.take_along_axis(r, own[:, None], 1) - r) / dist(coords[own], ~off)
         nu = mu + a[own] * (1.0 - mu * mu)

@@ -30,6 +30,7 @@ import numpy as np
 BOHR = 0.52917721092                        # PySCF's, so both codes see one geometry
 SIZE = dict(n_radial="pyscf", lebedev="pyscf", radial="treutler")
 SPEC = dict(SIZE, radii_adjust="treutler")
+UNION = (64, 256, 1024)                     # chunk sizes for the candidates of a chunk
 MOLECULES = {
     "water": "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692",
     "benzene": "; ".join(
@@ -112,18 +113,31 @@ def count(args):
         nu = mu + a[o] * (1.0 - mu * mu)
         off = o[:, None] != jnp.arange(n_atom)
         live = jnp.prod(jnp.where(off, 0.5 * (1.0 - stratmann(nu)), 1.0), axis=1) > 0
-        return jnp.where(live, jnp.sum(off & (jnp.abs(nu) < SSF_A), axis=1), -1)
+        cand = off & (jnp.abs(nu) < SSF_A)
+        reach = jnp.max(jnp.where(cand, r, 0.0), axis=1)             # farthest candidate
+        r_own = jnp.take_along_axis(r, o[:, None], 1)[:, 0]
+        cand = cand & live[:, None]
+        union = [jnp.sum(jnp.any(cand.reshape(-1, m, n_atom), axis=1), axis=1) for m in UNION]
+        return (jnp.where(live, jnp.sum(cand, axis=1), -1), r_own, reach, *union)
 
-    P = min(max(1, _PARTITION_BUDGET // ((SSF_ROWS + 1) * n_atom)), pts.shape[0])
+    P = 4096
     n = pts.shape[0] - pts.shape[0] % P
-    c = np.concatenate([np.asarray(chunk(pts[i:i + P], own[i:i + P])) for i in range(0, n, P)])
-    live = c[c >= 0]
-    fits = (c.reshape(-1, P) <= SSF_ROWS).all(axis=1)
-    emit(mode="count", geom=args.geom, natom=n_atom, npoints=int(pts.shape[0]), chunk=P,
-         live_points=int(live.size), max_cand=int(live.max()),
-         p99_cand=float(np.percentile(live, 99)), mean_cand=float(live.mean()),
-         over_rows=int((live > SSF_ROWS).sum()), chunks=int(fits.size),
-         chunks_every_cell=int((~fits).sum()))
+    out = [chunk(pts[i:i + P], own[i:i + P]) for i in range(0, n, P)]
+    c, r_own, reach, *union = (np.concatenate([np.asarray(x[j]) for x in out])
+                               for j in range(3 + len(UNION)))
+    live = c >= 0
+    q = lambda x: [round(float(v), 2) for v in np.percentile(x, [50, 90, 99, 100])]
+    chunks = {}
+    for k in (8, 16, 32, 64, 128, 256):
+        Pk = min(max(1, _PARTITION_BUDGET // ((k + 1) * n_atom)), c.size)
+        ck = c[: c.size - c.size % Pk].reshape(-1, Pk)
+        chunks[k] = [Pk, int(ck.shape[0]), int((ck > k).any(axis=1).sum())]
+    emit(mode="count", geom=args.geom, natom=n_atom, npoints=int(c.size), rows=SSF_ROWS,
+         live_points=int(live.sum()), cand_q50_90_99_max=q(c[live]),
+         r_own_live_q=q(r_own[live]), reach_live_q=q(reach[live]),
+         live_beyond_8_bohr=int((live & (r_own > 8)).sum()),
+         union_by_chunk_q={m: q(u) for m, u in zip(UNION, union)},
+         chunk_size_chunks_every_cell_by_rows=chunks)
 
 
 def pyscf_mode(args):

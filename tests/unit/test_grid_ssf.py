@@ -4,10 +4,10 @@ PySCF is the oracle: its ``Grids`` with ``becke_scheme=gen_grid.stratmann``
 applies the radii adjustment to μ and then SSF's polynomial, and with the
 same atom grids the two grids are the same points and weights to rounding.
 Each point's weight takes its owner's cell and only the cells whose factor in
-it is strictly between 0 and 1 (``SSF_ROWS`` of them), or every cell for a
-chunk with more: both passes give the same weights and gradients, and the
-factors of a point over all its possible owners sum to one. The default
-partition (Becke's) is unchanged.
+it is strictly between 0 and 1; a chunk of points takes the union of its
+points' cells in one of a few sizes, or every cell. Every size gives the same
+weights and gradients, and the factors of a point over all its possible
+owners sum to one. The default partition (Becke's) is unchanged.
 """
 
 import jax
@@ -17,7 +17,7 @@ import pytest
 
 from dftax import Molecule, becke
 from dftax.grid import becke_grid, becke_grid_size
-from dftax.grid.becke import SSF_ROWS, becke_weights
+from dftax.grid.becke import _PARTITION_BUDGET, SSF_CELLS, _ssf_weights
 from dftax.system.molecule import symbol_to_Z
 
 MOLECULES = {
@@ -82,35 +82,44 @@ def test_default_partition_is_becke_unchanged():
     assert becke_grid_size(syms, **COARSE, partition="stratmann") == a[0].shape[0]
 
 
-@pytest.mark.parametrize("rows", [SSF_ROWS, 1])
-def test_ssf_factors_are_a_partition_of_unity(rows):
+# (cells, budget) of the SSF pass: the default; every cell; and small chunks
+# (16 to 64 points of methanol's grid) whose candidates fill a cell size each,
+# the larger ones in blocks of points.
+PASSES = [(SSF_CELLS, _PARTITION_BUDGET), ((), _PARTITION_BUDGET),
+          (SSF_CELLS, 2**10), ((0, 2, 4), 2**10), ((0, 1, 2, 3, 4, 5), 2**9)]
+
+
+@pytest.mark.parametrize("cells, budget", PASSES)
+def test_ssf_factors_are_a_partition_of_unity(cells, budget):
     """Each point's weight factor as owned by every atom in turn sums to one:
-    the normalization holds every nonzero cell, through the candidate cells
-    (``SSF_ROWS``) and through every cell (``rows=1``: most chunks have a
-    point with more candidates)."""
+    the normalization holds every nonzero cell, whichever cells a chunk
+    takes."""
     syms, X = _molecule("methanol")
     pts = becke_grid(syms, X, **COARSE)[0]
     Zs = [symbol_to_Z(s) for s in syms]
-    total = sum(becke_weights(pts, jnp.full(pts.shape[0], A), X, Zs, "treutler",
-                              "stratmann", rows) for A in range(len(syms)))
+    total = sum(_ssf_weights(pts, jnp.full(pts.shape[0], A), X, Zs, "treutler", cells, budget)
+                for A in range(len(syms)))
     np.testing.assert_allclose(np.asarray(total), 1.0, rtol=0, atol=1e-13)
 
 
 def test_every_cell_pass_is_the_candidate_pass():
-    """``rows=1`` sends most chunks to the pass over every cell: the weights
-    and their coordinate gradient equal the candidate pass's."""
+    """Whichever cells a chunk takes, the weights and their coordinate
+    gradient are the pass over every cell's."""
     syms, X = _molecule("methanol")
     pts = becke_grid(syms, X, **COARSE)[0]
     own = _owners(syms, **COARSE)
     Zs = [symbol_to_Z(s) for s in syms]
-    f = lambda rows: lambda c: becke_weights(pts + (c - X)[own], own, c, Zs, "treutler",
-                                             "stratmann", rows)
-    w0, w1 = f(SSF_ROWS)(X), f(1)(X)
-    np.testing.assert_allclose(np.asarray(w1), np.asarray(w0), rtol=1e-13, atol=1e-15)
+    f = lambda cells, budget: lambda c: _ssf_weights(pts + (c - X)[own], own, c, Zs,
+                                                     "treutler", cells, budget)
     t = jnp.cos(jnp.arange(pts.shape[0]))
-    g0, g1 = (jax.grad(lambda c: jnp.sum(t * f(r)(c)))(X) for r in (SSF_ROWS, 1))
-    np.testing.assert_allclose(np.asarray(g1), np.asarray(g0), rtol=1e-12, atol=1e-13)
+    w0 = f((), _PARTITION_BUDGET)(X)
+    g0 = jax.grad(lambda c: jnp.sum(t * f((), _PARTITION_BUDGET)(c)))(X)
     assert np.abs(np.asarray(g0)).max() > 1e-3
+    for cells, budget in PASSES:
+        np.testing.assert_allclose(np.asarray(f(cells, budget)(X)), np.asarray(w0),
+                                   rtol=1e-13, atol=1e-15)
+        g = jax.grad(lambda c: jnp.sum(t * f(cells, budget)(c)))(X)
+        np.testing.assert_allclose(np.asarray(g), np.asarray(g0), rtol=1e-12, atol=1e-13)
 
 
 def test_ssf_grid_integrates_a_density():

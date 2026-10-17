@@ -30,7 +30,7 @@ import numpy as np
 BOHR = 0.52917721092                        # PySCF's, so both codes see one geometry
 SIZE = dict(n_radial="pyscf", lebedev="pyscf", radial="treutler")
 SPEC = dict(SIZE, radii_adjust="treutler")
-UNION = (64, 256, 1024)                     # chunk sizes for the candidates of a chunk
+UNION = (64, 128, 256, 512, 1024)           # chunk sizes for the candidates of a chunk
 MOLECULES = {
     "water": "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692",
     "benzene": "; ".join(
@@ -90,11 +90,10 @@ def speed(args):
 
 def count(args):
     """SSF's candidate cells per point (``|ν_OA| < a`` where the owner's cell
-    is nonzero) and the share of ``_ssf_weights``'s chunks that fit
-    ``SSF_ROWS``; the others take every cell."""
+    is nonzero), and the union of a chunk's by chunk size: the chunks that
+    take no cells, each of ``SSF_CELLS``, and every cell."""
     from dftax.grid import becke_grid, becke_grid_size
-    from dftax.grid.becke import (_PARTITION_BUDGET, SSF_A, SSF_ROWS, bragg_radius,
-                                  size_adjustment, stratmann)
+    from dftax.grid.becke import SSF_A, SSF_CELLS, bragg_radius, size_adjustment, stratmann
     from dftax.system.molecule import symbol_to_Z
 
     syms, X = geometry(args.geom)
@@ -127,17 +126,15 @@ def count(args):
                                for j in range(3 + len(UNION)))
     live = c >= 0
     q = lambda x: [round(float(v), 2) for v in np.percentile(x, [50, 90, 99, 100])]
-    chunks = {}
-    for k in (8, 16, 32, 64, 128, 256):
-        Pk = min(max(1, _PARTITION_BUDGET // ((k + 1) * n_atom)), c.size)
-        ck = c[: c.size - c.size % Pk].reshape(-1, Pk)
-        chunks[k] = [Pk, int(ck.shape[0]), int((ck > k).any(axis=1).sum())]
-    emit(mode="count", geom=args.geom, natom=n_atom, npoints=int(c.size), rows=SSF_ROWS,
+    sizes = sorted(set(SSF_CELLS))
+    tiers = {m: np.bincount(np.searchsorted(sizes, u), minlength=len(sizes) + 1).tolist()
+             for m, u in zip(UNION, union)}
+    emit(mode="count", geom=args.geom, natom=n_atom, npoints=int(c.size), cells=sizes,
          live_points=int(live.sum()), cand_q50_90_99_max=q(c[live]),
          r_own_live_q=q(r_own[live]), reach_live_q=q(reach[live]),
          live_beyond_8_bohr=int((live & (r_own > 8)).sum()),
          union_by_chunk_q={m: q(u) for m, u in zip(UNION, union)},
-         chunk_size_chunks_every_cell_by_rows=chunks)
+         chunks_by_cells_by_chunk=tiers)
 
 
 def pyscf_mode(args):

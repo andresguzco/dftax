@@ -28,9 +28,10 @@ PARTITIONS = ("becke", "stratmann")
 # Stratmann, Scuseria and Frisch, CPL 257, 213 (1996), eq. 14: the cell
 # boundary's half-width in ν.
 SSF_A = 0.64
-# Cells per point besides the owner's in the SSF pass. A chunk with a point
-# that has more candidates takes every cell (exact either way).
-SSF_ROWS = 32
+# Cells a chunk of points takes in the SSF pass besides its owners': the
+# smallest size that holds the union of its points' candidates (0: every
+# weight is 0 or 1), every cell past the last. Exact either way.
+SSF_CELLS = (0, 32, 256)
 
 # Bragg-Slater atomic radii (Slater, JCP 41, 3199 (1964)), the cell sizes of
 # the Becke partition. Tabulated in Angstrom, indexed by atomic number Z (index
@@ -239,7 +240,7 @@ def becke_partition(points, coords, Zs, radii_adjust: str | None = "becke",
 
 
 def becke_weights(points, owners, coords, Zs, radii_adjust: str | None = "becke",
-                  partition: str = "becke", rows: int = SSF_ROWS):
+                  partition: str = "becke"):
     """Weight factors ``P_owner(p) / Σ_A P_A(p)`` of points ``p`` owned
     by atoms ``owners`` (int, (n_grid,)), shape (n_grid,).
 
@@ -248,12 +249,12 @@ def becke_weights(points, owners, coords, Zs, radii_adjust: str | None = "becke"
     atom was natom loops, each with its own natom² constants) and the
     (n_grid, n_atom) cell functions are never held. Differentiable w.r.t.
     ``coords``, checkpointed like :func:`becke_partition`. With
-    ``partition="stratmann"`` the normalization takes the owner's cell and at
-    most ``rows`` others per point (:func:`_ssf_weights`).
+    ``partition="stratmann"`` the normalization takes only the cells that can
+    be nonzero (:func:`_ssf_weights`).
     """
     _check_partition(partition)
     if partition == "stratmann":
-        return _ssf_weights(points, owners, coords, Zs, radii_adjust, rows)
+        return _ssf_weights(points, owners, coords, Zs, radii_adjust)
     cell = _cell_fn(coords, Zs, radii_adjust)
     n_atom = len(Zs)
 
@@ -265,17 +266,19 @@ def becke_weights(points, owners, coords, Zs, radii_adjust: str | None = "becke"
     return _chunked_vmap(weight, in_axes=(0, 0), chunk_size=chunk, checkpoint=True)(points, owners)
 
 
-def _ssf_weights(points, owners, coords, Zs, radii_adjust, rows):
+def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
+                 budget=_PARTITION_BUDGET):
     """SSF weight factors, each point's from its owner's cell and the cells
-    its owner's does not decide.
+    that can be nonzero there.
 
     Where ``P_O(p) > 0`` (O the owner) another cell ``P_A`` holds the factor
-    ``s(ν_AO) = 1 - s(ν_OA)``, so it is nonzero only if ``|ν_OA| < a``: those
-    candidates, nearest first, are the normalization's cells (``rows`` per
-    point). A chunk with a point that has more takes every cell. Where
-    ``P_O(p) = 0`` the weight is 0 whatever the others. Exact: the cells left
-    out are zero, and so are their derivatives. G·(rows + 1)·natom terms
-    instead of G·natom²; checkpointed per chunk.
+    ``s(ν_AO) = 1 - s(ν_OA)``, so it is nonzero only if ``|ν_OA| < a``: A is
+    one of the point's candidates. Where ``P_O(p) = 0`` the weight is 0
+    whatever the others. A chunk of points evaluates the union of its points'
+    candidates, padded to the smallest of ``cells`` that holds it (every cell
+    past the last), as one dense block, and each point sums its own. Exact:
+    the cells left out are zero, and so are their derivatives. Checkpointed
+    per chunk and per block of points.
     """
     coords = jnp.asarray(coords)
     points = jnp.asarray(points)
@@ -283,18 +286,35 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, rows):
     n_atom, n = coords.shape[0], points.shape[0]
     if n_atom == 1:
         return jnp.ones(n, points.dtype)
-    k = max(1, min(int(rows), n_atom - 1))
     dAB = coords[:, None, :] - coords[None, :, :]
     RAB = jnp.sqrt(jnp.sum(dAB * dAB, axis=2) + jnp.eye(n_atom))
     a = size_adjustment(np.asarray([bragg_radius(Z) for Z in Zs]), radii_adjust)
     cols = jnp.arange(n_atom)
-    cell = _cell_fn(coords, Zs, radii_adjust, "stratmann")
-    every_chunk = max(1, _PARTITION_BUDGET // (n_atom * n_atom))
+    sizes = sorted({min(int(c), n_atom) for c in cells} | {n_atom})
+    P = max(1, budget // (next(m for m in sizes if m > 0) * n_atom))
+    P = n if P >= n else 1 << (P.bit_length() - 1)            # a power of two below n
 
-    def cells(r, A):                                          # P_A of cells A (P, k), r (P, natom)
-        mu = (jnp.take_along_axis(r, A, 1)[..., None] - r[:, None, :]) / RAB[A]
-        s = 0.5 * (1.0 - stratmann(mu + a[A] * (1.0 - mu * mu)))
-        return jnp.prod(jnp.where(A[..., None] == cols, 1.0, s), axis=-1)
+    def cell_sum(r, cand, idx):                               # Σ_A P_A over candidates A in idx
+        R, aa, rA, c = ((RAB, a, r, cand) if idx is None
+                        else (RAB[idx], a[idx], r[:, idx], cand[:, idx]))
+        diag = (cols if idx is None else idx)[:, None] == cols
+        mu = (rA[:, :, None] - r[:, None, :]) / R
+        s = 0.5 * (1.0 - stratmann(mu + aa * (1.0 - mu * mu)))
+        return jnp.sum(jnp.where(c, jnp.prod(jnp.where(diag, 1.0, s), axis=-1), 0.0), axis=1)
+
+    def tier(m):
+        cap = max(1, budget // (m * n_atom)) if m else P
+        b = next(d for d in range(min(cap, P), 0, -1) if P % d == 0)
+
+        def f(r, cand, u):
+            if m == 0:
+                return jnp.zeros(r.shape[0], r.dtype)
+            idx = None if m == n_atom else lax.top_k(u.astype(r.dtype), m)[1]
+            if b == P:
+                return cell_sum(r, cand, idx)
+            blocks = (r.reshape(-1, b, n_atom), cand.reshape(-1, b, n_atom))
+            return lax.map(jax.checkpoint(lambda x: cell_sum(*x, idx)), blocks).reshape(-1)
+        return f
 
     def chunk(x):
         p, own = x
@@ -304,21 +324,12 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, rows):
         nu = mu + a[own] * (1.0 - mu * mu)
         off = own[:, None] != cols
         P_own = jnp.prod(jnp.where(off, 0.5 * (1.0 - stratmann(nu)), 1.0), axis=1)
-        cand = off & (jnp.abs(nu) < SSF_A)
-        fits = jnp.all((jnp.sum(cand, axis=1) <= k) | (P_own == 0.0))
+        cand = off & (jnp.abs(nu) < SSF_A) & (P_own > 0.0)[:, None]
+        u = jnp.any(cand, axis=0)
+        k = sum((jnp.sum(u) > m).astype(jnp.int32) for m in sizes[:-1])
+        Z = P_own + lax.switch(k, [tier(m) for m in sizes], r, cand, u)
+        return P_own / jnp.where(Z > 0.0, Z, 1.0)             # Z = 0 only where P_own = 0
 
-        def few(_):
-            key, A = lax.top_k(jnp.where(cand, -r, -jnp.inf), k)
-            Z = P_own + jnp.sum(jnp.where(key > -jnp.inf, cells(r, A), 0.0), axis=1)
-            return P_own / jnp.where(Z > 0.0, Z, 1.0)         # Z = 0 only where P_own = 0
-
-        def every(_):
-            w = lambda q, o: (lambda P: P[o] / P.sum())(cell(q))
-            return _chunked_vmap(w, in_axes=(0, 0), chunk_size=min(every_chunk, p.shape[0]))(p, own)
-        return lax.cond(fits, few, every, None)
-
-    P = max(1, _PARTITION_BUDGET // ((k + 1) * n_atom))
-    P = min(P, n)
     pad = (-n) % P
     pts = jnp.concatenate([points, jnp.broadcast_to(points[:1], (pad, 3))]).reshape(-1, P, 3)
     own = jnp.concatenate([owners, jnp.broadcast_to(owners[:1], (pad,))]).reshape(-1, P)

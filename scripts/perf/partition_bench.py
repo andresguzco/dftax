@@ -1,6 +1,7 @@
 """Becke's partition against Stratmann-Scuseria-Frisch's: cost and accuracy.
 
     python scripts/perf/partition_bench.py speed GEOM.xyz --partition stratmann [--grad] [--jit]
+    python scripts/perf/partition_bench.py count GEOM.xyz
     python scripts/perf/partition_bench.py pyscf water|benzene|GEOM.xyz [--basis cc-pvdz]
 
 ``speed`` builds the whole grid (``becke_grid`` on PySCF's level-3 atom
@@ -85,6 +86,45 @@ def speed(args):
          weight_sum=None if w is None else float(w.sum()))
 
 
+def count(args):
+    """SSF's candidate cells per point (``|ν_OA| < a`` where the owner's cell
+    is nonzero) and the share of ``_ssf_weights``'s chunks that fit
+    ``SSF_ROWS``; the others take every cell."""
+    from dftax.grid import becke_grid, becke_grid_size
+    from dftax.grid.becke import (_PARTITION_BUDGET, SSF_A, SSF_ROWS, bragg_radius,
+                                  size_adjustment, stratmann)
+    from dftax.system.molecule import symbol_to_Z
+
+    syms, X = geometry(args.geom)
+    X = jnp.asarray(X)
+    pts = becke_grid(syms, X, **SPEC)[0]
+    own = jnp.asarray(np.repeat(np.arange(len(syms)),
+                                [becke_grid_size([s], **SPEC) for s in syms]))
+    n_atom = len(syms)
+    RAB = jnp.sqrt(jnp.sum((X[:, None] - X[None]) ** 2, axis=2) + jnp.eye(n_atom))
+    a = size_adjustment(np.asarray([bragg_radius(symbol_to_Z(s)) for s in syms]), "treutler")
+
+    @jax.jit
+    def chunk(p, o):
+        r = jnp.sqrt(jnp.sum((p[:, None] - X[None]) ** 2, axis=2))
+        mu = (jnp.take_along_axis(r, o[:, None], 1) - r) / RAB[o]
+        nu = mu + a[o] * (1.0 - mu * mu)
+        off = o[:, None] != jnp.arange(n_atom)
+        live = jnp.prod(jnp.where(off, 0.5 * (1.0 - stratmann(nu)), 1.0), axis=1) > 0
+        return jnp.where(live, jnp.sum(off & (jnp.abs(nu) < SSF_A), axis=1), -1)
+
+    P = min(max(1, _PARTITION_BUDGET // ((SSF_ROWS + 1) * n_atom)), pts.shape[0])
+    n = pts.shape[0] - pts.shape[0] % P
+    c = np.concatenate([np.asarray(chunk(pts[i:i + P], own[i:i + P])) for i in range(0, n, P)])
+    live = c[c >= 0]
+    fits = (c.reshape(-1, P) <= SSF_ROWS).all(axis=1)
+    emit(mode="count", geom=args.geom, natom=n_atom, npoints=int(pts.shape[0]), chunk=P,
+         live_points=int(live.size), max_cand=int(live.max()),
+         p99_cand=float(np.percentile(live, 99)), mean_cand=float(live.mean()),
+         over_rows=int((live > SSF_ROWS).sum()), chunks=int(fits.size),
+         chunks_every_cell=int((~fits).sum()))
+
+
 def pyscf_mode(args):
     from pyscf import dft, gto
     from pyscf.dft import gen_grid
@@ -145,14 +185,14 @@ def pyscf_mode(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("mode", choices=("speed", "pyscf"))
+    ap.add_argument("mode", choices=("speed", "count", "pyscf"))
     ap.add_argument("geom")
     ap.add_argument("--partition", default="stratmann", choices=("becke", "stratmann"))
     ap.add_argument("--grad", action="store_true")
     ap.add_argument("--jit", action="store_true")
     ap.add_argument("--basis", default="cc-pvdz")
     args = ap.parse_args()
-    speed(args) if args.mode == "speed" else pyscf_mode(args)
+    dict(speed=speed, count=count, pyscf=pyscf_mode)[args.mode](args)
 
 
 if __name__ == "__main__":

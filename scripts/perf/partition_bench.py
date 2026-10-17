@@ -25,12 +25,15 @@ import jax
 
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
+from jax import lax
 import numpy as np
 
 BOHR = 0.52917721092                        # PySCF's, so both codes see one geometry
 SIZE = dict(n_radial="pyscf", lebedev="pyscf", radial="treutler")
 SPEC = dict(SIZE, radii_adjust="treutler")
-UNION = (64, 128, 256, 512, 1024)           # chunk sizes for the candidates of a chunk
+UNION = (64, 128, 256, 512, 1024)           # chunk sizes (points)
+DECIDERS = (1, 4, 16)                        # nearest atoms that can zero a candidate
+TIERS = (0, 8, 32, 128)                      # candidates per point
 MOLECULES = {
     "water": "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692",
     "benzene": "; ".join(
@@ -89,11 +92,12 @@ def speed(args):
 
 
 def count(args):
-    """SSF's candidate cells per point (``|ν_OA| < a`` where the owner's cell
-    is nonzero), and the union of a chunk's by chunk size: the chunks that
-    take no cells, each of ``SSF_CELLS``, and every cell."""
+    """SSF's candidate cells per point where the owner's cell is nonzero:
+    ``|ν_OA| < a``, and of those the cells none of the point's ``K`` nearest
+    atoms zeroes (``ν_AN < a``). Quantiles per point, and how many chunks of
+    points have at most each of ``TIERS`` candidates in every point."""
     from dftax.grid import becke_grid, becke_grid_size
-    from dftax.grid.becke import SSF_A, SSF_CELLS, bragg_radius, size_adjustment, stratmann
+    from dftax.grid.becke import SSF_A, bragg_radius, size_adjustment, stratmann
     from dftax.system.molecule import symbol_to_Z
 
     syms, X = geometry(args.geom)
@@ -104,37 +108,44 @@ def count(args):
     n_atom = len(syms)
     RAB = jnp.sqrt(jnp.sum((X[:, None] - X[None]) ** 2, axis=2) + jnp.eye(n_atom))
     a = size_adjustment(np.asarray([bragg_radius(symbol_to_Z(s)) for s in syms]), "treutler")
+    cols = jnp.arange(n_atom)
 
     @jax.jit
     def chunk(p, o):
         r = jnp.sqrt(jnp.sum((p[:, None] - X[None]) ** 2, axis=2))
         mu = (jnp.take_along_axis(r, o[:, None], 1) - r) / RAB[o]
         nu = mu + a[o] * (1.0 - mu * mu)
-        off = o[:, None] != jnp.arange(n_atom)
+        off = o[:, None] != cols
         live = jnp.prod(jnp.where(off, 0.5 * (1.0 - stratmann(nu)), 1.0), axis=1) > 0
-        cand = off & (jnp.abs(nu) < SSF_A)
-        reach = jnp.max(jnp.where(cand, r, 0.0), axis=1)             # farthest candidate
-        r_own = jnp.take_along_axis(r, o[:, None], 1)[:, 0]
-        cand = cand & live[:, None]
-        union = [jnp.sum(jnp.any(cand.reshape(-1, m, n_atom), axis=1), axis=1) for m in UNION]
-        return (jnp.where(live, jnp.sum(cand, axis=1), -1), r_own, reach, *union)
+        cand = off & (jnp.abs(nu) < SSF_A) & live[:, None]
+        out = [jnp.where(live, jnp.sum(cand, axis=1), -1)]
+        N = lax.top_k(-r, max(DECIDERS))[1]                          # nearest atoms
+        dead = jnp.zeros_like(cand)
+        k0 = 0
+        for K in DECIDERS:
+            for j in range(k0, K):
+                Nj = N[:, j]
+                m = (r - jnp.take_along_axis(r, Nj[:, None], 1)) / RAB[Nj]   # μ_AN
+                dead = dead | ((m - a[Nj] * (1.0 - m * m) >= SSF_A) & (cols != Nj[:, None]))
+            k0 = K
+            out.append(jnp.where(live, jnp.sum(cand & ~dead, axis=1), -1))
+        return out
 
     P = 4096
     n = pts.shape[0] - pts.shape[0] % P
-    out = [chunk(pts[i:i + P], own[i:i + P]) for i in range(0, n, P)]
-    c, r_own, reach, *union = (np.concatenate([np.asarray(x[j]) for x in out])
-                               for j in range(3 + len(UNION)))
-    live = c >= 0
-    q = lambda x: [round(float(v), 2) for v in np.percentile(x, [50, 90, 99, 100])]
-    sizes = sorted(set(SSF_CELLS))
-    tiers = {m: np.bincount(np.searchsorted(sizes, u), minlength=len(sizes) + 1).tolist()
-             for m, u in zip(UNION, union)}
-    emit(mode="count", geom=args.geom, natom=n_atom, npoints=int(c.size), cells=sizes,
-         live_points=int(live.sum()), cand_q50_90_99_max=q(c[live]),
-         r_own_live_q=q(r_own[live]), reach_live_q=q(reach[live]),
-         live_beyond_8_bohr=int((live & (r_own > 8)).sum()),
-         union_by_chunk_q={m: q(u) for m, u in zip(UNION, union)},
-         chunks_by_cells_by_chunk=tiers)
+    res = [chunk(pts[i:i + P], own[i:i + P]) for i in range(0, n, P)]
+    counts = [np.concatenate([np.asarray(x[j]) for x in res]) for j in range(len(DECIDERS) + 1)]
+    live = counts[0] >= 0
+    q = lambda x: [round(float(v), 1) for v in np.percentile(x, [50, 90, 99, 99.9, 100])]
+    rows = {}
+    for K, c in zip((0, *DECIDERS), counts):
+        rows[K] = dict(q50_90_99_999_max=q(c[live]))
+        for m in UNION:
+            worst = c.reshape(-1, m).max(axis=1)
+            rows[K][m] = np.bincount(np.searchsorted(TIERS, worst),
+                                     minlength=len(TIERS) + 1).tolist()
+    emit(mode="count", geom=args.geom, natom=n_atom, npoints=int(n), live=int(live.sum()),
+         tiers=TIERS, by_deciders=rows)
 
 
 def pyscf_mode(args):

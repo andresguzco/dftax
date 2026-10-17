@@ -186,7 +186,7 @@ def pyscf_mode(args):
     mol = gto.M(atom=atom, unit="Bohr", basis=args.basis, verbose=0)
     schemes = {"becke": gen_grid.original_becke, "stratmann": gen_grid.stratmann}
     out = {}
-    for p, scheme in schemes.items():
+    for p, scheme in schemes.items():                     # the grids, and PySCF's SCF
         g = gen_grid.Grids(mol)
         g.alignment = 0
         g.becke_scheme = scheme
@@ -208,30 +208,37 @@ def pyscf_mode(args):
         n1, exc1, _ = mf._numint.nr_rks(mol, mine, "pbe", dm)
         gr = mf.nuc_grad_method()
         gr.grid_response = True
-        f_ref = -gr.kernel()
-        xc = functional("pbe")
-        spec = becke(partition=p, **SPEC)
-        m = Molecule.from_xyz(atom, args.basis, unit="bohr", spherical=True)    # as PySCF
-        coul = df(args.df, screen=None) if args.df else exact()
-        res = scf(KS(m, xc, grid=spec, coulomb=coul), e_tol=1e-12, d_tol=1e-10)
-        f = np.asarray(forces(m, xc, res, grid=spec, coulomb=coul))
-        out[p] = dict(e_ref=e_ref, f_ref=f_ref, e=float(res.e_tot), f=f)
-        emit(geom=args.geom, basis=args.basis, partition=p, natom=len(syms),
+        out[p] = dict(e_ref=e_ref, f_ref=-gr.kernel())
+        emit(geom=args.geom, basis=args.basis, df=args.df, partition=p, natom=len(syms),
              npoints=int(pc.shape[0]), pyscf_npoints=int(g.weights.size),
              max_point_dist=float(dist.max()), unique_match=bool(np.unique(idx).size == idx.size),
              max_dw=float(dw.max()),
              max_rel_dw=float((dw / np.maximum(1.0, np.abs(g.weights))).max()),
-             zero_weights=int((pw == 0).sum()),
-             dexc_same_dm=float(exc1 - exc0), dnelec_same_dm=float(n1 - n0),
-             e_pyscf=e_ref, e_dftax=float(res.e_tot), de_codes=float(res.e_tot - e_ref),
-             converged=bool(res.converged),
+             zero_weights=int((pw == 0).sum()), e_pyscf=e_ref,
+             dexc_same_dm=float(exc1 - exc0), dnelec_same_dm=float(n1 - n0))
+    shift(args.geom, "pyscf", out, "e_ref", "f_ref")
+    xc = functional("pbe")
+    m = Molecule.from_xyz(atom, args.basis, unit="bohr", spherical=True)    # as PySCF
+    coul = df(args.df, screen=None) if args.df else exact()
+    for p in schemes:                                     # dftax's SCF and forces
+        spec = becke(partition=p, **SPEC)
+        res = scf(KS(m, xc, grid=spec, coulomb=coul), e_tol=1e-12, d_tol=1e-10)
+        f = np.asarray(forces(m, xc, res, grid=spec, coulomb=coul))
+        e_ref, f_ref = out[p]["e_ref"], out[p]["f_ref"]
+        out[p].update(e=float(res.e_tot), f=f)
+        emit(geom=args.geom, partition=p, e_dftax=float(res.e_tot),
+             de_codes=float(res.e_tot - e_ref), converged=bool(res.converged),
              max_df_codes=float(np.abs(f - f_ref).max()),
              rms_df_codes=float(np.sqrt(np.mean((f - f_ref) ** 2))))
+    shift(args.geom, "dftax", out, "e", "f")
+
+
+def shift(geom, code, out, e, f):
+    """Becke's partition to SSF's: the energy and the forces."""
     b, s = out["becke"], out["stratmann"]
-    for code, e, fk in (("pyscf", "e_ref", "f_ref"), ("dftax", "e", "f")):
-        dF = s[fk] - b[fk]
-        emit(geom=args.geom, shift=code, dE=s[e] - b[e], max_dF=float(np.abs(dF).max()),
-             rms_dF=float(np.sqrt(np.mean(dF ** 2))))
+    dF = s[f] - b[f]
+    emit(geom=geom, shift=code, dE=s[e] - b[e], max_dF=float(np.abs(dF).max()),
+         rms_dF=float(np.sqrt(np.mean(dF ** 2))))
 
 
 def main():

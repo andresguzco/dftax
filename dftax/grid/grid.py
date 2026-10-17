@@ -355,8 +355,9 @@ def becke_grid(
     )                                                    # (ng, 3), depends on coords
     raw_w = jnp.concatenate([templates[Z][1] for Z in Zs], axis=0)
     sizes = np.array([templates[Z][1].shape[0] for Z in Zs])
-    owners = jnp.repeat(jnp.arange(len(Zs)), jnp.asarray(sizes),
-                        total_repeat_length=int(sizes.sum()))
+    # In numpy: jnp.repeat's cumsum over the grid is a constant XLA folds
+    # (30 s at 784 atoms, minutes at 2,742).
+    owners = jnp.asarray(np.repeat(np.arange(len(Zs)), sizes))
     # Fuzzy-Voronoi weights of every atom's points in one chunked pass
     # (becke_weights): one loop in the compiled program, the pair quantities
     # formed once, and only the owner's normalized cell kept per point.

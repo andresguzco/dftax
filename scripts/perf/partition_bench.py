@@ -28,7 +28,8 @@ import jax.numpy as jnp
 import numpy as np
 
 BOHR = 0.52917721092                        # PySCF's, so both codes see one geometry
-SPEC = dict(n_radial="pyscf", lebedev="pyscf", radial="treutler", radii_adjust="treutler")
+SIZE = dict(n_radial="pyscf", lebedev="pyscf", radial="treutler")
+SPEC = dict(SIZE, radii_adjust="treutler")
 MOLECULES = {
     "water": "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692",
     "benzene": "; ".join(
@@ -79,7 +80,7 @@ def speed(args):
     stats = jax.devices()[0].memory_stats() or {}
     w = None if args.grad else np.asarray(out[1])
     emit(mode="grad" if args.grad else "grid", jit=args.jit, geom=args.geom, partition=p,
-         natom=len(syms), npoints=sum(becke_grid_size([s], **SPEC) for s in syms),
+         natom=len(syms), npoints=sum(becke_grid_size([s], **SIZE) for s in syms),
          compile_s=t_compile, run_s=[round(r, 3) for r in runs],
          peak_gb=round(stats.get("peak_bytes_in_use", 0) / 2**30, 3),
          zero_weights=None if w is None else int((w == 0).sum()),
@@ -97,9 +98,9 @@ def count(args):
 
     syms, X = geometry(args.geom)
     X = jnp.asarray(X)
-    pts = becke_grid(syms, X, **SPEC)[0]
+    pts = becke_grid(syms, X, partition="stratmann", **SPEC)[0]      # the same points
     own = jnp.asarray(np.repeat(np.arange(len(syms)),
-                                [becke_grid_size([s], **SPEC) for s in syms]))
+                                [becke_grid_size([s], **SIZE) for s in syms]))
     n_atom = len(syms)
     RAB = jnp.sqrt(jnp.sum((X[:, None] - X[None]) ** 2, axis=2) + jnp.eye(n_atom))
     a = size_adjustment(np.asarray([bragg_radius(symbol_to_Z(s)) for s in syms]), "treutler")
@@ -161,7 +162,7 @@ def pyscf_mode(args):
         f_ref = -gr.kernel()
         xc = functional("pbe")
         spec = becke(partition=p, **SPEC)
-        m = Molecule.from_xyz(atom, args.basis, unit="bohr")
+        m = Molecule.from_xyz(atom, args.basis, unit="bohr", spherical=True)    # as PySCF
         res = scf(KS(m, xc, grid=spec, coulomb=exact()), e_tol=1e-12, d_tol=1e-10)
         f = np.asarray(forces(m, xc, res, grid=spec, coulomb=exact()))
         out[p] = dict(e_ref=e_ref, f_ref=f_ref, e=float(res.e_tot), f=f)

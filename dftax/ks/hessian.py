@@ -184,7 +184,7 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
                     else df(aux_b, chunk=df_chunk))
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune,
-            grid.r_max, grid.radial, grid.radii_adjust,
+            grid.r_max, grid.radial, grid.radii_adjust, partition=grid.partition,
         )
         ks = KS(
             System(basis=basis, coords=coords, charges=charges, nelec=nelec,

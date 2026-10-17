@@ -374,7 +374,7 @@ def forces(
                     else df(aux_basis, chunk=df_chunk))
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max,
-            grid.radial, grid.radii_adjust,
+            grid.radial, grid.radii_adjust, partition=grid.partition,
         )
         # points(..., chunk=...) keeps the resolved XC streaming: silently
         # materializing the AO grid here would OOM exactly the systems the

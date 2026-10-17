@@ -6,6 +6,32 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-17
+
+### Added
+- **Stratmann-Scuseria-Frisch partition, opt-in.** `becke(partition="stratmann")`
+  (and `partition=` on `becke_grid`, `becke_weights` and `becke_partition`,
+  forwarded wherever a spec is rebuilt: forces, Hessians, properties, the
+  batched solver, the SAP guess) shapes the cells with SSF's polynomial (CPL
+  257, 213 (1996)), whose factors are exactly 0 or 1 past `|ν| = 0.64`. The
+  radii adjustment is applied to μ first, as in PySCF, so the grid is PySCF's
+  `Grids` with `becke_scheme=gen_grid.stratmann` to rounding: weights to
+  1e-13 (water, benzene, alanine dipeptide), and on water the PBE/cc-pVDZ
+  energy and forces with the grid response to 1e-10.
+  Each point's weight takes only the cells that can be nonzero there (the
+  cells its owner's does not decide that none of its 16 nearest atoms zeroes),
+  gathered per point in blocks of 8 to 512 cells: exact, and differentiable
+  with a cheap tangent for the cell products. On one A100 at PySCF's level-3
+  grid, the grid builds in 5.9 s against Becke's 51 s for insulin (784 atoms,
+  9.4M points) and in 82 s against 2,819 s for a 2,742-atom protein (32.8M
+  points), and the insulin coordinate gradient takes 58 s against 2,135 s, at
+  the same peak memory (within 5%). Against Becke's cells it moves PBE/cc-pVDZ
+  energies by up to 1.4e-6 Ha and forces by up to 4.6e-5 Ha/bohr (water,
+  benzene, alanine dipeptide). The default stays Becke's partition
+  (`partition="becke"`, unchanged), and the points are the same either way.
+- `scripts/perf/partition_bench.py`: the build's time and peak memory per
+  partition, SSF's candidate cells, and the comparison with PySCF.
+
 ## [0.9.1] - 2026-10-16
 
 ### Fixed

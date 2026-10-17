@@ -33,7 +33,7 @@ SSF_A = 0.64
 # points takes up to the smallest of SSF_CELLS per point that holds every
 # point's (0: each weight is 0 or 1), or every cell past the last. Exact
 # either way: the cells left out are zero.
-SSF_CELLS = (0, 8, 32, 128)
+SSF_CELLS = (0, 8, 32, 128, 512)
 SSF_DECIDERS = 16
 
 # Bragg-Slater atomic radii (Slater, JCP 41, 3199 (1964)), the cell sizes of
@@ -278,7 +278,7 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
     ``s(ν_AO) = 1 - s(ν_OA)``, so it is nonzero only if ``|ν_OA| < a``, and
     only if no atom N has ``ν_AN >= a``: the point's ``deciders`` nearest
     atoms are tested. The cells left are the point's candidates, gathered
-    nearest first up to the smallest of ``cells`` that holds every point's in
+    up to the smallest of ``cells`` that holds every point's in
     the chunk (or every cell, past the last). Where ``P_O(p) = 0`` the weight
     is 0 whatever the others. Exact: the cells left out are zero, and so are
     their derivatives. Checkpointed per chunk and per block of points.
@@ -303,17 +303,20 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
     def cells_sum(r, cand, k):                                # Σ_A P_A over the candidates
         if k is None:                                         # every cell
             R, aa, rA, ok, diag = RAB, a, r, cand, jnp.eye(n_atom, dtype=bool)
-        else:
-            key, A = lax.top_k(jnp.where(cand, -r, -jnp.inf), k)
-            R, aa, rA, ok = RAB[A], a[A], jnp.take_along_axis(r, A, 1), key > -jnp.inf
-            diag = A[..., None] == cols
+        else:                                                 # each row's k first candidates
+            pos = jnp.where(cand, jnp.cumsum(cand, axis=1) - 1, k)
+            A = jnp.full((r.shape[0], k + 1), n_atom).at[
+                jnp.arange(r.shape[0])[:, None], pos].set(jnp.broadcast_to(cols, cand.shape))
+            ok = A[:, :k] < n_atom
+            A = jnp.where(ok, A[:, :k], 0)
+            R, aa, rA, diag = RAB[A], a[A], jnp.take_along_axis(r, A, 1), A[..., None] == cols
         mu = (rA[..., None] - r[:, None, :]) / R
         s = 0.5 * (1.0 - stratmann(mu + aa * (1.0 - mu * mu)))
         return jnp.sum(jnp.where(ok, jnp.prod(jnp.where(diag, 1.0, s), axis=-1), 0.0), axis=1)
 
     def tier(k):
         m = n_atom if k is None else k
-        cap = max(1, budget // (m * n_atom)) if m else P
+        cap = max(1, 4 * budget // (m * n_atom)) if m else P  # the cells' block: 4x the budget
         b = next(d for d in range(min(cap, P), 0, -1) if P % d == 0)
 
         def f(r, cand):

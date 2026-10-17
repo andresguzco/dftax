@@ -300,6 +300,10 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
     P = max(1, budget // (max(K, 1) * n_atom))
     P = n if P >= n else 1 << (P.bit_length() - 1)            # a power of two below n
 
+    def dist(XA, diag):                                       # R_AB from the coordinates, not
+        dd = XA[..., None, :] - coords                        # a gather of RAB: its transpose
+        return jnp.sqrt(jnp.sum(dd * dd, axis=-1) + diag)     # is a scatter-add (atomics)
+
     def cells_sum(r, cand, k):                                # Σ_A P_A over the candidates
         if k is None:                                         # every cell
             R, aa, rA, ok, diag = RAB, a, r, cand, jnp.eye(n_atom, dtype=bool)
@@ -309,7 +313,8 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
                 jnp.arange(r.shape[0])[:, None], pos].set(jnp.broadcast_to(cols, cand.shape))
             ok = A[:, :k] < n_atom
             A = jnp.where(ok, A[:, :k], 0)
-            R, aa, rA, diag = RAB[A], a[A], jnp.take_along_axis(r, A, 1), A[..., None] == cols
+            aa, rA, diag = a[A], jnp.take_along_axis(r, A, 1), A[..., None] == cols
+            R = dist(coords[A], diag)
         mu = (rA[..., None] - r[:, None, :]) / R
         s = 0.5 * (1.0 - stratmann(mu + aa * (1.0 - mu * mu)))
         return jnp.sum(jnp.where(ok, jnp.prod(jnp.where(diag, 1.0, s), axis=-1), 0.0), axis=1)
@@ -318,30 +323,32 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
         m = n_atom if k is None else k
         cap = max(1, 4 * budget // (m * n_atom)) if m else P  # the cells' block: 4x the budget
         b = next(d for d in range(min(cap, P), 0, -1) if P % d == 0)
+        g = jax.checkpoint(lambda x: cells_sum(*x, k))        # no residuals per branch
 
         def f(r, cand):
             if k == 0:
                 return jnp.zeros(r.shape[0], r.dtype)
             if b == P:
-                return cells_sum(r, cand, k)
+                return g((r, cand))
             blocks = (r.reshape(-1, b, n_atom), cand.reshape(-1, b, n_atom))
-            return lax.map(jax.checkpoint(lambda x: cells_sum(*x, k)), blocks).reshape(-1)
+            return lax.map(g, blocks).reshape(-1)
         return f
 
     def chunk(x):
         p, own = x
         d = p[:, None, :] - coords[None]
         r = jnp.sqrt(jnp.sum(d * d, axis=2) + 1e-30)          # (P, natom)
-        mu = (jnp.take_along_axis(r, own[:, None], 1) - r) / RAB[own]
-        nu = mu + a[own] * (1.0 - mu * mu)
         off = own[:, None] != cols
+        mu = (jnp.take_along_axis(r, own[:, None], 1) - r) / dist(coords[own], ~off)
+        nu = mu + a[own] * (1.0 - mu * mu)
         P_own = jnp.prod(jnp.where(off, 0.5 * (1.0 - stratmann(nu)), 1.0), axis=1)
         cand = off & (jnp.abs(nu) < SSF_A) & (P_own > 0.0)[:, None]
         if K:
-            N = lax.top_k(-r, K)[1]                           # the nearest atoms
+            rs, Rs = lax.stop_gradient((r, RAB))              # the deciders only mask
+            N = lax.top_k(-rs, K)[1]                          # the nearest atoms
             for j in range(K):                                # cells N zeroes: ν_AN >= a
                 Nj = N[:, j]
-                m = (r - jnp.take_along_axis(r, Nj[:, None], 1)) / RAB[Nj]
+                m = (rs - jnp.take_along_axis(rs, Nj[:, None], 1)) / Rs[Nj]
                 cand &= (m + aT[Nj] * (1.0 - m * m) < SSF_A) | (cols == Nj[:, None])
         worst = jnp.max(jnp.sum(cand, axis=1))
         t = sum((worst > k).astype(jnp.int32) for k in sizes[: len(tiers) - 1])

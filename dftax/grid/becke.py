@@ -188,6 +188,23 @@ def stratmann(nu):
     return jnp.where(nu <= -SSF_A, -1.0, jnp.where(nu >= SSF_A, 1.0, g))
 
 
+@jax.custom_jvp
+def _cell_prod(s):
+    """``Π s`` over the last axis of SSF factors, with the tangent
+    ``P·Σ ds/s`` where ``P > 0``, and 0 where a factor is exactly 0 (its
+    derivative is 0 too). jnp.prod's JVP takes two cumulative products over
+    the axis, most of the SSF gradient's time."""
+    return jnp.prod(s, axis=-1)
+
+
+@_cell_prod.defjvp
+def _cell_prod_jvp(primals, tangents):
+    (s,), (ds,) = primals, tangents
+    P = jnp.prod(s, axis=-1)
+    live = P > 0.0
+    return P, jnp.where(live, P * jnp.sum(ds / jnp.where(live[..., None], s, 1.0), axis=-1), 0.0)
+
+
 def _cell_fn(coords, Zs, radii_adjust, partition="becke"):
     """``p -> P_A(p)`` (natom,), the unnormalized cell functions at one
     point, with the pair quantities (R_AB, a_AB) formed once for all points."""
@@ -317,7 +334,7 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
             R = dist(coords[A], diag)
         mu = (rA[..., None] - r[:, None, :]) / R
         s = 0.5 * (1.0 - stratmann(mu + aa * (1.0 - mu * mu)))
-        return jnp.sum(jnp.where(ok, jnp.prod(jnp.where(diag, 1.0, s), axis=-1), 0.0), axis=1)
+        return jnp.sum(jnp.where(ok, _cell_prod(jnp.where(diag, 1.0, s)), 0.0), axis=1)
 
     def tier(k):
         m = n_atom if k is None else k
@@ -341,7 +358,7 @@ def _ssf_weights(points, owners, coords, Zs, radii_adjust, cells=SSF_CELLS,
         off = own[:, None] != cols
         mu = (jnp.take_along_axis(r, own[:, None], 1) - r) / dist(coords[own], ~off)
         nu = mu + a[own] * (1.0 - mu * mu)
-        P_own = jnp.prod(jnp.where(off, 0.5 * (1.0 - stratmann(nu)), 1.0), axis=1)
+        P_own = _cell_prod(jnp.where(off, 0.5 * (1.0 - stratmann(nu)), 1.0))
         cand = off & (jnp.abs(nu) < SSF_A) & (P_own > 0.0)[:, None]
         if K:
             rs, Rs = lax.stop_gradient((r, RAB))              # the deciders only mask

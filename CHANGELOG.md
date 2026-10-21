@@ -6,6 +6,17 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-10-21
+
+### Fixed
+- **`becke_grid` compiles no grid-sized constant.** Each point's owner and
+  raw weight are looked up from its index in per-atom tables. Built from
+  constants before (`jnp.repeat` over the atoms' point counts, the element
+  templates concatenated), they were folded by XLA into grid-sized constants
+  at compile time: 9.6 s of the compile at insulin (784 atoms, 589,888
+  points), in every program that builds the grid. Points are unchanged bit
+  for bit, weights to rounding.
+
 ## [0.9.2] - 2026-10-17
 
 ### Added

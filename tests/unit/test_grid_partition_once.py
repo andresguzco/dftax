@@ -3,7 +3,9 @@
 The grid equals the per-atom construction it replaced (kept here as the
 reference), points, weights and their coordinate gradient, and lowering it
 captures no natom² constant: the per-atom version embedded the cell-size
-matrix once per atom, natom × natom² doubles (3.9 GB at 784 atoms).
+matrix once per atom, natom × natom² doubles (3.9 GB at 784 atoms). Nor does
+its compiled program hold a grid-sized constant: the point owners by
+jnp.repeat (also kept here) were one, folded by XLA at compile time.
 
 The reference shares the cell function (``becke_partition`` now runs on
 ``_cell_fn`` and ``size_adjustment``), so these tests check the restructuring,
@@ -19,7 +21,7 @@ import numpy as np
 import pytest
 
 from dftax.grid import becke_grid, becke_grid_size, lebedev_grid
-from dftax.grid.becke import becke_partition, bragg_radius, size_adjustment
+from dftax.grid.becke import becke_partition, becke_weights, bragg_radius, size_adjustment
 from dftax.grid.grid import _atom_shell_blocks
 from dftax.system.molecule import symbol_to_Z
 
@@ -139,3 +141,51 @@ def test_becke_grid_captures_no_atom_pair_constant():
         jax.config.update("jax_captured_constants_warn_bytes", old)
     captured = [str(w.message) for w in rec if "constants were captured" in str(w.message)]
     assert not captured, captured
+
+
+def _repeat_owners(symbols, coords, n_radial, lebedev, prune, r_max, radial, partition):
+    """The grid as built through 0.9.2: each point's owner by jnp.repeat over the
+    atoms' sizes and its raw weight from the templates concatenated, both from
+    constants, which XLA folded into grid-sized constants."""
+    Zs = [symbol_to_Z(s) for s in symbols]
+    templates = {}
+    for Z in dict.fromkeys(Zs):
+        rel, wq = [], []
+        for r, wr, order in _atom_shell_blocks(Z, n_radial, lebedev, prune, r_max, radial):
+            ang_pts, ang_w = lebedev_grid(order)
+            rel.append((r[:, None, None] * ang_pts[None, :, :]).reshape(-1, 3))
+            wq.append((wr[:, None] * (4.0 * np.pi * ang_w)[None, :]).reshape(-1))
+        templates[Z] = (jnp.asarray(np.concatenate(rel)), jnp.asarray(np.concatenate(wq)))
+    points = jnp.concatenate([coords[A][None, :] + templates[Z][0] for A, Z in enumerate(Zs)])
+    raw_w = jnp.concatenate([templates[Z][1] for Z in Zs])
+    sizes = np.array([templates[Z][1].shape[0] for Z in Zs])
+    owners = jnp.repeat(jnp.arange(len(Zs)), jnp.asarray(sizes),
+                        total_repeat_length=int(sizes.sum()))
+    return points, raw_w * becke_weights(points, owners, coords, Zs, "treutler", partition)
+
+
+def _largest_constant(compiled):
+    """Elements in the largest constant of a compiled program."""
+    dims = re.findall(r"\b[a-z]+\d*\[([\d,]*)\]\S* constant\(", compiled.as_text())
+    assert dims, "no constant in the HLO text: has its format changed?"
+    return max(int(np.prod([int(d) for d in s.split(",") if d])) for s in dims)
+
+
+@pytest.mark.parametrize("partition", ["becke", "stratmann"])
+def test_becke_grid_compiles_no_grid_sized_constant(partition):
+    """36 atoms, 36,000 points: no constant of a quarter of the grid in the
+    compiled program (an element's template is 1,000 × 3). The owners by
+    jnp.repeat were folded into grid-sized ones, 9.6 s of the compile at 784
+    atoms. The points are the same bit for bit, the weights to rounding."""
+    symbols, coords = _water_cluster(12)
+    spec = dict(n_radial=20, lebedev=50, prune=None, r_max=45.0, radial="treutler")
+    G = becke_grid_size(symbols, **spec)
+    grid = jax.jit(lambda c: becke_grid(symbols, c, partition=partition, **spec))
+    compiled = grid.lower(coords).compile()
+    big = _largest_constant(compiled)
+    assert big < G // 4, (big, G)
+    p1, w1 = compiled(coords)
+    p0, w0 = jax.jit(lambda c: _repeat_owners(symbols, c, partition=partition, **spec))(coords)
+    np.testing.assert_array_equal(np.asarray(p1), np.asarray(p0))
+    w1, w0 = np.asarray(w1), np.asarray(w0)
+    np.testing.assert_allclose(w1, w0, rtol=1e-12, atol=1e-15 * np.abs(w0).max())

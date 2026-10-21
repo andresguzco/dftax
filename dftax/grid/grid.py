@@ -330,33 +330,42 @@ def becke_grid(
     geometry. The partition is one chunked pass over all atoms' points
     (:func:`~dftax.grid.becke.becke_weights`), and each element's point
     template is one constant, so the program and its constants grow with the
-    number of elements, not of atoms.
+    number of elements, not of atoms. Each point's owner and raw weight are
+    looked up from its index in per-atom tables, so no constant is of the
+    grid's size.
     """
     _check_partition(partition)
     coords = jnp.asarray(coords_bohr).reshape(-1, 3)
     Zs = [symbol_to_Z(s) for s in symbols]
     r_max = None if r_max is None else float(r_max)
 
-    # Each element's points relative to its nucleus and their quadrature
-    # weights, built once per element (numpy, then one constant per element).
-    templates = {}
+    # Each element's points relative to its nucleus (one constant per element)
+    # and their quadrature weights, built once per element in numpy.
+    rel, wq = {}, {}
     for Z in dict.fromkeys(Zs):
-        rel, wq = [], []
+        pts, wts = [], []
         for r, wr, order in _atom_shell_blocks(
             Z, n_radial, lebedev, prune, r_max, radial
         ):
             ang_pts, ang_w = lebedev_grid(order)         # numpy constants
-            rel.append((r[:, None, None] * ang_pts[None, :, :]).reshape(-1, 3))
-            wq.append((wr[:, None] * (4.0 * np.pi * ang_w)[None, :]).reshape(-1))
-        templates[Z] = (jnp.asarray(np.concatenate(rel)), jnp.asarray(np.concatenate(wq)))
+            pts.append((r[:, None, None] * ang_pts[None, :, :]).reshape(-1, 3))
+            wts.append((wr[:, None] * (4.0 * np.pi * ang_w)[None, :]).reshape(-1))
+        rel[Z], wq[Z] = jnp.asarray(np.concatenate(pts)), np.concatenate(wts)
 
     points = jnp.concatenate(
-        [coords[A][None, :] + templates[Z][0] for A, Z in enumerate(Zs)], axis=0
+        [coords[A][None, :] + rel[Z] for A, Z in enumerate(Zs)], axis=0
     )                                                    # (ng, 3), depends on coords
-    raw_w = jnp.concatenate([templates[Z][1] for Z in Zs], axis=0)
-    sizes = np.array([templates[Z][1].shape[0] for Z in Zs])
-    owners = jnp.repeat(jnp.arange(len(Zs)), jnp.asarray(sizes),
-                        total_repeat_length=int(sizes.sum()))
+    # Each point's owner and raw weight, looked up from its index in per-atom
+    # tables: from constants (jnp.repeat, the templates concatenated) XLA
+    # folded them into grid-sized constants at compile time (9.6 s at 784
+    # atoms), and as numpy they were grid-sized captured constants.
+    sizes = np.array([wq[Z].shape[0] for Z in Zs])
+    ends = np.cumsum(sizes)
+    first = dict(zip(wq, np.cumsum([0] + [w.shape[0] for w in wq.values()])))
+    shift = np.array([first[Z] for Z in Zs]) - (ends - sizes)   # point -> template index
+    i = jnp.arange(int(ends[-1]))
+    owners = jnp.searchsorted(jnp.asarray(ends), i, side="right")
+    raw_w = jnp.asarray(np.concatenate(list(wq.values())))[i + jnp.asarray(shift)[owners]]
     # Fuzzy-Voronoi weights of every atom's points in one chunked pass
     # (becke_weights): one loop in the compiled program, the pair quantities
     # formed once, and only the owner's normalized cell kept per point.

@@ -2491,7 +2491,9 @@ on <code>symbols</code> and the spec constants, so this can run under <code>jit<
 geometry. The partition is one chunked pass over all atoms' points
 (:func:<code>~dftax.grid.becke.becke_weights</code>), and each element's point
 template is one constant, so the program and its constants grow with the
-number of elements, not of atoms.</p>
+number of elements, not of atoms. Each point's owner and raw weight are
+looked up from its index in per-atom tables, so no constant is of the
+grid's size.</p>
 
 
     </div>

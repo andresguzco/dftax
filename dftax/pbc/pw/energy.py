@@ -112,19 +112,46 @@ def to_mesh(C, fft_idx, mesh):
     return jnp.fft.ifftn(box.reshape(nb, *mesh), axes=(1, 2, 3))
 
 
+# complex mesh values in flight per band block (2 GiB): the bands of a block
+# go through their FFTs together, the blocks one after the other
+_MESH_BUDGET = 2 ** 27
+
+
+def band_block(nb: int, mesh) -> int:
+    """Bands per block, so a block's FFT boxes stay near ``_MESH_BUDGET``."""
+    return max(1, min(nb, _MESH_BUDGET // int(np.prod(mesh))))
+
+
+def _blocks(C, bc):
+    """``(npw, nb)`` as ``(nblock, npw, bc)``, zero columns padding the last."""
+    npw, nb = C.shape
+    nblk = -(-nb // bc)
+    C = jnp.pad(C, ((0, 0), (0, nblk * bc - nb)))
+    return C.reshape(npw, nblk, bc).transpose(1, 0, 2)
+
+
 def density(model: PWModel, C, occ, a):
     """The density on the mesh, ``(N,)`` (C order): ``sum_k w_k sum_n
-    f_nk |ψ_nk(r)|^2``."""
+    f_nk |ψ_nk(r)|^2``, accumulated a block of bands at a time."""
     N = _mesh_size(model)
     scale = N * N / volume(a)
+    bc = band_block(C.shape[-1], model.mesh)
 
-    def one(args):
+    def one(acc, args):
         Ck, fk, idx, w = args
-        u = to_mesh(Ck, idx, model.mesh)
-        return w * jnp.einsum("n,nxyz->xyz", fk, (u * u.conj()).real)
+        fb = jnp.pad(fk, (0, (-fk.shape[0]) % bc)).reshape(-1, bc)
 
-    rho = jax.lax.map(one, (C, occ, model.fft_idx, model.weights))
-    return scale * jnp.sum(rho, axis=0).reshape(-1)
+        def block(acc, blk):
+            Cb, f = blk
+            u = to_mesh(Cb, idx, model.mesh)
+            return acc + w * jnp.einsum("n,nxyz->xyz", f, (u * u.conj()).real), None
+
+        acc, _ = jax.lax.scan(block, acc, (_blocks(Ck, bc), fb))
+        return acc, None
+
+    rho, _ = jax.lax.scan(one, jnp.zeros(model.mesh),
+                          (C, occ, model.fft_idx, model.weights))
+    return scale * rho.reshape(-1)
 
 
 def xc_energy(model: PWModel, rho, a):
@@ -197,11 +224,20 @@ def potential(model: PWModel, rho, coords, a, v_loc=None):
 
 def apply_h(C, kin, vr, fft_idx, mask, mesh, P, D):
     """``H C`` on one sphere: kinetic diagonal, the local potential through
-    the mesh, the projectors. ``C`` is ``(npw, nb)``."""
-    nb, N = C.shape[1], int(np.prod(mesh))
-    u = to_mesh(C, fft_idx, mesh)
-    hv = jnp.fft.fftn(u * vr.reshape(mesh)[None], axes=(1, 2, 3))
-    hv = hv.reshape(nb, N)[:, fft_idx].T
+    the mesh (a block of bands at a time), the projectors. ``C`` is
+    ``(npw, nb)``."""
+    npw, nb = C.shape
+    N = int(np.prod(mesh))
+    bc = band_block(nb, mesh)
+    v = vr.reshape(mesh)[None]
+
+    def block(Cb):
+        u = to_mesh(Cb, fft_idx, mesh)
+        hv = jnp.fft.fftn(u * v, axes=(1, 2, 3))
+        return hv.reshape(Cb.shape[1], N)[:, fft_idx].T
+
+    hv = jax.lax.map(block, _blocks(C, bc))                 # (nblk, npw, bc)
+    hv = hv.transpose(1, 0, 2).reshape(npw, -1)[:, :nb]
     out = kin[:, None] * C + hv
     if P is not None:
         out = out + P.conj().T @ (D @ (P @ C))

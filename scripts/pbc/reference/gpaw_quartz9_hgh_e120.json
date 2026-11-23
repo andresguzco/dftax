@@ -1,0 +1,23 @@
+{
+ "code": "gpaw 25.7.0, ase 3.29.0",
+ "system": "quartz9",
+ "natom": 9,
+ "volume_factor": 1.0,
+ "rattle": 0.0,
+ "setups": "hgh",
+ "xc": "LDA_X+LDA_C_VWN",
+ "ecut": 120.0,
+ "kmesh": [
+  1,
+  1,
+  1
+ ],
+ "smearing": 0.0,
+ "nelectron": 48.0,
+ "e_free": -108.67345258889794,
+ "e_extrapolated": -108.67345258889794,
+ "seconds_scf": 8.69544520508498,
+ "vbm": 0.031113976419882408,
+ "cbm": 0.25454984010199105,
+ "gap": 0.22343586368210866
+}

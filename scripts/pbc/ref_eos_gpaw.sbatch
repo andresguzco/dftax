@@ -1,11 +1,10 @@
 #!/bin/bash
 # GPAW plane waves, HGH potential (the same as gth-pade), LDA with VWN
-# correlation: the Si8 equation of state at 40 Ha (energies, band edges,
-# stress), at the Gamma point like the Gaussian runs. GPAW puts Si8 under
-# +5.9 GPa at the experimental volume, so the seven volumes are centred on
-# 1.06 V_exp, and the experimental volume is added for the band-gap
-# comparison. Quartz waits for its cutoff series (ref_quartz_gpaw.sbatch).
-# CPU only; from the repository root:
+# correlation: the Si8 equation of state at 40 Ha with a Gamma-centred 2x2x2
+# k-mesh (exactly Si64 at the Gamma point), at the volumes of dftax's Si64
+# equation of state (systems.EOS_VOLUME_FACTORS around 1.00): energies,
+# band edges, stress. Quartz waits for its cutoff series
+# (ref_quartz_gpaw.sbatch). CPU only; from the repository root:
 #
 #   sbatch --output=$SCRATCH/dftax-pbc/logs/%x-%j.out scripts/pbc/ref_eos_gpaw.sbatch
 #SBATCH --job-name=pbc-eos-gpaw
@@ -15,7 +14,7 @@
 #SBATCH --ntasks=16
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=64G
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 set -uo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 OUT=${OUT:-$SCRATCH/dftax-pbc/reference}
@@ -34,9 +33,8 @@ run() {
     fi
 }
 
-run gpaw_si8_hgh_e40_eos_v1.0000 si8 --ecut 40 --stress
-for f in 0.94 0.96 0.98 1.00 1.02 1.04 1.06; do
-    v=$(awk -v c=1.06 -v f="$f" 'BEGIN { printf "%.10f", c * f }')
-    run "gpaw_si8_hgh_e40_eos_v$(printf %.4f "$v")" si8 --ecut 40 --volume-factor "$v" --stress
+for v in 0.94 0.96 0.98 1.00 1.02 1.04 1.06; do
+    run "gpaw_si8_hgh_e40_k222_eos_v$(printf %.4f "$v")" si8 --ecut 40 \
+        --kmesh 2 2 2 --volume-factor "$v" --stress
 done
 exit $fail

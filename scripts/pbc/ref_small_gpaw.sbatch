@@ -12,15 +12,18 @@
 #SBATCH --job-name=pbc-ref-gpaw
 #SBATCH --account=aip-necludov
 #SBATCH --partition=cpubase_bycore_b1
-#SBATCH --cpus-per-task=8
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --cpus-per-task=1
 #SBATCH --mem=32G
 #SBATCH --time=01:00:00
 set -uo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
-export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}
+export OMP_NUM_THREADS=1
+NTASKS=${SLURM_NTASKS:-8}
 OUT=${OUT:-$SCRATCH/dftax-pbc/reference}
 mkdir -p "$OUT"
-echo "job ${SLURM_JOB_ID:-local} on $(hostname), $OMP_NUM_THREADS threads, $(git rev-parse --short HEAD)"
+echo "job ${SLURM_JOB_ID:-local} on $(hostname), $NTASKS MPI ranks, $(git rev-parse --short HEAD)"
 
 module load python 2>&1
 virtualenv --no-download "$SLURM_TMPDIR/gpaw" > /dev/null
@@ -42,11 +45,29 @@ if [ -z "$loaded" ]; then
 fi
 python -c "import gpaw, ase; print('gpaw', gpaw.__version__, '| ase', ase.__version__, '| $loaded')"
 
+# The wheel is MPI-linked and initialises MPI when gpaw.mpi is imported. A
+# bare `python` inside the job failed there (Open MPI: "Failed to create
+# keyval for UCX datatypes"), so take the first launcher under which the
+# world communicator comes up.
+launch=""
+for cand in "srun -n $NTASKS" "mpirun -n $NTASKS" "env OMPI_MCA_pml=ob1"; do
+    if $cand python -c "from gpaw.mpi import world; assert world.size >= 1" > /dev/null 2>&1; then
+        launch=$cand; break
+    fi
+done
+if [ -z "$launch" ]; then
+    echo "no launcher brings MPI up; the last attempt said:"
+    env OMPI_MCA_pml=ob1 python -c "from gpaw.mpi import world" 2>&1 | tail -n 8
+    pip list 2>/dev/null | grep -i -E "mpi|gpaw|ase|numpy|scipy"
+    exit 1
+fi
+echo "launcher: $launch"
+
 fail=0
 run() {
     local name=$1; shift
     local t0=$SECONDS
-    if python scripts/pbc/ref_gpaw.py "$@" --out "$OUT/$name.json" > "$OUT/$name.log" 2>&1; then
+    if $launch python scripts/pbc/ref_gpaw.py "$@" --out "$OUT/$name.json" > "$OUT/$name.log" 2>&1; then
         echo "ok   $name ($((SECONDS - t0)) s): $(tail -n 1 "$OUT/$name.log")"
     else
         echo "FAIL $name ($((SECONDS - t0)) s):"; tail -n 15 "$OUT/$name.log"; fail=1

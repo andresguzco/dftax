@@ -109,9 +109,14 @@ def main():
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     out = run(args)
-    with open(args.out, "w") as f:
-        json.dump(out, f, indent=1)
-    print(json.dumps({k: out[k] for k in ("system", "ecut", "e_free")}))
+    # under MPI (srun -n N gpaw python ...) every rank holds the same result;
+    # one of them writes it
+    from gpaw.mpi import world
+
+    if world.rank == 0:
+        with open(args.out, "w") as f:
+            json.dump(out, f, indent=1)
+        print(json.dumps({k: out[k] for k in ("system", "ecut", "e_free")}))
 
 
 if __name__ == "__main__":

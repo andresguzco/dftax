@@ -18,15 +18,16 @@ from typing import ClassVar
 
 import equinox as eqx
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+import numpy as np
+from jaxtyping import Array, Float, Int
 
 from dftax.basis.loader import build_basis_data
 from dftax.energy.gto import BasisData
 from dftax.energy.xc import XCFunctional
 from dftax.ks.terms import CoulombTerm, GridXC, XCTerm
 from dftax.pbc.bloch import (
-    ao_at_point, ao_on_grid, cross_overlap, overlap_kinetic, pair_images,
-    value_images,
+    ValuePlan, _pad_points, ao_on_grid, block_values, cross_overlap,
+    morton_order, overlap_kinetic, plan_pairs, plan_values, value_chunk,
 )
 from dftax.pbc.electrostatics import hartree_energy, local_potential
 from dftax.pbc.ewald import ewald_energy, plan_ewald
@@ -58,7 +59,7 @@ def uniform(*, mesh=None, cutoff: float | None = None,
             they fit the device budget and otherwise recomputes them per
             chunk of points on every evaluation (O(chunk x nao) memory,
             slower); ``None`` forces the held values, an int streams with
-            that many points per chunk.
+            that many points per chunk (in whole blocks of 512 points).
 
     Example:
         ```python
@@ -80,12 +81,15 @@ class FFTCoulomb(CoulombTerm):
     """Hartree energy of the density of ``P`` on the uniform grid, by FFT.
 
     Holds the periodic AO values on the grid (shared with the XC term) and
-    the lattice. The local pseudopotential is linear in the density and
-    lives in the core Hamiltonian instead.
+    the lattice. The grid is held in blocks (:func:`morton_order`), so
+    ``inv`` puts the density back in mesh order for the FFT. The local
+    pseudopotential is linear in the density and lives in the core
+    Hamiltonian instead.
     """
 
     ao: Float[Array, "ng nao"]
     a: Float[Array, "3 3"]
+    inv: Int[Array, "ng"]
     mesh: tuple[int, int, int] = eqx.field(static=True)
     hf_coeff: float = eqx.field(static=True, default=0.0)
     # valence charge of each atom's pseudopotential (the valence guess)
@@ -97,7 +101,7 @@ class FFTCoulomb(CoulombTerm):
     def energy(self, P, S, nocc):
         Ptot = jnp.sum(P, axis=0)
         rho = jnp.sum((self.ao @ Ptot) * self.ao, axis=1)
-        return hartree_energy(rho, self.a, self.mesh)
+        return hartree_energy(rho[self.inv], self.a, self.mesh)
 
 
 class _GridCoulomb(CoulombTerm):
@@ -117,43 +121,57 @@ class StreamedCellXC(XCTerm):
     recomputed per chunk of points: the Hartree, local-pseudopotential and
     XC energies.
 
-    One pass over the grid gives the density (and its gradient), chunk by
-    chunk, in O(chunk x nao) memory; the three energies are then functions
-    of grid-sized arrays. The pass is checkpointed, so the derivative with
-    respect to ``P`` recomputes each chunk instead of storing it.
+    One pass over the grid gives the density (and its gradient), a few
+    blocks of points at a time (:class:`~dftax.pbc.bloch.ValuePlan`), in
+    O(chunk x nao) memory; the three energies are then functions of
+    grid-sized arrays. The pass is checkpointed, so the derivative with
+    respect to ``P`` recomputes each block instead of storing it. Grid
+    arrays are in block order; ``inv`` restores mesh order for the FFT.
     """
 
     basis: BasisData
-    shifts: Float[Array, "nT 3"]
+    plan: ValuePlan
     grid_coords: Float[Array, "ng 3"]
     weights: Float[Array, "ng"]
     v_loc: Float[Array, "ng"]
+    inv: Int[Array, "ng"]
     a: Float[Array, "3 3"]
     mesh: tuple[int, int, int] = eqx.field(static=True)
-    chunk: int = eqx.field(static=True)
+    chunk: int = eqx.field(static=True)           # blocks in flight
     xc: XCFunctional = eqx.field(static=True)
 
     def energy(self, P):
         mgga = self.xc.xc_type == "MGGA"
+        plan = self.plan
+        nblk, ng, ns = plan.fun.shape[0], self.weights.shape[0], P.shape[0]
+        pts = _pad_points(self.grid_coords, nblk * plan.block).reshape(
+            nblk, plan.block, 3)
+        shifts = plan.images.astype(self.a.dtype) @ self.a
 
-        def point(r):
-            ao, dao = ao_at_point(self.basis, self.shifts, r)
-            pao = P @ ao                                       # (nspin, nao)
-            rho = pao @ ao
-            grad = 2.0 * jnp.einsum("sm,mx->sx", pao, dao)
-            tau = (0.5 * jnp.einsum("mx,smn,nx->s", dao, P, dao) if mgga
+        def block(f, t, m, r):
+            ao, dao = block_values(self.basis, shifts, f, t, m, r)
+            pao = jnp.einsum("smn,bn->sbm", P, ao)           # (nspin, B, nao)
+            rho = jnp.einsum("sbm,bm->sb", pao, ao)
+            grad = 2.0 * jnp.einsum("sbm,bmx->sbx", pao, dao)
+            tau = (0.5 * jnp.einsum("bmx,smn,bnx->sb", dao, P, dao) if mgga
                    else jnp.zeros_like(rho))
             return rho, grad, tau
 
         rho, grad, tau = chunked_vmap(
-            point, chunk_size=self.chunk, checkpoint=True)(self.grid_coords)
-        total = jnp.sum(rho, axis=1)
-        e = hartree_energy(total, self.a, self.mesh) + jnp.sum(total * self.v_loc)
+            block, chunk_size=self.chunk, checkpoint=True)(
+                plan.fun, plan.img, plan.mask, pts)
+        # (nblk, nspin, B, ...) -> (nspin, ng, ...), padding dropped
+        rho = jnp.moveaxis(rho, 1, 0).reshape(ns, -1)[:, :ng]
+        grad = jnp.moveaxis(grad, 1, 0).reshape(ns, -1, 3)[:, :ng]
+        tau = jnp.moveaxis(tau, 1, 0).reshape(ns, -1)[:, :ng]
+        total = jnp.sum(rho, axis=0)
+        e = (hartree_energy(total[self.inv], self.a, self.mesh)
+             + jnp.sum(total * self.v_loc))
         # the XC energy of grid densities, as the held-values term takes it
         gx = GridXC(ao=None, dao=None, weights=self.weights, xc=self.xc,
                     coords=self.grid_coords)
-        chans = [(rho[:, s], grad[:, s], tau[:, s] if mgga else None)
-                 for s in range(P.shape[0])]
+        chans = [(rho[s], grad[s], tau[s] if mgga else None)
+                 for s in range(ns)]
         if len(chans) == 1:
             return e + gx._energy_closed(*chans[0])
         return e + gx._energy_spin(*chans)
@@ -200,9 +218,13 @@ def build_cell(cell, xc, grid, spin) -> dict:
     coords = jnp.asarray(cell.atom_coords())
     charges = jnp.asarray(cell.atom_charges())
 
-    S, T = overlap_kinetic(basis, a, pair_images(basis, cell.a))
+    S, T = overlap_kinetic(basis, a, plan_pairs(basis, cell.a))
+    # the grid in compact blocks (Z-order); inv restores mesh order
+    order = morton_order(mesh)
+    inv = jnp.asarray(np.argsort(order), dtype=jnp.int32)
     grid_coords, weights = uniform_grid(a, mesh)
-    images = value_images(basis, cell.a)
+    grid_coords, weights = grid_coords[order], weights[order]
+    plan = plan_values(basis, cell.a, grid_coords)
     ion_charges = tuple(int(p.zion) for p in cell.potentials)
     # the same budget rule as a molecule's AO grid: hold the values when
     # they fit, recompute them per chunk when they do not
@@ -211,27 +233,30 @@ def build_cell(cell, xc, grid, spin) -> dict:
 
     # local pseudopotential: its grid values carry the quadrature weight
     zion, rloc, cloc = (jnp.asarray(x) for x in local_parameters(cell.potentials))
-    v_loc = local_potential(coords, a, mesh, zion, rloc, cloc)
+    v_loc = local_potential(coords, a, mesh, zion, rloc, cloc)[order]
     if chunk is None:
-        ao, dao = ao_on_grid(basis, a, images, grid_coords)
+        ao, dao = ao_on_grid(basis, a, grid_coords, plan)
         hcore = T + (ao * v_loc[:, None]).T @ ao
-        coulomb = FFTCoulomb(ao=ao, a=a, mesh=tuple(mesh),
+        coulomb = FFTCoulomb(ao=ao, a=a, inv=inv, mesh=tuple(mesh),
                              ion_charges=ion_charges)
         xc_term = GridXC(ao=ao, dao=dao, weights=weights, xc=xc,
                          coords=grid_coords)
     else:
         hcore = T
         coulomb = _GridCoulomb(ion_charges=ion_charges)
+        # blocks in flight: the screened evaluation's own budget, unless
+        # the caller fixed the chunk
+        blocks = (value_chunk(plan, basis) if grid.chunk == "auto"
+                  else max(1, int(chunk) // plan.block))
         xc_term = StreamedCellXC(
-            basis=basis, shifts=jnp.asarray(images, dtype=a.dtype) @ a,
-            grid_coords=grid_coords, weights=weights, v_loc=v_loc, a=a,
-            mesh=tuple(mesh), chunk=int(chunk), xc=xc)
+            basis=basis, plan=plan, grid_coords=grid_coords, weights=weights,
+            v_loc=v_loc, inv=inv, a=a, mesh=tuple(mesh), chunk=blocks, xc=xc)
 
     proj = projector_basis(cell.potentials, cell.atom_coords())
     if proj is not None:
         pbasis, H = proj
         B = cross_overlap(basis, pbasis, a,
-                          pair_images(basis, cell.a, other=pbasis))
+                          plan_pairs(basis, cell.a, other=pbasis))
         hcore = hcore + B @ jnp.asarray(H) @ B.T
 
     e_nn = ewald_energy(coords, charges, a,

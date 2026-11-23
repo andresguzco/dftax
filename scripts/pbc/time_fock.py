@@ -51,11 +51,14 @@ def main():
     t0 = time.perf_counter()
     ks = KS(cell, functional(args.xc), grid=uniform(mesh=args.mesh, chunk=chunk))
     jax.block_until_ready(ks.hcore)
+    plan = getattr(ks.xc_term, "plan", None)
+    screen = ("" if plan is None else
+              f", blocks {plan.fun.shape[0]} x {plan.block} points, "
+              f"{plan.fun.shape[1]} (row, image) pairs per block, "
+              f"{plan.images.shape[0]} images")
     print(f"build {time.perf_counter() - t0:.1f} s: nao {ks.S.shape[0]}, "
           f"grid {ks.xc_term.weights.shape[0]}, {type(ks.xc_term).__name__}, "
-          f"chunk {getattr(ks.xc_term, 'chunk', None)}, "
-          f"images {getattr(ks.xc_term, 'shifts', ks.S[:0]).shape[0]}",
-          flush=True)
+          f"chunk {getattr(ks.xc_term, 'chunk', None)}{screen}", flush=True)
 
     P = density_from_guess(ks, None, canonical_orthonormalizer(ks.S))
     fock = eqx.filter_jit(lambda k, Q: k.energy_and_fock(Q))

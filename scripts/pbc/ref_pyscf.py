@@ -56,6 +56,8 @@ def run(args) -> dict:
     mf = dft.KRKS(cell, cell.make_kpts(list(args.kmesh)))
     mf.xc = args.xc
     mf.conv_tol = args.conv_tol
+    if args.conv_tol_grad is not None:          # default: sqrt(conv_tol)
+        mf.conv_tol_grad = args.conv_tol_grad
     mf.max_cycle = 200
     if args.smearing:
         from pyscf.pbc.scf.addons import smearing_
@@ -127,6 +129,9 @@ def main():
     p.add_argument("--rattle", type=float, default=0.0,
                    help="standard deviation of the displacements, Angstrom")
     p.add_argument("--conv-tol", type=float, default=1e-10)
+    p.add_argument("--conv-tol-grad", type=float, default=None,
+                   help="orbital-gradient tolerance (PySCF default: "
+                        "sqrt(conv_tol), which bounds force errors near 1e-6)")
     p.add_argument("--forces", action="store_true")
     p.add_argument("--stress", action="store_true")
     p.add_argument("--out", required=True)

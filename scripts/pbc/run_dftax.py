@@ -54,6 +54,15 @@ def run(args) -> dict:
     res = scf(ks, e_tol=args.e_tol, d_tol=args.d_tol, max_iter=200)
     t_scf = time.perf_counter() - t0
     P = res.P
+    # the streamed grid path takes the Hartree and local-pseudopotential
+    # energies with the XC energy, so only the held path splits the terms
+    # the way the references do
+    summary = {"nuc": float(ks.e_nn)}
+    if type(ks.xc_term).__name__ != "StreamedCellXC":
+        summary.update(
+            e1=float(jnp.sum(jnp.sum(P, axis=0) * ks.hcore)),
+            coul=float(ks.coulomb.energy(P, ks.S, ks.nocc)),
+            exc=float(ks.xc_term.energy(P)))
     extra = {}
     if args.forces:
         t0 = time.perf_counter()
@@ -83,12 +92,7 @@ def run(args) -> dict:
         "converged": bool(res.converged),
         "n_iter": int(res.n_iter),
         "e_tot": float(res.e_tot),
-        "summary": {
-            "nuc": float(ks.e_nn),
-            "e1": float(jnp.sum(jnp.sum(P, axis=0) * ks.hcore)),
-            "coul": float(ks.coulomb.energy(P, ks.S, ks.nocc)),
-            "exc": float(ks.xc_term.energy(P)),
-        },
+        "summary": summary,
         "seconds_build": t_build,
         "seconds_scf": t_scf,
     }

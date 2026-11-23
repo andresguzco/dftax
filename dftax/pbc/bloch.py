@@ -80,9 +80,24 @@ def _value_reach(ls, exps, cmax, precision):
     return r[np.arange(r.shape[0]), last]
 
 
+def _round_up(n: int, step: int) -> int:
+    """``n`` rounded up to a multiple of ``step``: plans of nearby
+    geometries then share their shapes, and so their compiled programs."""
+    return max(step, -(-n // step) * step)
+
+
+def _padded_images(n):
+    """Integer translations as floats, padded with zeros (never referenced)
+    to a multiple of 16 rows."""
+    out = np.zeros((_round_up(len(n), 16), 3))
+    out[:len(n)] = n
+    return jnp.asarray(out)
+
+
 class PairPlan(eqx.Module):
     """The screened terms of a lattice sum ``sum_T <a_i | O | b_j(r - T)>``:
-    ``(i, j, image)`` triples over cartesian rows, sorted by ``(i, j)``.
+    ``(i, j, image)`` triples over cartesian rows, sorted by ``(i, j)``,
+    padded with zero-weight triples.
 
     A symmetric plan (a basis with itself) holds only ``i <= j``.
     """
@@ -90,6 +105,7 @@ class PairPlan(eqx.Module):
     i: Int[Array, "n"]
     j: Int[Array, "n"]
     img: Int[Array, "n"]
+    weight: Float[Array, "n"]                # 1, and 0 on the padding
     images: Float[Array, "nT 3"]             # integer translations, as floats
     symmetric: bool = eqx.field(static=True)
 
@@ -165,12 +181,17 @@ def plan_pairs(basis: BasisData, a, precision: float = 1e-12,
             rows_t.append(tt[m])
     i, j, t = (np.concatenate(x) for x in (rows_i, rows_j, rows_t))
     order = np.lexsort((t, j, i))
+    i, j = i[order], j[order]
     used, t = np.unique(t[order], return_inverse=True)
+    n, npad = i.size, _round_up(i.size, 4096)
+    # padding: the last (row, column), weight 0, keeps the order sorted
+    pad = lambda x, v: np.concatenate([x, np.full(npad - n, v, dtype=x.dtype)])
     return PairPlan(
-        i=jnp.asarray(i[order], dtype=jnp.int32),
-        j=jnp.asarray(j[order], dtype=jnp.int32),
-        img=jnp.asarray(t.reshape(-1), dtype=jnp.int32),
-        images=jnp.asarray(cand[used], dtype=jnp.float64),
+        i=jnp.asarray(pad(i, int(ra[-1] + ca_n[-1] - 1)), dtype=jnp.int32),
+        j=jnp.asarray(pad(j, int(rb[-1] + cb_n[-1] - 1)), dtype=jnp.int32),
+        img=jnp.asarray(pad(t.reshape(-1), 0), dtype=jnp.int32),
+        weight=jnp.asarray(pad(np.ones(n), 0.0)),
+        images=_padded_images(cand[used]),
         symmetric=sym)
 
 
@@ -237,7 +258,7 @@ def plan_values(basis: BasisData, a, coords, *, block: int = 512,
                 < reach[None, :, None])                      # (nb, nsh, nT)
         keep = np.repeat(keep, ncomp, axis=1)                # rows, in order
         lists.extend(np.nonzero(k) for k in keep)
-    L = max(1, max(f.size for f, _ in lists))
+    L = _round_up(max(f.size for f, _ in lists), 128)
     ncart = int(row0[-1] + ncomp[-1])
     fun = np.full((nblk, L), ncart - 1, dtype=np.int32)     # sorted padding
     img = np.zeros((nblk, L), dtype=np.int32)
@@ -247,7 +268,7 @@ def plan_values(basis: BasisData, a, coords, *, block: int = 512,
     used, img = np.unique(img, return_inverse=True)
     return ValuePlan(
         fun=jnp.asarray(fun), img=jnp.asarray(img.reshape(nblk, L), dtype=jnp.int32),
-        mask=jnp.asarray(mask), images=jnp.asarray(cand[used], dtype=jnp.float64),
+        mask=jnp.asarray(mask), images=_padded_images(cand[used]),
         npts=int(ng), block=int(block))
 
 
@@ -279,7 +300,7 @@ def _lattice_sum(basis_a, basis_b, shifts, plan: PairPlan, primitive_fn, chunk):
             basis_b.centers[j] + shifts[t], basis_b.angular[j], primitive_fn)
 
     vals = chunked_vmap(one, in_axes=(0, 0, 0), chunk_size=chunk)(
-        plan.i, plan.j, plan.img)
+        plan.i, plan.j, plan.img) * plan.weight
     na, nb = basis_a.centers.shape[0], basis_b.centers.shape[0]
     M = jax.ops.segment_sum(vals, plan.i * nb + plan.j, num_segments=na * nb,
                             indices_are_sorted=True).reshape(na, nb)

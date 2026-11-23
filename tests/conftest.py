@@ -42,6 +42,8 @@ _SLOW_MODULES = {
     # exponents. The shared periodic layer (test_pbc_shared, seconds) stays
     # in the default tier.
     "test_pbc_gaussian",
+    # nine SCFs of a silicon cell (finite differences of forces and stress)
+    "test_pbc_derivatives",
 }
 
 # Kept OUT of the slow tier on purpose, because each guards a silent wrong

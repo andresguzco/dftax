@@ -27,7 +27,7 @@ from dftax.energy.xc import XCFunctional
 from dftax.ks.terms import CoulombTerm, GridXC, XCTerm
 from dftax.pbc.bloch import (
     PairPlan, ValuePlan, _pad_points, ao_on_grid, block_values,
-    cross_overlap, morton_order, overlap_kinetic, plan_pairs, plan_values,
+    box_layout, cross_overlap, overlap_kinetic, plan_pairs, plan_values,
     value_chunk,
 )
 from dftax.pbc.electrostatics import hartree_energy, local_potential
@@ -82,7 +82,7 @@ class FFTCoulomb(CoulombTerm):
     """Hartree energy of the density of ``P`` on the uniform grid, by FFT.
 
     Holds the periodic AO values on the grid (shared with the XC term) and
-    the lattice. The grid is held in blocks (:func:`morton_order`), so
+    the lattice. The grid is held in blocks (:func:`box_layout`), so
     ``inv`` puts the density back in mesh order for the FFT. The local
     pseudopotential is linear in the density and lives in the core
     Hamiltonian instead.
@@ -193,9 +193,10 @@ class CellPlan:
     pairs: PairPlan
     projectors: tuple | None         # (BasisData, atom per row, H, PairPlan)
     values: ValuePlan
-    frac: Array                      # (ng, 3) grid points, fractional, block order
-    order: np.ndarray                # block position -> mesh index
-    inv: Array                       # mesh index -> block position
+    frac: Array                      # (npos, 3) grid positions, fractional
+    order: np.ndarray                # position -> mesh index
+    valid: Array                     # (npos,) 1 on mesh points, 0 on repeats
+    inv: Array                       # mesh index -> position
     mesh: tuple[int, int, int]
     held: bool                       # AO values held (True) or streamed
     blocks: int                      # blocks in flight when streamed
@@ -258,9 +259,12 @@ def plan_cell(cell, xc, grid, spin) -> CellPlan:
         cell.symbols, coords, cell.basis, spherical=cell.spherical,
         return_atom_index=True)
 
-    # the grid in compact blocks (Z-order); inv restores mesh order
+    # the grid in compact blocks (8x8x8 boxes, edge boxes filled with
+    # zero-weight repeats); inv restores mesh order
     mesh = tuple(int(n) for n in mesh)
-    order = morton_order(mesh)
+    order, valid = box_layout(mesh)
+    inv = np.empty(int(np.prod(mesh)), dtype=np.int64)
+    inv[order[valid]] = np.nonzero(valid)[0]
     frac = np.stack(np.meshgrid(*[np.arange(n) / n for n in mesh],
                                 indexing="ij"), axis=-1).reshape(-1, 3)[order]
     values = plan_values(basis, cell.a, frac @ np.asarray(cell.a))
@@ -288,7 +292,8 @@ def plan_cell(cell, xc, grid, spin) -> CellPlan:
         basis=basis, atom_idx=jnp.asarray(atom_idx),
         pairs=plan_pairs(basis, cell.a), projectors=projectors,
         values=values, frac=jnp.asarray(frac), order=order,
-        inv=jnp.asarray(np.argsort(order), dtype=jnp.int32), mesh=mesh,
+        valid=jnp.asarray(valid, dtype=jnp.float64),
+        inv=jnp.asarray(inv, dtype=jnp.int32), mesh=mesh,
         held=chunk is None, blocks=int(blocks),
         ewald=plan_ewald(cell.a, coords),
         charges=jnp.asarray(cell.atom_charges()),
@@ -309,13 +314,12 @@ def cell_fields(plan: CellPlan, xc, coords, a, held: bool | None = None) -> dict
     held = plan.held if held is None else held
     basis = eqx.tree_at(lambda b: b.centers, plan.basis, coords[plan.atom_idx])
     S, T = overlap_kinetic(basis, a, plan.pairs)
-    ng = plan.frac.shape[0]
     grid_coords = plan.frac @ a
-    weights = jnp.full((ng,), 1.0 / ng) * volume(a)
+    weights = plan.valid * (volume(a) / plan.inv.shape[0])
     mesh = plan.mesh
 
     # local pseudopotential: its grid values carry the quadrature weight
-    v_loc = local_potential(coords, a, mesh, *plan.local)[plan.order]
+    v_loc = local_potential(coords, a, mesh, *plan.local)[plan.order] * plan.valid
     if held:
         ao, dao = ao_on_grid(basis, a, grid_coords, plan.values)
         hcore = T + (ao * v_loc[:, None]).T @ ao

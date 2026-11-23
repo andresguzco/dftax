@@ -272,18 +272,26 @@ def plan_values(basis: BasisData, a, coords, *, block: int = 512,
         npts=int(ng), block=int(block))
 
 
-def morton_order(mesh) -> np.ndarray:
-    """The points of a uniform mesh (flattened in C order) along a Z-order
-    curve, ``(N,)``: consecutive points then form compact blocks, which is
-    what the screening of :func:`plan_values` needs."""
-    n1, n2, n3 = (int(n) for n in mesh)
-    idx = np.indices((n1, n2, n3)).reshape(3, -1).astype(np.uint64)
-    code = np.zeros(idx.shape[1], dtype=np.uint64)
-    for bit in range(int(max(n1, n2, n3) - 1).bit_length()):
-        for axis in range(3):
-            code |= ((idx[axis] >> np.uint64(bit)) & np.uint64(1)) << np.uint64(
-                3 * bit + 2 - axis)
-    return np.argsort(code, kind="stable")
+def box_layout(mesh, box: int = 8):
+    """The points of a uniform mesh in blocks of ``box^3`` consecutive
+    points, each block one index-aligned box of the mesh: compact, which is
+    what the screening of :func:`plan_values` needs.
+
+    Returns ``(order, valid)``: the mesh index (C order) of every position,
+    and whether the position is a mesh point of its own. A box at the upper
+    edge of a mesh whose size is not a multiple of ``box`` is filled with
+    repeats of its last plane (``valid`` False, to be given zero weight),
+    so the repeats stay inside the box.
+    """
+    n = np.array([int(m) for m in mesh])
+    nb = -(-n // box)
+    boxes = np.indices(tuple(nb)).reshape(3, -1)            # (3, nbox)
+    local = np.indices((box, box, box)).reshape(3, -1)      # (3, box^3)
+    g = boxes[:, :, None] * box + local[:, None, :]         # (3, nbox, box^3)
+    valid = np.all(g < n[:, None, None], axis=0)
+    g = np.minimum(g, (n - 1)[:, None, None])
+    order = (g[0] * n[1] + g[1]) * n[2] + g[2]
+    return order.reshape(-1), valid.reshape(-1)
 
 
 # ---------------------------------------------------------------------------

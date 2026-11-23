@@ -45,31 +45,25 @@ if [ -z "$loaded" ]; then
 fi
 python -c "import gpaw, ase; print('gpaw', gpaw.__version__, '| ase', ase.__version__, '| $loaded')"
 
-# The wheel is MPI-linked and initialises MPI when gpaw.mpi is imported. It
-# must run under the MPI library it was built with (the cluster's GPAW page
-# says so), and which one that is is not recorded: under the default
-# openmpi/4.1.5 it died at MPI start-up whatever the launcher. Take the first
-# MPI module and launcher under which the world communicator has every rank.
+# The wheel is MPI-linked (built against the default openmpi/4.1.5, as its
+# run path says) and initialises MPI when gpaw.mpi is imported, so it needs
+# a launch under which MPI comes up. Slurm here has no PMIx plugin (srun
+# --mpi=list: none, pmi2, cray_shasta), a plain `srun -n` is refused by Open
+# MPI, and a bare `python` crashes in MPI_Init. Take the first launcher that
+# works, and say why each of the others did not.
 ulimit -c 0
-so=$(python -c 'import importlib.util as u; print(u.find_spec("_gpaw").origin)')
-echo "extension run path: $(readelf -d "$so" | grep -E 'RUNPATH|RPATH' | tr -s ' ' | cut -c1-400)"
+ompi_info 2>/dev/null | grep -i -E "slurm|pmi" | tr -s ' ' | cut -c1-110 | head -n 8
 launch=""
-for mpi in openmpi/5.0.10 openmpi/5.0.8 openmpi/5.0.3 openmpi/4.1.5; do
-    module load "$mpi" 2>/dev/null || continue
-    for cand in "srun -n $NTASKS" "mpirun -n $NTASKS"; do
-        if $cand python -c "from gpaw.mpi import world; assert world.size == $NTASKS" > /dev/null 2>&1; then
-            launch=$cand; break 2
-        fi
-    done
+probe='from gpaw.mpi import world; print("ranks", world.size)'
+for cand in "mpirun -n $NTASKS" "mpiexec --oversubscribe -n $NTASKS" \
+            "srun --mpi=pmi2 -n $NTASKS" \
+            "env OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,vader" "env"; do
+    if msg=$($cand python -c "$probe" 2>&1); then
+        launch=$cand; echo "launcher: $cand ($(echo "$msg" | tail -n 1))"; break
+    fi
+    echo "-- $cand: failed"; echo "$msg" | grep -v -E '^\[|^-+$|^\s*$' | tail -n 6 | cut -c1-200
 done
-if [ -z "$launch" ]; then
-    echo "no MPI module and launcher bring the world communicator up; modules now:"
-    module -t list 2>&1 | tr '\n' ' '; echo
-    echo "the last attempt said:"
-    srun -n "$NTASKS" python -c "from gpaw.mpi import world; print(world.size)" 2>&1 | grep -v '^\[' | tail -n 12
-    exit 1
-fi
-echo "launcher: $launch under $mpi"
+[ -n "$launch" ] || { echo "no launcher brings MPI up"; exit 1; }
 
 fail=0
 run() {

@@ -158,8 +158,8 @@ class StreamedCellXC(XCTerm):
             return rho, grad, tau
 
         rho, grad, tau = chunked_vmap(
-            block, chunk_size=self.chunk, checkpoint=True)(
-                plan.fun, plan.img, plan.mask, pts)
+            block, in_axes=(0, 0, 0, 0), chunk_size=self.chunk,
+            checkpoint=True)(plan.fun, plan.img, plan.mask, pts)
         # (nblk, nspin, B, ...) -> (nspin, ng, ...), padding dropped
         rho = jnp.moveaxis(rho, 1, 0).reshape(ns, -1)[:, :ng]
         grad = jnp.moveaxis(grad, 1, 0).reshape(ns, -1, 3)[:, :ng]

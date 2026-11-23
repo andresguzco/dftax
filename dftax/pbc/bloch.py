@@ -278,7 +278,8 @@ def _lattice_sum(basis_a, basis_b, shifts, plan: PairPlan, primitive_fn, chunk):
             basis_b.exponents[j], basis_b.coefficients[j],
             basis_b.centers[j] + shifts[t], basis_b.angular[j], primitive_fn)
 
-    vals = chunked_vmap(one, chunk_size=chunk)(plan.i, plan.j, plan.img)
+    vals = chunked_vmap(one, in_axes=(0, 0, 0), chunk_size=chunk)(
+        plan.i, plan.j, plan.img)
     na, nb = basis_a.centers.shape[0], basis_b.centers.shape[0]
     M = jax.ops.segment_sum(vals, plan.i * nb + plan.j, num_segments=na * nb,
                             indices_are_sorted=True).reshape(na, nb)
@@ -372,7 +373,8 @@ def _ao_on_grid(basis, a, coords, plan, chunk):
     shifts = plan.images.astype(a.dtype) @ a
     v, g = chunked_vmap(
         lambda f, t, m, p: block_values(basis, shifts, f, t, m, p),
-        chunk_size=chunk)(plan.fun, plan.img, plan.mask, pts)
+        in_axes=(0, 0, 0, 0), chunk_size=chunk)(
+            plan.fun, plan.img, plan.mask, pts)
     nao = v.shape[-1]
     return (v.reshape(-1, nao)[:plan.npts],
             g.reshape(-1, nao, 3)[:plan.npts])

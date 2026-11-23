@@ -43,6 +43,12 @@ DAMPING = {
     "b3lyp":     (1.0, 0.40868035, 2.02929367, 4.53807137),
     "cam-b3lyp": (1.0, 0.40147577, 1.66041301, 5.17350180),
     "r2scan":    (1.0, 0.49484001, 0.60187490, 5.73408312),
+    # dftd4 assets/parameters.toml @ 4a5bbf0f, d4.bj-eeq-atm of [parameter.lcblyp]
+    # and [parameter.wb97] (doi 10.1063/1.5090222) and [parameter.lcwpbe]
+    # (doi 10.1021/acs.jctc.3c00717).
+    "lc-blyp":   (1.0, 0.45769839, 1.60344180, 7.86924893),
+    "lc-wpbe":   (1.0, 0.378, 1.170, 4.816),
+    "wb97":      (1.0, 0.76666802, 6.55792598, 8.36027334),
 }
 
 NELEM = 104   # direct atomic-number indexing, row 0 unused

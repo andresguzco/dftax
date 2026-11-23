@@ -37,6 +37,9 @@ DAMPING = {
     "b3lyp":    (1.0, 0.3981, 1.9889, 4.4211),
     "cam-b3lyp": (1.0, 0.3708, 2.0674, 5.4743),
     "r2scan":   (1.0, 0.4948, 0.6018, 5.7308),
+    # simple-dftd3 assets/parameters.toml @ 84cb7cdd, [parameter.lcwpbe] d3.bj
+    # (doi 10.1039/c0cp02984j); the file has no d3.bj set for lcblyp or wb97.
+    "lc-wpbe":  (1.0, 0.3919, 1.8541, 5.0897),
 }
 
 

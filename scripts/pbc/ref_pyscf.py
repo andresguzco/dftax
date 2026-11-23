@@ -91,6 +91,12 @@ def run(args) -> dict:
         "summary": {k: float(np.real(v)) for k, v in mf.scf_summary.items()},
         "seconds_scf": time.perf_counter() - t0,
     }
+    # band edges over the k-mesh: highest level more than half occupied,
+    # lowest level less than half (a metal gives a gap near zero)
+    e = np.concatenate([np.asarray(x).ravel() for x in mf.mo_energy])
+    occ = np.concatenate([np.asarray(x).ravel() for x in mf.mo_occ])
+    out["vbm"], out["cbm"] = float(e[occ > 1.0].max()), float(e[occ < 1.0].min())
+    out["gap"] = out["cbm"] - out["vbm"]
     # under smearing e_tot is the internal energy; the free energy is the
     # variational one and e_zero PySCF's extrapolation to zero width
     for key in ("e_free", "e_zero", "entropy"):

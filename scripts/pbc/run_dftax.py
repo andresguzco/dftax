@@ -28,6 +28,7 @@ from systems import ANGSTROM_TO_BOHR, systems  # noqa: E402
 
 # the functional names of the references (PySCF spelling) in dftax's
 XC = {"lda,vwn": "lda", "lda": "lda", "pbe": "pbe"}
+HARTREE_EV = 27.211386245988
 
 
 def run(args) -> dict:
@@ -92,6 +93,9 @@ def run(args) -> dict:
         "converged": bool(res.converged),
         "n_iter": int(res.n_iter),
         "e_tot": float(res.e_tot),
+        # band edges at Gamma (the only k-point): HOMO and LUMO
+        "vbm": float(res.mo_energy[0][res.nocc[0] - 1]),
+        "cbm": float(res.mo_energy[0][res.nocc[0]]),
         "summary": summary,
         "seconds_build": t_build,
         "seconds_scf": t_scf,
@@ -150,6 +154,11 @@ def main():
                       f"{np.abs(mine - theirs).max():.2e}, max |reference| "
                       f"{np.abs(theirs).max():.2e} (seconds "
                       f"{out['seconds_' + key]:.1f})")
+        if "gap" in ref:
+            gap = out["cbm"] - out["vbm"]
+            print(f"gap at Gamma: dftax {gap * HARTREE_EV:.5f} eV, reference "
+                  f"{ref['gap'] * HARTREE_EV:.5f} eV, difference "
+                  f"{gap - ref['gap']:+.2e} Ha")
 
 
 if __name__ == "__main__":

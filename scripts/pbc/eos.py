@@ -59,6 +59,9 @@ def main():
     p.add_argument("--basis", default="gth-dzvp")
     p.add_argument("--pseudo", default="gth-pade")
     p.add_argument("--xc", default="lda,vwn", choices=sorted(XC))
+    p.add_argument("--center", type=float, default=1.0,
+                   help="volume factor the seven volumes are centred on "
+                        "(the model's own minimum, once known)")
     p.add_argument("--out", default=None)
     args = p.parse_args()
 
@@ -69,7 +72,7 @@ def main():
     xc = functional(XC[args.xc])
     grid = uniform(mesh=args.mesh)
     rows = []
-    for f in EOS_VOLUME_FACTORS:
+    for f in args.center * np.asarray(EOS_VOLUME_FACTORS):
         spec = systems()[args.system].scaled(float(f))
         cell = Cell(list(spec.symbols), spec.cart * ANGSTROM_TO_BOHR,
                     spec.a * ANGSTROM_TO_BOHR, args.basis, args.pseudo)
@@ -79,21 +82,29 @@ def main():
         rows.append(dict(volume_factor=float(f), volume=float(cell.volume),
                          e_tot=float(res.e_tot), converged=bool(res.converged),
                          stress=sigma.tolist(),
-                         pressure=float(-np.trace(sigma) / 3.0)))
+                         pressure=float(-np.trace(sigma) / 3.0),
+                         gap=float(res.mo_energy[0][res.nocc[0]]
+                                   - res.mo_energy[0][res.nocc[0] - 1])))
         print(json.dumps({k: rows[-1][k] for k in
-                          ("volume_factor", "e_tot", "converged", "pressure")}),
+                          ("volume_factor", "e_tot", "converged", "pressure", "gap")}),
               flush=True)
 
     V = np.array([r["volume"] for r in rows])
     E = np.array([r["e_tot"] for r in rows])
     E0, V0, B0, B1 = fit(V, E)
+    ref = systems()[args.system]
+    v_ref = ref.volume * ANGSTROM_TO_BOHR ** 3
+    # isotropic strain: every lattice length scales with (V0 / V_ref)^(1/3)
+    lengths = np.linalg.norm(ref.a, axis=1) * (V0 / v_ref) ** (1.0 / 3.0)
     out = dict(system=args.system, mesh=list(args.mesh), basis=args.basis,
                pseudo=args.pseudo, xc=args.xc, points=rows,
                fit=dict(E0=E0, V0=V0, B0=B0, B1=B1,
-                        B0_GPa=B0 * GPA_PER_AU,
+                        B0_GPa=B0 * GPA_PER_AU, V0_factor=V0 / v_ref,
+                        lattice_lengths_angstrom=lengths.tolist(),
                         rms=float(np.sqrt(np.mean(
                             (birch_murnaghan(V, E0, V0, B0, B1) - E) ** 2)))))
-    print(f"V0 {V0:.4f} Bohr^3 (factor {V0 / V[3]:.5f}), B0 "
+    print(f"V0 {V0:.4f} Bohr^3 (V0/V_ref {V0 / v_ref:.5f}), lattice lengths "
+          f"{np.array2string(lengths, precision=4)} A, B0 "
           f"{B0 * GPA_PER_AU:.2f} GPa, B0' {B1:.3f}, fit rms "
           f"{out['fit']['rms']:.1e} Ha")
     for r in rows:

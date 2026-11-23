@@ -9,9 +9,9 @@ not a Harris-Foulkes estimate, so at convergence it is variational.
 
 The eigensolver is LOBPCG with the Teter-Payne-Allan preconditioner: the
 trial space of each step is the current vectors, their preconditioned
-residuals and the previous step's direction, and the Rayleigh-Ritz problem
-in it is solved through its overlap matrix, with directions of vanishing
-norm pushed out of reach rather than dropped, so every step has one shape.
+residuals and the previous step's direction, made orthonormal explicitly
+(two passes of projection and QR), so every step has one shape and a plain
+Hermitian Rayleigh-Ritz problem.
 """
 
 from __future__ import annotations
@@ -40,52 +40,44 @@ def _teter(kin, X):
     return num / (num + 16.0 * x ** 4)
 
 
-def _rayleigh_ritz(S, HS, nb):
-    """Lowest ``nb`` Ritz pairs of the trial space ``S`` (not orthonormal),
-    as coefficients ``Y`` ``(ns, nb)`` and values ``(nb,)``."""
-    B = S.conj().T @ S
-    B = 0.5 * (B + B.conj().T)
-    eb, ub = jnp.linalg.eigh(B)
-    keep = eb > 1e-10 * eb[-1]
-    T = ub * jnp.where(keep, 1.0 / jnp.sqrt(jnp.where(keep, eb, 1.0)), 0.0)
-    A = T.conj().T @ (S.conj().T @ HS) @ T
-    A = 0.5 * (A + A.conj().T) + jnp.diag(jnp.where(keep, 0.0, 1e6))
-    e, U = jnp.linalg.eigh(A)
-    return T @ U[:, :nb], e[:nb]
+def _orthonormal_against(V, Q, mask):
+    """``V`` made orthonormal and orthogonal to the orthonormal ``Q``: two
+    passes of projection and QR, so even columns that were nearly in the
+    span of ``Q`` (converged bands) come out as clean directions."""
+    for _ in range(2):
+        V = (V - Q @ (Q.conj().T @ V)) * mask[:, None]
+        V, _ = jnp.linalg.qr(V)
+    return V
 
 
 def lobpcg(X, kin, vr, fft_idx, mask, mesh, P, D, n_iter: int):
     """``n_iter`` LOBPCG steps on one sphere. Returns the Ritz vectors
-    ``(npw, nb)`` (orthonormal), their values and residual norms."""
+    ``(npw, nb)`` (orthonormal), their values and residual norms.
+
+    The trial space of a step, ``[X, W, Pd]``, is made orthonormal
+    explicitly and the Hamiltonian applied to its new directions, so the
+    Rayleigh-Ritz problem is a plain Hermitian one at any conditioning.
+    """
     nb = X.shape[1]
     h = lambda V: apply_h(V, kin, vr, fft_idx, mask, mesh, P, D)
     HX = h(X)
     Pd = jnp.zeros_like(X)
-    HP = jnp.zeros_like(X)
 
     def step(carry, _):
-        X, HX, Pd, HP = carry
+        X, HX, Pd = carry
         lam = jnp.sum((X.conj() * HX).real, axis=0)
         R = HX - X * lam[None, :]
-        W = _teter(kin, X) * R * mask[:, None]
-        W = W - X @ (X.conj().T @ W)
-        W = W / jnp.maximum(jnp.linalg.norm(W, axis=0), 1e-30)[None, :]
-        HW = h(W)
+        W = _orthonormal_against(_teter(kin, X) * R, X, mask)
+        Pd = _orthonormal_against(Pd, jnp.concatenate([X, W], axis=1), mask)
         S = jnp.concatenate([X, W, Pd], axis=1)
-        HS = jnp.concatenate([HX, HW, HP], axis=1)
-        Y, _ = _rayleigh_ritz(S, HS, nb)
-        Xn, HXn = S @ Y, HS @ Y
+        HS = jnp.concatenate([HX, h(W), h(Pd)], axis=1)
+        A = S.conj().T @ HS
+        _, U = jnp.linalg.eigh(0.5 * (A + A.conj().T))
+        U = U[:, :nb]
         # the step's direction: the new vectors' parts outside the old ones
-        Pn, HPn = S[:, nb:] @ Y[nb:], HS[:, nb:] @ Y[nb:]
-        norm = jnp.maximum(jnp.linalg.norm(Pn, axis=0), 1e-30)[None, :]
-        return (Xn, HXn, Pn / norm, HPn / norm), None
+        return (S @ U, HS @ U, S[:, nb:] @ U[nb:]), None
 
-    (X, HX, _, _), _ = jax.lax.scan(step, (X, HX, Pd, HP), None, length=n_iter)
-    # orthonormalize once more (the Ritz vectors drift by rounding)
-    L = jnp.linalg.cholesky(X.conj().T @ X)
-    Linv = jax.scipy.linalg.solve_triangular(L, jnp.eye(nb, dtype=X.dtype),
-                                             lower=True).conj().T
-    X, HX = X @ Linv, HX @ Linv
+    (X, HX, _), _ = jax.lax.scan(step, (X, HX, Pd), None, length=n_iter)
     A = X.conj().T @ HX
     e, U = jnp.linalg.eigh(0.5 * (A + A.conj().T))
     X, HX = X @ U, HX @ U

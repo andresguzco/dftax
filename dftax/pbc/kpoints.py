@@ -128,19 +128,15 @@ class KPointKS(eqx.Module):
         return e, 0.5 * (F + jnp.conj(jnp.swapaxes(F, -1, -2)))
 
 
-def build_kcell(cell, xc, grid, kpts) -> KPointKS:
-    """The k-point functional of a cell on the ``uniform(...)`` grid at
-    ``kpts = (kfrac, weights)`` (see :func:`kmesh`)."""
-    if cell.spin:
-        raise NotImplementedError("k-points are closed-shell so far")
-    plan = plan_cell(cell, xc, grid, None)
-    kfrac, kw = (jnp.asarray(x) for x in kpts)
-    a = jnp.asarray(cell.a)
-    coords = jnp.asarray(cell.atom_coords())
-    basis = plan.basis
+def kcell_fields(plan, xc, kfrac, kw, coords, a) -> KPointKS:
+    """The k-point functional of a planned cell (:func:`~dftax.pbc.build.
+    plan_cell`) at atoms ``coords`` and lattice ``a``, both possibly traced:
+    the basis and projectors follow the atoms, the grid follows the lattice."""
+    basis = eqx.tree_at(lambda b: b.centers, plan.basis, coords[plan.atom_idx])
     S, hcore = overlap_kinetic_k(basis, a, plan.pairs, kfrac)
     if plan.projectors is not None:
-        pbasis, _, H, ppairs = plan.projectors
+        pbasis, p_idx, H, ppairs = plan.projectors
+        pbasis = eqx.tree_at(lambda b: b.centers, pbasis, coords[p_idx])
         B = cross_overlap_k(basis, pbasis, a, ppairs, kfrac)   # (nk, nao, np)
         # <φ^k_μ|p> = sum_T exp(i k·T) <μ|p(T)> = B^k: V_nl^k = B H B^†
         hcore = hcore + B @ H @ jnp.conj(jnp.swapaxes(B, -1, -2))
@@ -157,6 +153,73 @@ def build_kcell(cell, xc, grid, kpts) -> KPointKS:
         S=S, hcore=hcore, grid=kgrid,
         e_nn=ewald_energy(coords, plan.charges, a, plan.ewald),
         kfrac=kfrac, kweights=kw, nelec=plan.nelec, nocc=plan.nocc[0])
+
+
+def build_kcell(cell, xc, grid, kpts) -> KPointKS:
+    """The k-point functional of a cell on the ``uniform(...)`` grid at
+    ``kpts = (kfrac, weights)`` (see :func:`kmesh`)."""
+    if cell.spin:
+        raise NotImplementedError("k-points are closed-shell so far")
+    plan = plan_cell(cell, xc, grid, None)
+    kfrac, kw = (jnp.asarray(x) for x in kpts)
+    return kcell_fields(plan, xc, kfrac, kw, jnp.asarray(cell.atom_coords()),
+                        jnp.asarray(cell.a))
+
+
+def _frozen_density_k(P, S0):
+    """``S -> P``: the density of every k held at its natural orbitals and
+    occupations (fractional under smearing), re-orthonormalized at the
+    moving overlap to first order (``B = 1.5 - 0.5 Φ^H S Φ``, exact in value
+    and derivative at the reference, as for the molecules)."""
+    s, U = jnp.linalg.eigh(S0)
+    s = jnp.clip(s, 1e-12, None)
+    sh = (U * jnp.sqrt(s)[:, None, :]) @ jnp.conj(jnp.swapaxes(U, -1, -2))
+    sih = (U / jnp.sqrt(s)[:, None, :]) @ jnp.conj(jnp.swapaxes(U, -1, -2))
+    f, V = jnp.linalg.eigh(sh @ P @ sh)
+    Phi = jax.lax.stop_gradient(sih @ V)
+    f = jax.lax.stop_gradient(f)
+
+    def density(S):
+        H = lambda M: jnp.conj(jnp.swapaxes(M, -1, -2))
+        M = H(Phi) @ S @ Phi
+        B = 1.5 * jnp.eye(M.shape[-1], dtype=M.dtype) - 0.5 * M
+        return Phi @ (B * f[:, None, :]) @ H(B) @ H(Phi)
+
+    return density
+
+
+def _energy_of_geometry_k(cell, xc, res, grid, kpts):
+    plan = plan_cell(cell, xc, grid, None)
+    kfrac, kw = (jnp.asarray(x) for x in kpts)
+    coords0, a0 = jnp.asarray(cell.atom_coords()), jnp.asarray(cell.a)
+    S0 = kcell_fields(plan, xc, kfrac, kw, coords0, a0).S
+    density = _frozen_density_k(res.P, S0)
+
+    def energy(coords, a):
+        ks = kcell_fields(plan, xc, kfrac, kw, coords, a)
+        return ks.total(density(ks.S))
+
+    return energy, coords0, a0
+
+
+def kcell_forces(cell, xc, res: "KResult", *, grid, kpts):
+    """Forces at a k-mesh, ``-dE/dR`` (Ha/Bohr): of the free energy under
+    smearing (the occupations frozen with the orbitals)."""
+    energy, coords0, a0 = _energy_of_geometry_k(cell, xc, res, grid, kpts)
+    return -jax.jit(jax.grad(energy))(coords0, a0)
+
+
+def kcell_stress(cell, xc, res: "KResult", *, grid, kpts):
+    """Stress at a k-mesh, ``(1/Ω) ∂E/∂ε`` (Ha/Bohr^3); the k-points keep
+    their fractional coordinates, so they follow the strained lattice."""
+    energy, coords0, a0 = _energy_of_geometry_k(cell, xc, res, grid, kpts)
+
+    def strained(eps):
+        F = jnp.eye(3, dtype=a0.dtype) + eps
+        return energy(coords0 @ F.T, a0 @ F.T)
+
+    g = jax.jit(jax.grad(strained))(jnp.zeros((3, 3), dtype=a0.dtype))
+    return 0.5 * (g + g.T) / volume(a0)
 
 
 def _orthonormalizers(S, thresh=1e-8):

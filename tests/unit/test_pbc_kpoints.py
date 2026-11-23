@@ -139,3 +139,43 @@ def test_si2_kmesh_energy_matches_pyscf():
     res = scf_k(ks, e_tol=1e-10, d_tol=1e-7)
     assert res.converged
     np.testing.assert_allclose(res.e_tot, e_ref, atol=1e-8)
+
+
+def test_kpoint_forces_and_stress_match_finite_differences():
+    """Rattled silicon on a 2x2x2 k-mesh with Fermi smearing (fractional
+    occupations, the free energy): forces and stress against finite
+    differences of converged free energies."""
+    from dftax.energy.xc import LDA
+    from dftax.pbc import uniform
+    from dftax.pbc.kpoints import (
+        build_kcell, kcell_forces, kcell_stress, kmesh, scf_k,
+    )
+
+    alat = 5.431 * 1.8897261246
+    a = 0.5 * alat * np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
+    coords = np.array([[0.0, 0.0, 0.0],
+                       [0.25 * alat + 0.10, 0.25 * alat - 0.05, 0.25 * alat + 0.07]])
+    grid, kpts, sigma = uniform(mesh=(15, 15, 15)), kmesh(2, 2, 2), 0.02
+
+    def solve(R, L):
+        cell = Cell(["Si", "Si"], R, L, "gth-szv", "gth-pade")
+        res = scf_k(build_kcell(cell, LDA(), grid, kpts), smearing=sigma,
+                    e_tol=1e-12, d_tol=1e-9)
+        assert res.converged
+        return cell, res
+
+    cell, res = solve(coords, a)
+    F = np.asarray(kcell_forces(cell, LDA(), res, grid=grid, kpts=kpts))
+    sigma_t = np.asarray(kcell_stress(cell, LDA(), res, grid=grid, kpts=kpts))
+    h = 1e-3
+    d = np.zeros((2, 3))
+    d[1, 0] = h
+    fd = -(solve(coords + d, a)[1].e_tot - solve(coords - d, a)[1].e_tot) / (2 * h)
+    np.testing.assert_allclose(F[1, 0], fd, atol=2e-6)
+    eps = np.zeros((3, 3))
+    eps[0, 1] = eps[1, 0] = h
+    e = [solve(coords @ (np.eye(3) + s * eps).T, a @ (np.eye(3) + s * eps).T)[1].e_tot
+         for s in (1, -1)]
+    np.testing.assert_allclose(2 * sigma_t[0, 1],
+                               (e[0] - e[1]) / (2 * h) / abs(np.linalg.det(a)),
+                               atol=1e-7)

@@ -77,6 +77,8 @@ def run(args) -> dict:
         "xc": args.xc,
         "kmesh": list(args.kmesh),
         "smearing": args.smearing,
+        "conv_tol": args.conv_tol,
+        "conv_tol_grad": args.conv_tol_grad,
         "mesh": [int(n) for n in cell.mesh],
         "ke_cutoff": None if cell.ke_cutoff is None else float(cell.ke_cutoff),
         "rcut": float(cell.rcut),

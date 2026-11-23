@@ -88,9 +88,15 @@ class SADSpec:
 
 @dataclass(frozen=True)
 class MinAOSpec:
-    """Projected minimal-basis atomic densities (see :func:`minao`)."""
+    """Projected minimal-basis atomic densities (see :func:`minao`).
+
+    ``valence`` is internal: ``(symbol, electrons)`` pairs for atoms whose
+    core a pseudopotential replaces (periodic cells), so only that many
+    outer electrons are placed.
+    """
 
     basis: str = "sto-3g"
+    valence: tuple[tuple[str, int], ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -293,15 +299,30 @@ def _atom_subbasis(basis: BasisData, cart_sl: slice, fin_sl: slice) -> BasisData
 # MinAO: minimal-basis occupations projected onto the computational basis
 # ---------------------------------------------------------------------------
 
-def _minimal_occupations(Z: int, minb: BasisData, name: str) -> Array:
+def _minimal_occupations(Z: int, minb: BasisData, name: str,
+                         nvalence: int | None = None) -> Array:
     """Spherically-averaged ground-state occupations on the minimal-basis AOs.
 
     Per angular momentum, the configuration's shell counts (in n order) are
     assigned to the minimal basis's l-shells in build order (loaders emit
     same-l shells core-first), ``count/(2l+1)`` per m component.
+
+    ``nvalence`` keeps only that many outer electrons: the core a
+    pseudopotential replaces is the innermost shells in ``(n, l)`` order
+    (so a 3d shell goes before 4s), and the minimal basis then holds the
+    valence shells alone.
     """
+    config = sorted(_ground_state_config(Z))
+    if nvalence is not None:
+        drop, kept = Z - int(nvalence), []
+        for n, l, c in config:
+            gone = min(drop, c)
+            drop -= gone
+            if c - gone > 0:
+                kept.append((n, l, c - gone))
+        config = kept
     per_l: dict[int, list[float]] = {}
-    for _, l, c in _ground_state_config(Z):
+    for _, l, c in config:
         per_l.setdefault(l, []).append(float(c))
     occ: list[float] = []
     for _, l in _shells(minb):
@@ -324,14 +345,15 @@ _MINAO_CACHE: dict = {}
 _MINAO_CACHE_MAX = 64
 
 
-def _minao_block(symbol: str, sub_basis: BasisData, min_name: str) -> Array:
+def _minao_block(symbol: str, sub_basis: BasisData, min_name: str,
+                 nvalence: int | None = None) -> Array:
     """One atom's density block: minimal-basis occupations projected through
     the cross overlap, ``P_A = C f Cᵀ`` with ``C = S_AA⁻¹ S_AM``."""
-    key = (symbol, min_name, static_fingerprint(sub_basis))
+    key = (symbol, min_name, nvalence, static_fingerprint(sub_basis))
     hit = _MINAO_CACHE.get(key)
     if hit is not None:
         return hit
-    out = _minao_block_uncached(symbol, sub_basis, min_name)
+    out = _minao_block_uncached(symbol, sub_basis, min_name, nvalence)
     if len(_MINAO_CACHE) >= _MINAO_CACHE_MAX:
         _MINAO_CACHE.clear()
     _MINAO_CACHE[key] = out
@@ -339,7 +361,7 @@ def _minao_block(symbol: str, sub_basis: BasisData, min_name: str) -> Array:
 
 
 def _minao_block_uncached(symbol: str, sub_basis: BasisData,
-                          min_name: str) -> Array:
+                          min_name: str, nvalence: int | None = None) -> Array:
     from dftax.basis.loader import build_basis_data
 
     Z = symbol_to_Z(symbol)
@@ -347,7 +369,7 @@ def _minao_block_uncached(symbol: str, sub_basis: BasisData,
     # Spherical always: the diagonal per-m occupations assume pure-l AOs,
     # which cartesian d+ components are not.
     minb = build_basis_data([symbol], center, min_name, spherical=True)
-    f = _minimal_occupations(Z, minb, min_name)
+    f = _minimal_occupations(Z, minb, min_name, nvalence)
     S_aa = overlap_matrix(sub_basis)
     S_am = cross_overlap_matrix(sub_basis, minb)
     C = jnp.linalg.solve(S_aa, S_am)
@@ -603,10 +625,11 @@ def _resolve_guess(spec, symbols, basis, atom_coords):
             f"an explicit density array as guess=."
         )
     if isinstance(spec, MinAOSpec):
+        valence = dict(spec.valence) if spec.valence else {}
         P = _superposition_density(
             symbols, basis, atom_coords,
-            lambda s, sb: _minao_block(s, sb, spec.basis),
-            key=("minao", spec.basis),
+            lambda s, sb: _minao_block(s, sb, spec.basis, valence.get(s)),
+            key=("minao", spec.basis, spec.valence),
         )
         return DensityGuess(P=P)
     if isinstance(spec, SADSpec):
@@ -720,11 +743,24 @@ def density_from_guess(ks, guess, X):
     the default; an explicit ``guess=minao()`` raises instead.
     """
     if guess is None and getattr(ks.coulomb, "periodic", False):
-        # The molecular default projects all-electron atomic densities; a
-        # cell's electrons are the valence ones of its pseudopotential, so
-        # until a valence guess exists a cell starts from its core
-        # Hamiltonian.
-        guess = CoreSpec()
+        # A cell's electrons are the valence ones of its pseudopotential:
+        # the same projected superposition, from the valence minimal basis
+        # (gth-szv) with the valence occupations. Core Hamiltonian where
+        # that cannot be built, announced like the molecular fallback.
+        spec = MinAOSpec(basis="gth-szv", valence=tuple(sorted(set(
+            zip(ks.symbols, ks.coulomb.ion_charges)))))
+        try:
+            resolved = _resolve_guess(spec, ks.symbols, ks.basis, ks.atom_coords)
+        except Exception as exc:                                # noqa: BLE001
+            warnings.warn(
+                f"the valence minao guess could not be built "
+                f"({type(exc).__name__}: {exc}); starting from the core "
+                f"Hamiltonian, which converges more slowly.",
+                UserWarning,
+                stacklevel=2,
+            )
+            resolved = CoreGuess()
+        return _initial_density(resolved, ks, X)
     if guess is None or isinstance(guess, _SPECS):
         resolved = resolve_guess_or_default(
             guess, ks.symbols, ks.basis, ks.atom_coords)

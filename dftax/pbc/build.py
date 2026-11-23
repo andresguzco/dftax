@@ -76,6 +76,8 @@ class FFTCoulomb(CoulombTerm):
     a: Float[Array, "3 3"]
     mesh: tuple[int, int, int] = eqx.field(static=True)
     hf_coeff: float = eqx.field(static=True, default=0.0)
+    # valence charge of each atom's pseudopotential (the valence guess)
+    ion_charges: tuple[int, ...] = eqx.field(static=True, default=())
     # read by the solvers' guess policy (the molecular default projects
     # all-electron atomic densities)
     periodic: ClassVar[bool] = True
@@ -147,7 +149,9 @@ def build_cell(cell, xc, grid, spin) -> dict:
                         plan_ewald(cell.a, cell.atom_coords()))
     return dict(
         S=S, hcore=hcore, e_nn=e_nn, e_disp=jnp.asarray(0.0), basis=basis,
-        coulomb=FFTCoulomb(ao=ao, a=a, mesh=tuple(mesh)),
+        coulomb=FFTCoulomb(
+            ao=ao, a=a, mesh=tuple(mesh),
+            ion_charges=tuple(int(p.zion) for p in cell.potentials)),
         xc_term=GridXC(ao=ao, dao=dao, weights=weights, xc=xc,
                        coords=grid_coords),
         atom_coords=coords, nelec=nelec, nocc=nocc,

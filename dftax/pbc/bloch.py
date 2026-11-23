@@ -62,15 +62,25 @@ def pair_images(basis: BasisData, a, precision: float = 1e-12,
 
 def value_images(basis: BasisData, a, precision: float = 1e-12) -> np.ndarray:
     """Integer translations whose image of a basis function can reach the
-    home cell: values fall as ``exp(-α r^2)``, and a grid point is at most a
-    cell diagonal plus the atoms' spread from any center."""
+    home cell.
+
+    Values fall as ``exp(-α r^2)``, so an image matters only when its center
+    lies within the cutoff of the cell; the cell is bounded by the sphere
+    through its corners, and a translation is kept when it brings at least
+    one atom within the cutoff of that sphere.
+    """
     a_np = np.asarray(a, dtype=np.float64)
     rcut = np.sqrt(-np.log(precision) / _min_exponent(basis))
     corners = np.array([[i, j, k] for i in (0, 1) for j in (0, 1)
                         for k in (0, 1)], float) @ a_np
-    farthest = float(np.linalg.norm(corners, axis=1).max())   # grid point
-    reach = float(np.linalg.norm(np.asarray(basis.centers), axis=1).max())
-    return lattice_images(a_np, rcut + farthest + reach)
+    middle = corners.mean(axis=0)
+    radius = float(np.linalg.norm(corners - middle, axis=1).max())
+    centers = np.unique(np.asarray(basis.centers), axis=0)
+    reach = float(np.linalg.norm(centers - middle, axis=1).max())
+    cand = lattice_images(a_np, rcut + radius + reach)
+    d = np.linalg.norm(centers[None, :, :] + (cand @ a_np)[:, None, :] - middle,
+                       axis=-1).min(axis=1)
+    return cand[d <= rcut + radius]
 
 
 def _lattice_sum(basis_a, basis_b, T, primitive_fn, chunk):
@@ -133,20 +143,26 @@ def ao_on_grid(basis: BasisData, a, images, coords, chunk: int = 8192):
 
     ``images`` is the integer list of :func:`value_images`. The image sum is
     a scan (one image's values in flight at a time) inside a chunked map
-    over the points.
+    over the points, over the cartesian functions: the spherical transform
+    is applied once per point, after the sum, not once per image.
     """
     T = jnp.asarray(images, dtype=a.dtype) @ a
-    nao = (basis.cart2sph.shape[1] if basis.cart2sph is not None
-           else basis.centers.shape[0])
+    cart = BasisData(
+        centers=basis.centers, exponents=basis.exponents,
+        coefficients=basis.coefficients, angular=basis.angular,
+        cart2sph=None, max_l=basis.max_l)
+    ncart = basis.centers.shape[0]
 
     def point(r):
         def add(acc, t):
             # the function centered at R + t, evaluated at r
-            v, g = eval_gto_and_grad(basis, r - t)
+            v, g = eval_gto_and_grad(cart, r - t)
             return (acc[0] + v, acc[1] + g), None
 
         (v, g), _ = jax.lax.scan(
-            add, (jnp.zeros((nao,), a.dtype), jnp.zeros((nao, 3), a.dtype)), T)
+            add, (jnp.zeros((ncart,), a.dtype), jnp.zeros((ncart, 3), a.dtype)), T)
+        if basis.cart2sph is not None:
+            return v @ basis.cart2sph, jnp.einsum("cx,cs->sx", g, basis.cart2sph)
         return v, g
 
     return chunked_vmap(point, chunk_size=chunk)(coords)

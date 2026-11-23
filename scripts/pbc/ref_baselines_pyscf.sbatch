@@ -12,7 +12,7 @@
 # sqrt(conv_tol), leaves force errors near 1e-6 Ha/Bohr (measured on Si8).
 #SBATCH --job-name=pbc-base-pyscf
 #SBATCH --account=aip-necludov
-#SBATCH --partition=cpubase_bycore_b2
+#SBATCH --partition=cpubase_bynode_b2
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=250G
 #SBATCH --time=12:00:00

@@ -57,7 +57,7 @@ def test_bloch_matrices_match_pyscf(cell, basis, pcell):
     pbasis, H = projector_basis(cell.potentials, cell.atom_coords())
     B = cross_overlap_k(basis, pbasis, a, plan_pairs(basis, cell.a, other=pbasis),
                         KFRAC)
-    vnl = jnp.conj(B) @ jnp.asarray(H) @ jnp.swapaxes(B, -1, -2)
+    vnl = B @ jnp.asarray(H) @ jnp.conj(jnp.swapaxes(B, -1, -2))
     np.testing.assert_allclose(vnl, np.asarray(pp_int.get_pp_nl(pcell, kabs)),
                                atol=1e-9)
 
@@ -78,7 +78,9 @@ def test_bloch_ao_values_match_pyscf(cell, basis, pcell):
 
 def _pyscf_hcore_k(pc, coords, kpts):
     """PySCF's core Hamiltonian per k in the engine's formulation (the local
-    part by quadrature on the uniform grid, the nonlocal part analytic)."""
+    part by quadrature on the uniform grid, the nonlocal part analytic), and
+    its kinetic + nonlocal part (the k-point engine keeps the local part in
+    its grid energy)."""
     from pyscf.pbc import tools
     from pyscf.pbc.dft import numint
     from pyscf.pbc.gto import pseudo as ppseudo
@@ -94,7 +96,7 @@ def _pyscf_hcore_k(pc, coords, kpts):
     for i, k in enumerate(kpts):
         ao = numint.eval_ao(pc, np.asarray(coords), kpt=k)
         out.append(kin[i] + np.einsum("gi,g,gj->ij", ao.conj(), v_R, ao) + vnl[i])
-    return np.asarray(out)
+    return np.asarray(out), kin + vnl
 
 
 def test_si2_kmesh_energy_matches_pyscf():
@@ -122,8 +124,8 @@ def test_si2_kmesh_energy_matches_pyscf():
     cell = Cell.from_xyz(atoms, a, "gth-szv", "gth-pade")
     ks = build_kcell(cell, LDA(), uniform(mesh=mesh), (kfrac, kw))
     coords, _ = uniform_grid(jnp.asarray(cell.a), mesh)
-    h_ref = _pyscf_hcore_k(pc, coords, kabs)
-    np.testing.assert_allclose(ks.hcore, h_ref, atol=1e-9)
+    h_ref, h_kin_nl = _pyscf_hcore_k(pc, coords, kabs)
+    np.testing.assert_allclose(ks.hcore, h_kin_nl, atol=1e-9)
 
     mf = pdft.KRKS(pc, kabs)
     mf.xc = "lda,vwn"

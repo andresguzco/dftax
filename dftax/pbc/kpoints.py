@@ -142,7 +142,8 @@ def build_kcell(cell, xc, grid, kpts) -> KPointKS:
     if plan.projectors is not None:
         pbasis, _, H, ppairs = plan.projectors
         B = cross_overlap_k(basis, pbasis, a, ppairs, kfrac)   # (nk, nao, np)
-        hcore = hcore + jnp.conj(B) @ H @ jnp.swapaxes(B, -1, -2)
+        # <φ^k_μ|p> = sum_T exp(i k·T) <μ|p(T)> = B^k: V_nl^k = B H B^†
+        hcore = hcore + B @ H @ jnp.conj(jnp.swapaxes(B, -1, -2))
     v_loc = local_potential(coords, a, plan.mesh, *plan.local)[plan.order] \
         * plan.valid
     nk = int(kfrac.shape[0])

@@ -56,3 +56,92 @@ def test_ao_values_match_pyscf(cell, basis, pcell):
     np.testing.assert_allclose(ao, ref[0], atol=1e-9)
     np.testing.assert_allclose(np.moveaxis(np.asarray(dao), -1, 0), ref[1:],
                                atol=1e-9)
+
+
+def _pyscf_local_and_nonlocal(pcell, coords):
+    """PySCF's pseudopotential matrices in the engine's formulation: the
+    local part by quadrature on the uniform grid, the nonlocal part by
+    analytic projector integrals (PySCF's FFT class takes the nonlocal part
+    in reciprocal space on the mesh instead, which a coarse mesh truncates)."""
+    from pyscf.pbc import tools
+    from pyscf.pbc.dft import numint
+    from pyscf.pbc.gto import pseudo as ppseudo
+    from pyscf.pbc.gto.pseudo import pp_int
+
+    mesh = list(pcell.mesh)
+    v_G = -np.einsum("ij,ij->j", pcell.get_SI(mesh=mesh),
+                     ppseudo.get_vlocG(pcell, pcell.get_Gv(mesh)))
+    v_R = tools.ifft(v_G, mesh).real
+    ao = numint.eval_ao(pcell, np.asarray(coords))
+    vnl = np.asarray(pp_int.get_pp_nl(pcell))
+    assert np.abs(vnl.imag).max() < 1e-12
+    return np.einsum("gi,g,gj->ij", ao, v_R, ao), vnl.real
+
+
+def test_pseudopotential_matrices_match_pyscf(cell, basis, pcell):
+    from dftax.pbc.bloch import cross_overlap
+    from dftax.pbc.electrostatics import local_potential
+    from dftax.pbc.gth import local_parameters, projector_basis
+
+    a = jnp.asarray(cell.a)
+    coords, _ = uniform_grid(a, MESH)
+    vloc_ref, vnl_ref = _pyscf_local_and_nonlocal(pcell, coords)
+
+    pbasis, H = projector_basis(cell.potentials, cell.atom_coords())
+    B = cross_overlap(basis, pbasis, a, pair_images(basis, cell.a, other=pbasis))
+    np.testing.assert_allclose(B @ H @ B.T, vnl_ref, atol=1e-9)
+
+    ao, _ = ao_on_grid(basis, a, value_images(basis, cell.a), coords)
+    zion, rloc, cloc = map(jnp.asarray, local_parameters(cell.potentials))
+    v = local_potential(jnp.asarray(cell.atom_coords()), a, MESH, zion, rloc, cloc)
+    np.testing.assert_allclose((ao * v[:, None]).T @ ao, vloc_ref, atol=1e-9)
+
+
+def test_si2_energy_matches_pyscf():
+    """Diamond silicon, primitive cell: every energy term at PySCF's
+    converged density, then the SCF energy itself."""
+    from pyscf.pbc import dft as pdft, gto
+
+    from dftax import KS, scf
+    from dftax.energy.xc import LDA
+    from dftax.pbc import uniform
+
+    alat = 5.431
+    a = 0.5 * alat * np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
+    atoms = f"Si 0 0 0; Si {alat / 4} {alat / 4} {alat / 4}"
+    mesh = (15, 15, 15)
+
+    pc = gto.Cell()
+    pc.atom, pc.a, pc.unit = atoms, a, "A"
+    pc.basis, pc.pseudo = "gth-dzvp", "gth-pade"
+    pc.mesh, pc.precision, pc.verbose = list(mesh), 1e-12, 0
+    pc.build()
+
+    cell = Cell.from_xyz(atoms, a, "gth-dzvp", "gth-pade")
+    ks = KS(cell, LDA(), grid=uniform(mesh=mesh))
+
+    coords, _ = uniform_grid(jnp.asarray(cell.a), mesh)
+    vloc, vnl = _pyscf_local_and_nonlocal(pc, coords)
+    h_ref = pc.pbc_intor("int1e_kin") + vloc + vnl
+    np.testing.assert_allclose(ks.hcore, h_ref, atol=1e-9)
+
+    mf = pdft.RKS(pc)
+    mf.xc = "lda,vwn"
+    mf.get_hcore = lambda *args, **kwargs: h_ref
+    mf.conv_tol = 1e-11
+    e_ref = mf.kernel()
+    assert mf.converged
+    dm = mf.make_rdm1()
+    P = jnp.asarray(dm.real)[None]
+
+    s = mf.scf_summary
+    np.testing.assert_allclose(jnp.sum(P[0] * ks.hcore), s["e1"], atol=1e-9)
+    np.testing.assert_allclose(ks.coulomb.energy(P, ks.S, ks.nocc), s["coul"],
+                               atol=1e-9)
+    np.testing.assert_allclose(ks.xc_term.energy(P), s["exc"], atol=1e-9)
+    np.testing.assert_allclose(ks.e_nn, s["nuc"], atol=1e-9)
+    np.testing.assert_allclose(ks.total(P), e_ref, atol=1e-8)
+
+    res = scf(ks, e_tol=1e-10, d_tol=1e-7)
+    assert res.converged
+    np.testing.assert_allclose(res.e_tot, e_ref, atol=1e-8)

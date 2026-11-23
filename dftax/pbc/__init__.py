@@ -25,3 +25,7 @@ __all__ = [
     "GTHPotential", "load_potential", "load_basis_shells", "vloc_G",
     "coulomb_kernel", "hartree_energy", "local_potential",
 ]
+
+from dftax.pbc.build import FFTCoulomb, Uniform, uniform  # noqa: E402
+
+__all__ += ["uniform", "Uniform", "FFTCoulomb"]

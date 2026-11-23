@@ -719,6 +719,12 @@ def density_from_guess(ks, guess, X):
     or the configuration table does not reach. That fallback applies only to
     the default; an explicit ``guess=minao()`` raises instead.
     """
+    if guess is None and getattr(ks.coulomb, "periodic", False):
+        # The molecular default projects all-electron atomic densities; a
+        # cell's electrons are the valence ones of its pseudopotential, so
+        # until a valence guess exists a cell starts from its core
+        # Hamiltonian.
+        guess = CoreSpec()
     if guess is None or isinstance(guess, _SPECS):
         resolved = resolve_guess_or_default(
             guess, ks.symbols, ks.basis, ks.atom_coords)

@@ -694,6 +694,23 @@ class KS(eqx.Module):
                 "before building any arrays.",
                 stacklevel=2,
             )
+        from dftax.pbc.cell import Cell
+
+        if isinstance(system, Cell):
+            # A periodic cell fills the same fields from its own builders
+            # (lattice-summed integrals, GTH pseudopotential, FFT Hartree
+            # term on the uniform grid; see dftax.pbc.build).
+            if coulomb is not None or mesh is not None or dispersion is not None:
+                raise NotImplementedError(
+                    "a Cell takes no coulomb=, mesh= or dispersion= yet: its "
+                    "Hartree term is the FFT on the uniform grid, on one "
+                    "device."
+                )
+            from dftax.pbc.build import build_cell
+
+            for name, value in build_cell(system, xc, grid, spin).items():
+                setattr(self, name, value)
+            return
         basis, coords, charges, nelec, sys_spin, symbols = _resolve_system(system)
         if spin is None:
             if sys_spin == 0:

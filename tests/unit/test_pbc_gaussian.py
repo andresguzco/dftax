@@ -163,3 +163,41 @@ def test_streamed_grid_matches_held_values(cell):
     e1, F1 = streamed.energy_and_fock(P)
     np.testing.assert_allclose(e1, e0, atol=1e-10)
     np.testing.assert_allclose(F1, F0, atol=1e-9)
+
+
+def test_spin_polarized_energy_matches_pyscf():
+    """Two spin channels through the periodic terms: the energy of a triplet
+    density of the silicon cell, at PySCF's own density matrices (a fixed
+    density, so neither code's SCF path enters)."""
+    from pyscf.pbc import dft as pdft, gto
+
+    from dftax import KS
+    from dftax.energy.xc import LDA
+    from dftax.pbc import uniform
+
+    alat = 5.431
+    a = 0.5 * alat * np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
+    atoms = f"Si 0 0 0; Si {alat / 4} {alat / 4} {alat / 4}"
+    mesh = (15, 15, 15)
+
+    pc = gto.Cell()
+    pc.atom, pc.a, pc.unit, pc.spin = atoms, a, "A", 2
+    pc.basis, pc.pseudo = "gth-szv", "gth-pade"
+    pc.mesh, pc.precision, pc.verbose = list(mesh), 1e-12, 0
+    pc.build()
+
+    cell = Cell.from_xyz(atoms, a, "gth-szv", "gth-pade", spin=2)
+    ks = KS(cell, LDA(), grid=uniform(mesh=mesh))
+    assert ks.nocc == (5, 3)
+
+    coords, _ = uniform_grid(jnp.asarray(cell.a), mesh)
+    vloc, vnl = _pyscf_local_and_nonlocal(pc, coords)
+    h_ref = pc.pbc_intor("int1e_kin") + vloc + vnl
+    mf = pdft.UKS(pc)
+    mf.xc = "lda,vwn"
+    mf.get_hcore = lambda *args, **kwargs: h_ref
+    mf.max_cycle = 8
+    mf.kernel()
+    dm = np.asarray(mf.make_rdm1()).real                   # (2, nao, nao)
+    np.testing.assert_allclose(ks.total(jnp.asarray(dm)), mf.energy_tot(dm=dm),
+                               atol=1e-8)

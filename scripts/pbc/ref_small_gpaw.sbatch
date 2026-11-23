@@ -51,13 +51,24 @@ python -c "import gpaw, ase; print('gpaw', gpaw.__version__, '| ase', ase.__vers
 # --mpi=list: none, pmi2, cray_shasta), a plain `srun -n` is refused by Open
 # MPI, and a bare `python` crashes in MPI_Init. Take the first launcher that
 # works, and say why each of the others did not.
+#
+# The crash itself: the wheel is an x86-64-v3 build whose run path points at
+# the v3 Open MPI, while the nodes load the x86-64-v4 module stack, and two
+# copies of the MPI library in one process cannot initialise ("Failed to
+# create keyval for UCX datatypes"). Preloading one copy, the node's or the
+# wheel's own, leaves a single library for everything that asks for it.
 ulimit -c 0
-ompi_info 2>/dev/null | grep -i -E "slurm|pmi" | tr -s ' ' | cut -c1-110 | head -n 8
+so=$(python -c 'import importlib.util as u; print(u.find_spec("_gpaw").origin)')
+v4=${EBROOTOPENMPI:-}/lib/libmpi.so
+v3=$(readelf -d "$so" | grep -oE '/cvmfs[^:]*/openmpi/[0-9.]+' | head -n 1)
+echo "node MPI: $v4"; echo "wheel MPI: $v3"
 launch=""
 probe='from gpaw.mpi import world; print("ranks", world.size)'
-for cand in "mpirun -n $NTASKS" "mpiexec --oversubscribe -n $NTASKS" \
-            "srun --mpi=pmi2 -n $NTASKS" \
-            "env OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,vader" "env"; do
+for cand in "srun --mpi=pmi2 --export=ALL,LD_PRELOAD=$v4 -n $NTASKS" \
+            "mpirun -x LD_PRELOAD=$v4 -n $NTASKS" \
+            "srun --mpi=pmi2 --export=ALL,GPAW_MPI=$v4 -n $NTASKS" \
+            "srun --mpi=pmi2 --export=ALL,OPAL_PREFIX=$v3,LD_PRELOAD=$v3/lib/libmpi.so -n $NTASKS" \
+            "mpirun -n $NTASKS"; do
     if msg=$($cand python -c "$probe" 2>&1); then
         launch=$cand; echo "launcher: $cand ($(echo "$msg" | tail -n 1))"; break
     fi

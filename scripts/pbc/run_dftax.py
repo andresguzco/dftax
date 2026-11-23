@@ -45,7 +45,8 @@ def run(args) -> dict:
                 spec.a * ANGSTROM_TO_BOHR, args.basis, args.pseudo)
 
     t0 = time.perf_counter()
-    ks = KS(cell, functional(XC[args.xc]), grid=uniform(mesh=args.mesh))
+    grid = uniform(mesh=args.mesh)
+    ks = KS(cell, functional(XC[args.xc]), grid=grid)
     jax.block_until_ready(ks.hcore)
     t_build = time.perf_counter() - t0
 
@@ -53,7 +54,20 @@ def run(args) -> dict:
     res = scf(ks, e_tol=args.e_tol, d_tol=args.d_tol, max_iter=200)
     t_scf = time.perf_counter() - t0
     P = res.P
-    return {
+    extra = {}
+    if args.forces:
+        t0 = time.perf_counter()
+        extra["forces"] = np.asarray(dftax.forces(
+            cell, functional(XC[args.xc]), res, grid=grid)).tolist()
+        extra["seconds_forces"] = time.perf_counter() - t0
+    if args.stress:
+        from dftax.pbc import stress
+
+        t0 = time.perf_counter()
+        extra["stress"] = np.asarray(stress(
+            cell, functional(XC[args.xc]), res, grid=grid)).tolist()
+        extra["seconds_stress"] = time.perf_counter() - t0
+    return extra | {
         "code": f"dftax {dftax.__version__}",
         "system": args.system,
         "natom": len(cell.symbols),
@@ -92,6 +106,8 @@ def main():
     p.add_argument("--rattle", type=float, default=0.0)
     p.add_argument("--e-tol", type=float, default=1e-10)
     p.add_argument("--d-tol", type=float, default=1e-7)
+    p.add_argument("--forces", action="store_true")
+    p.add_argument("--stress", action="store_true")
     p.add_argument("--out", default=None)
     args = p.parse_args()
 
@@ -123,8 +139,13 @@ def main():
             f"{k} {v:+.2e}" for k, v in d.items()))
         print(f"per atom: {d['e_tot'] / out['natom']:+.2e} Ha; reference "
               f"{ref['code']}, mesh {ref['mesh']}")
-        print("max |force| in the reference:",
-              float(np.abs(np.asarray(ref.get("forces", [[0.0]]))).max()))
+        for key in ("forces", "stress"):
+            if key in out and key in ref:
+                mine, theirs = np.asarray(out[key]), np.asarray(ref[key])
+                print(f"{key}: max |dftax - reference| "
+                      f"{np.abs(mine - theirs).max():.2e}, max |reference| "
+                      f"{np.abs(theirs).max():.2e} (seconds "
+                      f"{out['seconds_' + key]:.1f})")
 
 
 if __name__ == "__main__":

@@ -145,3 +145,21 @@ def test_si2_energy_matches_pyscf():
     res = scf(ks, e_tol=1e-10, d_tol=1e-7)
     assert res.converged
     np.testing.assert_allclose(res.e_tot, e_ref, atol=1e-8)
+
+
+def test_streamed_grid_matches_held_values(cell):
+    """The chunked pass over the grid gives the energy and the Fock matrix
+    of the held-values build (PBE, so the density gradient is exercised)."""
+    from dftax import KS
+    from dftax.energy.xc import PBE
+    from dftax.pbc import uniform
+
+    held = KS(cell, PBE(), grid=uniform(mesh=MESH, chunk=None))
+    streamed = KS(cell, PBE(), grid=uniform(mesh=MESH, chunk=256))
+    C = np.random.default_rng(0).normal(size=(held.S.shape[0], held.nocc[0]))
+    P = C @ C.T
+    P = jnp.asarray(P * held.nelec / np.sum(P * np.asarray(held.S)))[None]
+    e0, F0 = held.energy_and_fock(P)
+    e1, F1 = streamed.energy_and_fock(P)
+    np.testing.assert_allclose(e1, e0, atol=1e-10)
+    np.testing.assert_allclose(F1, F0, atol=1e-9)

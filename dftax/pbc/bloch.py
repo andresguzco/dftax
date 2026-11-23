@@ -147,22 +147,28 @@ def ao_on_grid(basis: BasisData, a, images, coords, chunk: int = 8192):
     is applied once per point, after the sum, not once per image.
     """
     T = jnp.asarray(images, dtype=a.dtype) @ a
+    return chunked_vmap(lambda r: ao_at_point(basis, T, r),
+                        chunk_size=chunk)(coords)
+
+
+def ao_at_point(basis: BasisData, shifts, r):
+    """Periodic AO values and gradients at one point, ``(nao,)`` and
+    ``(nao, 3)``, summed over the image translations ``shifts`` (Cartesian,
+    ``(nT, 3)``)."""
     cart = BasisData(
         centers=basis.centers, exponents=basis.exponents,
         coefficients=basis.coefficients, angular=basis.angular,
         cart2sph=None, max_l=basis.max_l)
     ncart = basis.centers.shape[0]
 
-    def point(r):
-        def add(acc, t):
-            # the function centered at R + t, evaluated at r
-            v, g = eval_gto_and_grad(cart, r - t)
-            return (acc[0] + v, acc[1] + g), None
+    def add(acc, t):
+        # the function centered at R + t, evaluated at r
+        v, g = eval_gto_and_grad(cart, r - t)
+        return (acc[0] + v, acc[1] + g), None
 
-        (v, g), _ = jax.lax.scan(
-            add, (jnp.zeros((ncart,), a.dtype), jnp.zeros((ncart, 3), a.dtype)), T)
-        if basis.cart2sph is not None:
-            return v @ basis.cart2sph, jnp.einsum("cx,cs->sx", g, basis.cart2sph)
-        return v, g
-
-    return chunked_vmap(point, chunk_size=chunk)(coords)
+    (v, g), _ = jax.lax.scan(
+        add, (jnp.zeros((ncart,), r.dtype), jnp.zeros((ncart, 3), r.dtype)),
+        shifts)
+    if basis.cart2sph is not None:
+        return v @ basis.cart2sph, jnp.einsum("cx,cs->sx", g, basis.cart2sph)
+    return v, g

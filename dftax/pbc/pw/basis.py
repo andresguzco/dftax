@@ -51,20 +51,37 @@ def planewaves(ecut: float, *, mesh=None) -> PlaneWaves:
     return PlaneWaves(ecut=float(ecut), mesh=mesh)
 
 
-def monkhorst_pack(kmesh, shift=(0, 0, 0)):
+def monkhorst_pack(kmesh, shift=(0, 0, 0), time_reversal: bool = True):
     """A Monkhorst-Pack mesh in fractional coordinates of the reciprocal
-    lattice, ``(nk, 3)``, with equal weights ``(nk,)``.
+    lattice, ``(nk, 3)``, with its weights ``(nk,)`` (summing to 1).
 
     ``shift = 0`` (default) centres the mesh on Gamma, which an even mesh
     otherwise misses: a Gamma-centred ``n1 x n2 x n3`` mesh is exactly the
-    Gamma point of the ``n1 x n2 x n3`` supercell. No symmetry reduction.
+    Gamma point of the ``n1 x n2 x n3`` supercell. With ``time_reversal``
+    (default) ``k`` and ``-k`` are one point of twice the weight: their
+    densities and band energies are equal for a real (spin-free) potential.
+    No other symmetry is used.
     """
     n = np.array([int(x) for x in kmesh])
     s = np.array([float(x) for x in shift])
     axes = [(np.arange(n[d]) + 0.5 * s[d]) / n[d] for d in range(3)]
     k = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
+    w = np.full(k.shape[0], 1.0 / k.shape[0])
+    if time_reversal:
+        # integer labels 2 n k (mod 2 n) find each point's partner -k
+        lab = np.round(2 * n * k).astype(int) % (2 * n)
+        where = {tuple(x): i for i, x in enumerate(lab)}
+        keep, wk, seen = [], [], set()
+        for i, x in enumerate(lab):
+            if i in seen:
+                continue
+            j = where[tuple((-x) % (2 * n))]
+            seen.update((i, j))
+            keep.append(i)
+            wk.append(w[i] * (1.0 if j == i else 2.0))
+        k, w = k[keep], np.asarray(wk)
     k = k - np.round(k)                       # into (-1/2, 1/2]
-    return k, np.full(k.shape[0], 1.0 / k.shape[0])
+    return k, w
 
 
 @dataclass(frozen=True, eq=False)

@@ -119,7 +119,7 @@ def run_k(args, cell) -> dict:
     t_build = time.perf_counter() - t0
     t0 = time.perf_counter()
     res = scf_k(ks, smearing=args.smearing or None, e_tol=args.e_tol,
-                d_tol=args.d_tol, max_iter=200)
+                d_tol=args.d_tol, max_iter=200, verbose=args.verbose)
     t_scf = time.perf_counter() - t0
     eps, occ = np.asarray(res.eps), np.asarray(res.occ)
     out = {
@@ -155,6 +155,7 @@ def main():
     p.add_argument("--forces", action="store_true")
     p.add_argument("--stress", action="store_true")
     p.add_argument("--kmesh", type=int, nargs=3, default=(1, 1, 1))
+    p.add_argument("--verbose", action="store_true")
     p.add_argument("--smearing", type=float, default=0.0,
                    help="Fermi-Dirac width, Hartree")
     p.add_argument("--out", default=None)

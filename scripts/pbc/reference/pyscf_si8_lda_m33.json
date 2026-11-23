@@ -1,0 +1,37 @@
+{
+ "code": "pyscf 2.15.1",
+ "system": "si8",
+ "natom": 8,
+ "volume_factor": 1.0,
+ "rattle": 0.0,
+ "basis": "gth-dzvp",
+ "pseudo": "gth-pade",
+ "xc": "lda,vwn",
+ "kmesh": [
+  1,
+  1,
+  1
+ ],
+ "smearing": 0.0,
+ "mesh": [
+  33,
+  33,
+  33
+ ],
+ "ke_cutoff": null,
+ "rcut": 31.212176121645076,
+ "precision": 1e-08,
+ "nao": 104,
+ "nelectron": 32,
+ "converged": true,
+ "e_tot": -31.289858843577353,
+ "summary": {
+  "nuc": -33.59170115014731,
+  "e1": 9.508544524081358,
+  "e2": -7.2067022175114035,
+  "coul": 2.5129607829699543,
+  "exc": -9.719663000481358,
+  "gap": 0.5052940956737532
+ },
+ "seconds_scf": 6.1723000248894095
+}

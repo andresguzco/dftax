@@ -353,6 +353,8 @@ def _lattice_sums(basis_a, basis_b, shifts, plan: PairPlan, chunk):
                                        (Sv, c.weight * c.swap),
                                        (Tv, c.weight * c.swap))):
             out[n] = out[n].at[r, k].add(vals * w[:, None, None])
+    if not plan.symmetric:
+        return out[0], out[1]
     # a symmetric plan holds each off-diagonal shell pair once: its blocks
     # are written again, transposed
     return out[0] + out[2].T, out[1] + out[3].T

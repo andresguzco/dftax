@@ -15,18 +15,15 @@ Run with a throwaway environment that has torch + tad-dftd3:
 
 The script also prints reference dispersion energies (computed with
 tad-dftd3 itself) for the molecules used in tests/unit/test_d3.py.
+
+With ``--damping`` only the damping table is rewritten (a new functional's
+published parameters), every other table kept as vendored, with NumPy alone.
 """
 
 import sys
 from pathlib import Path
 
 import numpy as np
-import torch
-
-from tad_dftd3 import dftd3
-from tad_dftd3.reference import Reference
-from tad_dftd3.data import r4r2 as r4r2_mod  # noqa: F401 (module probe)
-from tad_dftd3.data import R4R2
 
 OUT = Path(__file__).resolve().parents[1] / "dftax" / "energy" / "data" / "d3bj.npz"
 
@@ -44,6 +41,13 @@ DAMPING = {
 
 
 def main() -> int:
+    import torch
+
+    from tad_dftd3 import dftd3
+    from tad_dftd3.reference import Reference
+    from tad_dftd3.data import r4r2 as r4r2_mod  # noqa: F401 (module probe)
+    from tad_dftd3.data import R4R2
+
     ref = Reference(dtype=torch.float64)
     c6 = ref.c6.numpy()                       # (104, 104, 7, 7)
     cn = ref.cn.numpy()                       # (104, 7); -1 marks unused slots
@@ -108,5 +112,17 @@ def main() -> int:
     return 0
 
 
+def damping_only() -> int:
+    """``--damping``: only the damping table, ``methods``/``params`` of the vendored file rewritten from DAMPING and
+    every other table kept bit for bit (NumPy alone: no torch, no tad packages)."""
+    with np.load(OUT) as t:
+        tables = {k: t[k] for k in t.files}
+    tables["methods"] = np.array(sorted(DAMPING))
+    tables["params"] = np.array([DAMPING[m] for m in sorted(DAMPING)])
+    np.savez_compressed(OUT, **tables)
+    print(f"wrote {OUT}: damping for " + ", ".join(sorted(DAMPING)))
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(damping_only() if "--damping" in sys.argv[1:] else main())

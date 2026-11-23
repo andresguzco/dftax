@@ -9,8 +9,8 @@ grid), so with the same basis, pseudopotential and mesh the two must agree
 in absolute energy. The mesh PySCF picks from its own precision estimate is
 written out with the result: the dftax side is then run at exactly that mesh.
 
-Runs on a CPU node of the allocation. The stress needs the Gamma point and a
-non-hybrid functional (PySCF's ``rks_stress``).
+Runs on a CPU node of the allocation. Forces and stress need a non-hybrid
+LDA or GGA (PySCF's ``krks`` gradient and ``krks_stress``).
 """
 
 from __future__ import annotations
@@ -49,11 +49,11 @@ def run(args) -> dict:
         cell.mesh = list(args.mesh)
     cell.build()
 
-    gamma = tuple(args.kmesh) == (1, 1, 1)
-    if gamma:
-        mf = dft.RKS(cell)
-    else:
-        mf = dft.KRKS(cell, cell.make_kpts(list(args.kmesh)))
+    # The k-point class at the Gamma point too: PySCF's Gamma-point gradient
+    # (and the stress built on it) only runs with its multigrid integrator,
+    # while the k-point one keeps the plain FFT formulation the Gaussian
+    # engine follows. A 1x1x1 mesh is the Gamma point.
+    mf = dft.KRKS(cell, cell.make_kpts(list(args.kmesh)))
     mf.xc = args.xc
     mf.conv_tol = args.conv_tol
     mf.max_cycle = 200
@@ -87,15 +87,24 @@ def run(args) -> dict:
         "summary": {k: float(np.real(v)) for k, v in mf.scf_summary.items()},
         "seconds_scf": time.perf_counter() - t0,
     }
-    if args.forces or args.stress:
-        grad = mf.nuc_grad_method()
-        if args.forces:
-            out["forces"] = (-np.asarray(grad.kernel())).tolist()   # Ha/Bohr
-        if args.stress:
-            if not gamma:
-                raise SystemExit("--stress here is the Gamma-point rks_stress")
+    # A derivative that PySCF refuses must not cost the converged energy: the
+    # failure is recorded beside it and the script exits nonzero.
+    errors = {}
+    if args.forces:
+        try:
+            g = mf.nuc_grad_method().kernel()
+            out["forces"] = (-np.asarray(g)).tolist()               # Ha/Bohr
+        except Exception as e:  # noqa: BLE001
+            errors["forces"] = repr(e)
+    if args.stress:
+        try:
             # (1/V) dE/d(strain), Ha/Bohr^3, as PySCF returns it (asymmetric)
-            out["stress"] = np.asarray(grad.get_stress()).tolist()
+            s = mf.nuc_grad_method().get_stress()
+            out["stress"] = np.asarray(s).tolist()
+        except Exception as e:  # noqa: BLE001
+            errors["stress"] = repr(e)
+    if errors:
+        out["errors"] = errors
     return out
 
 
@@ -123,7 +132,10 @@ def main():
     with open(args.out, "w") as f:
         json.dump(out, f, indent=1)
     print(json.dumps({k: out[k] for k in ("system", "mesh", "nao", "e_tot",
-                                          "converged")}))
+                                          "converged", "seconds_scf")}))
+    if "errors" in out:
+        print(json.dumps(out["errors"]))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -38,7 +38,7 @@ run() {
 
 eos() {      # system center mesh(3)
     local system=$1 center=$2; shift 2
-    local factors="1.0"
+    local factors="1.0000000000"
     for f in 0.94 0.96 0.98 1.00 1.02 1.04 1.06; do
         factors="$factors $(awk -v c="$center" -v f="$f" 'BEGIN { printf "%.10f", c * f }')"
     done

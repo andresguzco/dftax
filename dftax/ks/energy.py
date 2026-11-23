@@ -694,8 +694,18 @@ class KS(eqx.Module):
                 "before building any arrays.",
                 stacklevel=2,
             )
+        from dftax.pbc.build import CellAt
         from dftax.pbc.cell import Cell
 
+        if isinstance(system, CellAt):
+            # a planned cell at traced coordinates / lattice (the forces and
+            # the stress rebuild the energy this way)
+            from dftax.pbc.build import cell_fields
+
+            for name, value in cell_fields(system.plan, xc, system.coords,
+                                           system.a, system.held).items():
+                setattr(self, name, value)
+            return
         if isinstance(system, Cell):
             # A periodic cell fills the same fields from its own builders
             # (lattice-summed integrals, GTH pseudopotential, FFT Hartree

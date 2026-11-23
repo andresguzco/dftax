@@ -14,7 +14,7 @@ the solvers run on a cell unchanged.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -26,13 +26,14 @@ from dftax.energy.gto import BasisData
 from dftax.energy.xc import XCFunctional
 from dftax.ks.terms import CoulombTerm, GridXC, XCTerm
 from dftax.pbc.bloch import (
-    ValuePlan, _pad_points, ao_on_grid, block_values, cross_overlap,
-    morton_order, overlap_kinetic, plan_pairs, plan_values, value_chunk,
+    PairPlan, ValuePlan, _pad_points, ao_on_grid, block_values,
+    cross_overlap, morton_order, overlap_kinetic, plan_pairs, plan_values,
+    value_chunk,
 )
 from dftax.pbc.electrostatics import hartree_energy, local_potential
-from dftax.pbc.ewald import ewald_energy, plan_ewald
+from dftax.pbc.ewald import EwaldPlan, ewald_energy, plan_ewald
 from dftax.pbc.gth import local_parameters, projector_basis
-from dftax.pbc.lattice import mesh_for_cutoff, uniform_grid
+from dftax.pbc.lattice import mesh_for_cutoff, volume
 from dftax.utils.vmap import vmap as chunked_vmap
 
 
@@ -177,8 +178,48 @@ class StreamedCellXC(XCTerm):
         return e + gx._energy_spin(*chans)
 
 
-def build_cell(cell, xc, grid, spin) -> dict:
-    """The fields of a :class:`~dftax.ks.energy.KS` for a periodic cell."""
+@dataclass(frozen=True, eq=False)
+class CellPlan:
+    """What a cell's build fixes from its concrete geometry: the basis
+    layout, the screening plans, the grid order and the Ewald terms.
+
+    The energy terms are then functions of the atomic coordinates and the
+    lattice (:func:`cell_fields`), which may be traced: the forces and the
+    stress differentiate them with the plan frozen at this geometry.
+    """
+
+    basis: BasisData
+    atom_idx: Array                  # (ncart,) atom of each cartesian row
+    pairs: PairPlan
+    projectors: tuple | None         # (BasisData, atom per row, H, PairPlan)
+    values: ValuePlan
+    frac: Array                      # (ng, 3) grid points, fractional, block order
+    order: np.ndarray                # block position -> mesh index
+    inv: Array                       # mesh index -> block position
+    mesh: tuple[int, int, int]
+    held: bool                       # AO values held (True) or streamed
+    blocks: int                      # blocks in flight when streamed
+    ewald: EwaldPlan
+    charges: Array                   # valence charges
+    local: tuple                     # (zion, rloc, cloc)
+    ion_charges: tuple[int, ...]
+    nelec: int
+    nocc: tuple[int, ...]
+    symbols: tuple[str, ...]
+
+
+class CellAt(NamedTuple):
+    """A planned cell at (possibly traced) coordinates and lattice: what
+    :class:`~dftax.ks.energy.KS` is given when the derivatives rebuild it."""
+
+    plan: CellPlan
+    coords: Array
+    a: Array
+    held: bool = False
+
+
+def plan_cell(cell, xc, grid, spin) -> CellPlan:
+    """Plan a periodic cell's build at its concrete geometry."""
     from dftax.ks.energy import _resolve_chunk, _spin_counts
 
     if (float(getattr(xc, "hf_coeff", 0.0)) != 0.0
@@ -212,58 +253,101 @@ def build_cell(cell, xc, grid, spin) -> dict:
     else:
         nocc = _spin_counts(nelec, int(spin))
 
-    basis = build_basis_data(cell.symbols, cell.atom_coords(), cell.basis,
-                             spherical=cell.spherical)
-    a = jnp.asarray(cell.a)
-    coords = jnp.asarray(cell.atom_coords())
-    charges = jnp.asarray(cell.atom_charges())
+    coords = np.asarray(cell.atom_coords(), dtype=np.float64)
+    basis, atom_idx = build_basis_data(
+        cell.symbols, coords, cell.basis, spherical=cell.spherical,
+        return_atom_index=True)
 
-    S, T = overlap_kinetic(basis, a, plan_pairs(basis, cell.a))
     # the grid in compact blocks (Z-order); inv restores mesh order
+    mesh = tuple(int(n) for n in mesh)
     order = morton_order(mesh)
-    inv = jnp.asarray(np.argsort(order), dtype=jnp.int32)
-    grid_coords, weights = uniform_grid(a, mesh)
-    grid_coords, weights = grid_coords[order], weights[order]
-    plan = plan_values(basis, cell.a, grid_coords)
-    ion_charges = tuple(int(p.zion) for p in cell.potentials)
+    frac = np.stack(np.meshgrid(*[np.arange(n) / n for n in mesh],
+                                indexing="ij"), axis=-1).reshape(-1, 3)[order]
+    values = plan_values(basis, cell.a, frac @ np.asarray(cell.a))
+    nao = int(basis.cart2sph.shape[1] if basis.cart2sph is not None
+              else basis.centers.shape[0])
     # the same budget rule as a molecule's AO grid: hold the values when
     # they fit, recompute them per chunk when they do not
-    chunk = _resolve_chunk(grid.chunk, int(grid_coords.shape[0]),
-                           int(S.shape[0]))
+    chunk = _resolve_chunk(grid.chunk, int(frac.shape[0]), nao)
+    # blocks in flight when streamed: the screened evaluation's own budget,
+    # unless the caller fixed the chunk
+    blocks = (value_chunk(values, basis) if not isinstance(chunk, int)
+              or grid.chunk == "auto" else max(1, chunk // values.block))
+
+    projectors = None
+    proj = projector_basis(cell.potentials, coords)
+    if proj is not None:
+        pbasis, H = proj
+        pc = np.asarray(pbasis.centers)
+        p_idx = np.argmin(np.linalg.norm(pc[:, None] - coords[None], axis=-1),
+                          axis=1)
+        projectors = (pbasis, jnp.asarray(p_idx), jnp.asarray(H),
+                      plan_pairs(basis, cell.a, other=pbasis))
+
+    return CellPlan(
+        basis=basis, atom_idx=jnp.asarray(atom_idx),
+        pairs=plan_pairs(basis, cell.a), projectors=projectors,
+        values=values, frac=jnp.asarray(frac), order=order,
+        inv=jnp.asarray(np.argsort(order), dtype=jnp.int32), mesh=mesh,
+        held=chunk is None, blocks=int(blocks),
+        ewald=plan_ewald(cell.a, coords),
+        charges=jnp.asarray(cell.atom_charges()),
+        local=tuple(jnp.asarray(x) for x in local_parameters(cell.potentials)),
+        ion_charges=tuple(int(p.zion) for p in cell.potentials),
+        nelec=nelec, nocc=nocc, symbols=tuple(cell.symbols))
+
+
+def cell_fields(plan: CellPlan, xc, coords, a, held: bool | None = None) -> dict:
+    """The fields of a :class:`~dftax.ks.energy.KS` for a planned cell at
+    ``coords`` (atoms, Bohr) and lattice ``a``, both possibly traced.
+
+    The basis centers and pseudopotential projectors follow the atoms, and
+    the grid points follow the lattice (fixed fractional coordinates, weight
+    volume / N). ``held`` overrides the plan's choice between held and
+    streamed AO values (the derivatives stream).
+    """
+    held = plan.held if held is None else held
+    basis = eqx.tree_at(lambda b: b.centers, plan.basis, coords[plan.atom_idx])
+    S, T = overlap_kinetic(basis, a, plan.pairs)
+    ng = plan.frac.shape[0]
+    grid_coords = plan.frac @ a
+    weights = jnp.full((ng,), 1.0 / ng) * volume(a)
+    mesh = plan.mesh
 
     # local pseudopotential: its grid values carry the quadrature weight
-    zion, rloc, cloc = (jnp.asarray(x) for x in local_parameters(cell.potentials))
-    v_loc = local_potential(coords, a, mesh, zion, rloc, cloc)[order]
-    if chunk is None:
-        ao, dao = ao_on_grid(basis, a, grid_coords, plan)
+    v_loc = local_potential(coords, a, mesh, *plan.local)[plan.order]
+    if held:
+        ao, dao = ao_on_grid(basis, a, grid_coords, plan.values)
         hcore = T + (ao * v_loc[:, None]).T @ ao
-        coulomb = FFTCoulomb(ao=ao, a=a, inv=inv, mesh=tuple(mesh),
-                             ion_charges=ion_charges)
+        coulomb = FFTCoulomb(ao=ao, a=a, inv=plan.inv, mesh=mesh,
+                             ion_charges=plan.ion_charges)
         xc_term = GridXC(ao=ao, dao=dao, weights=weights, xc=xc,
                          coords=grid_coords)
     else:
         hcore = T
-        coulomb = _GridCoulomb(ion_charges=ion_charges)
-        # blocks in flight: the screened evaluation's own budget, unless
-        # the caller fixed the chunk
-        blocks = (value_chunk(plan, basis) if grid.chunk == "auto"
-                  else max(1, int(chunk) // plan.block))
+        coulomb = _GridCoulomb(ion_charges=plan.ion_charges)
         xc_term = StreamedCellXC(
-            basis=basis, plan=plan, grid_coords=grid_coords, weights=weights,
-            v_loc=v_loc, inv=inv, a=a, mesh=tuple(mesh), chunk=blocks, xc=xc)
+            basis=basis, plan=plan.values, grid_coords=grid_coords,
+            weights=weights, v_loc=v_loc, inv=plan.inv, a=a, mesh=mesh,
+            chunk=plan.blocks, xc=xc)
 
-    proj = projector_basis(cell.potentials, cell.atom_coords())
-    if proj is not None:
-        pbasis, H = proj
-        B = cross_overlap(basis, pbasis, a,
-                          plan_pairs(basis, cell.a, other=pbasis))
-        hcore = hcore + B @ jnp.asarray(H) @ B.T
+    if plan.projectors is not None:
+        pbasis, p_idx, H, ppairs = plan.projectors
+        pbasis = eqx.tree_at(lambda b: b.centers, pbasis, coords[p_idx])
+        B = cross_overlap(basis, pbasis, a, ppairs)
+        hcore = hcore + B @ H @ B.T
 
-    e_nn = ewald_energy(coords, charges, a,
-                        plan_ewald(cell.a, cell.atom_coords()))
+    e_nn = ewald_energy(coords, plan.charges, a, plan.ewald)
     return dict(
         S=S, hcore=hcore, e_nn=e_nn, e_disp=jnp.asarray(0.0), basis=basis,
         coulomb=coulomb, xc_term=xc_term,
-        atom_coords=coords, nelec=nelec, nocc=nocc,
-        symbols=tuple(cell.symbols),
+        atom_coords=coords, nelec=plan.nelec, nocc=plan.nocc,
+        symbols=plan.symbols,
     )
+
+
+def build_cell(cell, xc, grid, spin) -> dict:
+    """The fields of a :class:`~dftax.ks.energy.KS` for a periodic cell."""
+    plan = plan_cell(cell, xc, grid, spin)
+    return cell_fields(plan, xc, jnp.asarray(cell.atom_coords()),
+                       jnp.asarray(cell.a))

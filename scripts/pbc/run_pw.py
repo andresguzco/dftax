@@ -44,17 +44,18 @@ def run(args) -> dict:
     xc = functional(XC[args.xc])
     t0 = time.perf_counter()
     res = scf_pw(cell, xc, planewaves(args.ecut, mesh=args.mesh),
-                 kmesh=args.kmesh, e_tol=args.e_tol, d_tol=args.d_tol,
+                 kmesh=args.kmesh, smearing=args.smearing or None,
+                 e_tol=args.e_tol, d_tol=args.d_tol,
                  max_iter=200, verbose=args.verbose)
     t_scf = time.perf_counter() - t0
-    nocc = res.model.nocc
-    eps = np.asarray(res.eps)
+    eps, occ = np.asarray(res.eps), np.asarray(res.occ)
     out = dict(
         code="dftax pw", system=args.system, ecut=args.ecut,
         kmesh=list(args.kmesh), mesh=list(res.model.mesh),
         npw=list(res.model.npw), converged=bool(res.converged),
         n_iter=int(res.n_iter), e_tot=float(res.e_tot), terms=res.terms,
-        vbm=float(eps[:, nocc - 1].max()), cbm=float(eps[:, nocc].min()),
+        vbm=float(eps[occ > 1.0].max()), cbm=float(eps[occ < 1.0].min()),
+        smearing=args.smearing, ts=float(res.ts),
         seconds_scf=t_scf)
     out["gap"] = out["cbm"] - out["vbm"]
     if args.forces:
@@ -76,6 +77,7 @@ def main():
     p.add_argument("--kmesh", type=int, nargs=3, default=(1, 1, 1))
     p.add_argument("--xc", default="lda", choices=sorted(XC))
     p.add_argument("--mesh", type=int, nargs=3, default=None)
+    p.add_argument("--smearing", type=float, default=0.0, help="Hartree")
     p.add_argument("--volume-factor", type=float, default=1.0)
     p.add_argument("--rattle", type=float, default=0.0)
     p.add_argument("--e-tol", type=float, default=1e-9)
@@ -94,6 +96,7 @@ def main():
             raise SystemExit("the reference is another system")
         args.ecut, args.kmesh, args.xc = ref["ecut"], ref["kmesh"], ref["xc"]
         args.volume_factor, args.rattle = ref["volume_factor"], ref["rattle"]
+        args.smearing = ref.get("smearing", 0.0)
         args.forces = args.forces or "forces" in ref
         args.stress = args.stress or "stress" in ref
     if args.ecut is None:

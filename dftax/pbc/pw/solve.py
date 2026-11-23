@@ -164,23 +164,29 @@ class PWResult(NamedTuple):
     converged: bool
     n_iter: int
     model: PWModel
+    ts: float = 0.0            # entropy term σS; e_tot is then E - TS
+    mu: float | None = None    # Fermi level under smearing
 
 
 def scf_pw(cell, xc, pw: PlaneWaves, *, kmesh=(1, 1, 1),
            nbands: int | None = None, e_tol: float = 1e-9,
+           smearing: float | None = None,
            d_tol: float = 1e-6, max_iter: int = 100, mixing: float = 0.5,
            kerker: float | None = 1.5, n_iter: int = 4, seed: int = 0,
            model: PWModel | None = None,
            verbose: bool = False) -> PWResult:
     """Self-consistent field of a cell in plane waves (closed shell, an
-    insulator: the lowest ``nocc`` bands of every ``k`` doubly occupied).
+    insulator: the lowest ``nocc`` bands of every ``k`` doubly occupied; with
+    ``smearing``, Fermi-Dirac occupations of width ``smearing`` (Hartree)
+    with one Fermi level, and ``e_tot`` the free energy ``E - TS``).
 
     Args:
         cell: the :class:`~dftax.pbc.Cell` (its Gaussian basis is unused).
         xc: the functional (LDA or GGA).
         pw: the basis, :func:`~dftax.pbc.pw.planewaves`.
         kmesh: a Gamma-centred Monkhorst-Pack mesh.
-        nbands: bands per ``k`` (default: occupied plus a tenth, at least 4).
+        nbands: bands per ``k`` (default: occupied plus a tenth, at least
+            4; with smearing a fifth, at least 8).
         e_tol, d_tol: convergence of the energy (Ha) and of the density
             residual (electrons, ``∫|ρ_out - ρ_in|``).
         mixing, kerker: Pulay step and Kerker wave vector (None: plain).
@@ -191,6 +197,9 @@ def scf_pw(cell, xc, pw: PlaneWaves, *, kmesh=(1, 1, 1),
     """
     if model is None:
         kfrac, weights = monkhorst_pack(kmesh)
+        if nbands is None and smearing:
+            nocc = int(cell.nelectron) // 2
+            nbands = nocc + max(8, nocc // 5)
         model = build_model(cell, xc, pw, kfrac, weights, nbands)
     coords = jnp.asarray(cell.atom_coords())
     a = jnp.asarray(cell.a)
@@ -206,6 +215,7 @@ def scf_pw(cell, xc, pw: PlaneWaves, *, kmesh=(1, 1, 1),
     X *= (np.asarray(model.mask) / (1.0 + kin) ** 2)[:, :, None]
     C = jnp.asarray(np.stack([np.linalg.qr(x)[0] for x in X]))
     occ = jnp.zeros((nk, nb)).at[:, :model.nocc].set(2.0)
+    ts, mu = 0.0, None
 
     rho_in = initial_density(model, coords, a)
     mixer = _Pulay(cell.a, model.mesh, beta=mixing, q0=kerker)
@@ -215,9 +225,15 @@ def scf_pw(cell, xc, pw: PlaneWaves, *, kmesh=(1, 1, 1),
         vr = _potential(model, rho_in, coords, a)
         C, eps, res = _eigensolve(model, C, vr, coords, a,
                                   4 * n_iter if it == 1 else n_iter)
+        if smearing:
+            from dftax.pbc.kpoints import _fermi
+
+            f, ts, mu = _fermi(eps, np.asarray(model.weights),
+                               2 * model.nocc, smearing)
+            occ = jnp.asarray(f)
         rho_out = _density(model, C, occ, a)
         terms = _energy(model, C, occ, coords, a)
-        e = float(sum(terms.values()))
+        e = float(sum(terms.values())) - ts
         drho = float(jnp.sum(jnp.abs(rho_out - rho_in))) * dv
         if verbose:
             print(f"  pw scf {it:3d}: E {e:.10f}  dE {e - e_old:+.2e}  "
@@ -231,4 +247,5 @@ def scf_pw(cell, xc, pw: PlaneWaves, *, kmesh=(1, 1, 1),
         rho_in = mixer(rho_in, rho_out)
     return PWResult(
         e_tot=e, terms={k: float(v) for k, v in terms.items()}, C=C, occ=occ,
+        ts=float(ts), mu=mu,
         eps=eps, rho=rho_out, converged=converged, n_iter=it, model=model)

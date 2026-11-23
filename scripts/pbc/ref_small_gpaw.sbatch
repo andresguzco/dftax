@@ -45,23 +45,31 @@ if [ -z "$loaded" ]; then
 fi
 python -c "import gpaw, ase; print('gpaw', gpaw.__version__, '| ase', ase.__version__, '| $loaded')"
 
-# The wheel is MPI-linked and initialises MPI when gpaw.mpi is imported. A
-# bare `python` inside the job failed there (Open MPI: "Failed to create
-# keyval for UCX datatypes"), so take the first launcher under which the
-# world communicator comes up.
+# The wheel is MPI-linked and initialises MPI when gpaw.mpi is imported. It
+# must run under the MPI library it was built with (the cluster's GPAW page
+# says so), and which one that is is not recorded: under the default
+# openmpi/4.1.5 it died at MPI start-up whatever the launcher. Take the first
+# MPI module and launcher under which the world communicator has every rank.
+ulimit -c 0
+so=$(python -c 'import importlib.util as u; print(u.find_spec("_gpaw").origin)')
+echo "extension run path: $(readelf -d "$so" | grep -E 'RUNPATH|RPATH' | tr -s ' ' | cut -c1-400)"
 launch=""
-for cand in "srun -n $NTASKS" "mpirun -n $NTASKS" "env OMPI_MCA_pml=ob1"; do
-    if $cand python -c "from gpaw.mpi import world; assert world.size >= 1" > /dev/null 2>&1; then
-        launch=$cand; break
-    fi
+for mpi in openmpi/5.0.10 openmpi/5.0.8 openmpi/5.0.3 openmpi/4.1.5; do
+    module load "$mpi" 2>/dev/null || continue
+    for cand in "srun -n $NTASKS" "mpirun -n $NTASKS"; do
+        if $cand python -c "from gpaw.mpi import world; assert world.size == $NTASKS" > /dev/null 2>&1; then
+            launch=$cand; break 2
+        fi
+    done
 done
 if [ -z "$launch" ]; then
-    echo "no launcher brings MPI up; the last attempt said:"
-    env OMPI_MCA_pml=ob1 python -c "from gpaw.mpi import world" 2>&1 | tail -n 8
-    pip list 2>/dev/null | grep -i -E "mpi|gpaw|ase|numpy|scipy"
+    echo "no MPI module and launcher bring the world communicator up; modules now:"
+    module -t list 2>&1 | tr '\n' ' '; echo
+    echo "the last attempt said:"
+    srun -n "$NTASKS" python -c "from gpaw.mpi import world; print(world.size)" 2>&1 | grep -v '^\[' | tail -n 12
     exit 1
 fi
-echo "launcher: $launch"
+echo "launcher: $launch under $mpi"
 
 fail=0
 run() {

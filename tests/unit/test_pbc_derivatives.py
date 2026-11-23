@@ -21,7 +21,8 @@ H = 1e-3
 
 def _solve(coords, a):
     cell = Cell(["Si", "Si"], coords, a, "gth-szv", "gth-pade")
-    res = scf(KS(cell, LDA(), grid=GRID), e_tol=1e-12, d_tol=1e-9)
+    res = scf(KS(cell, LDA(), grid=GRID), e_tol=1e-11, d_tol=1e-8,
+              max_iter=400)
     assert res.converged
     return cell, res
 

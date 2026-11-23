@@ -272,26 +272,34 @@ def plan_values(basis: BasisData, a, coords, *, block: int = 512,
         npts=int(ng), block=int(block))
 
 
-def box_layout(mesh, box: int = 8):
-    """The points of a uniform mesh in blocks of ``box^3`` consecutive
-    points, each block one index-aligned box of the mesh: compact, which is
-    what the screening of :func:`plan_values` needs.
+def _box_edge(n: int) -> int:
+    """Points along one axis of a box: 6 to 10, the fewest repeats needed
+    to fill ``n``, the larger edge on a tie."""
+    return min(range(10, 5, -1), key=lambda b: -(-n // b) * b - n)
 
-    Returns ``(order, valid)``: the mesh index (C order) of every position,
-    and whether the position is a mesh point of its own. A box at the upper
-    edge of a mesh whose size is not a multiple of ``box`` is filled with
-    repeats of its last plane (``valid`` False, to be given zero weight),
-    so the repeats stay inside the box.
+
+def box_layout(mesh):
+    """The points of a uniform mesh in blocks of consecutive points, each
+    block one index-aligned box of the mesh (6 to 10 points a side, chosen
+    per axis to fit the mesh): compact, which is what the screening of
+    :func:`plan_values` needs.
+
+    Returns ``(order, valid, block)``: the mesh index (C order) of every
+    position, whether the position is a mesh point of its own, and the
+    points per block. A box at the upper edge of an axis the box does not
+    divide is filled with repeats of its last plane (``valid`` False, to be
+    given zero weight), so the repeats stay inside the box.
     """
     n = np.array([int(m) for m in mesh])
+    box = np.array([_box_edge(int(m)) for m in n])
     nb = -(-n // box)
     boxes = np.indices(tuple(nb)).reshape(3, -1)            # (3, nbox)
-    local = np.indices((box, box, box)).reshape(3, -1)      # (3, box^3)
-    g = boxes[:, :, None] * box + local[:, None, :]         # (3, nbox, box^3)
+    local = np.indices(tuple(box)).reshape(3, -1)           # (3, block)
+    g = boxes[:, :, None] * box[:, None, None] + local[:, None, :]
     valid = np.all(g < n[:, None, None], axis=0)
     g = np.minimum(g, (n - 1)[:, None, None])
     order = (g[0] * n[1] + g[1]) * n[2] + g[2]
-    return order.reshape(-1), valid.reshape(-1)
+    return order.reshape(-1), valid.reshape(-1), int(np.prod(box))
 
 
 # ---------------------------------------------------------------------------

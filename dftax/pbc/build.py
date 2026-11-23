@@ -60,7 +60,7 @@ def uniform(*, mesh=None, cutoff: float | None = None,
             they fit the device budget and otherwise recomputes them per
             chunk of points on every evaluation (O(chunk x nao) memory,
             slower); ``None`` forces the held values, an int streams with
-            that many points per chunk (in whole blocks of 512 points).
+            about that many points per chunk (whole blocks of the grid).
 
     Example:
         ```python
@@ -259,15 +259,15 @@ def plan_cell(cell, xc, grid, spin) -> CellPlan:
         cell.symbols, coords, cell.basis, spherical=cell.spherical,
         return_atom_index=True)
 
-    # the grid in compact blocks (8x8x8 boxes, edge boxes filled with
+    # the grid in compact blocks (boxes of the mesh, edge boxes filled with
     # zero-weight repeats); inv restores mesh order
     mesh = tuple(int(n) for n in mesh)
-    order, valid = box_layout(mesh)
+    order, valid, block = box_layout(mesh)
     inv = np.empty(int(np.prod(mesh)), dtype=np.int64)
     inv[order[valid]] = np.nonzero(valid)[0]
     frac = np.stack(np.meshgrid(*[np.arange(n) / n for n in mesh],
                                 indexing="ij"), axis=-1).reshape(-1, 3)[order]
-    values = plan_values(basis, cell.a, frac @ np.asarray(cell.a))
+    values = plan_values(basis, cell.a, frac @ np.asarray(cell.a), block=block)
     nao = int(basis.cart2sph.shape[1] if basis.cart2sph is not None
               else basis.centers.shape[0])
     # the same budget rule as a molecule's AO grid: hold the values when

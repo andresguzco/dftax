@@ -87,6 +87,11 @@ def run(args) -> dict:
         "summary": {k: float(np.real(v)) for k, v in mf.scf_summary.items()},
         "seconds_scf": time.perf_counter() - t0,
     }
+    # under smearing e_tot is the internal energy; the free energy is the
+    # variational one and e_zero PySCF's extrapolation to zero width
+    for key in ("e_free", "e_zero", "entropy"):
+        if getattr(mf, key, None) is not None:
+            out[key] = float(getattr(mf, key))
     # A derivative that PySCF refuses must not cost the converged energy: the
     # failure is recorded beside it and the script exits nonzero.
     errors = {}

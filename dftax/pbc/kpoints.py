@@ -264,6 +264,10 @@ def _fermi(eps, w, nelec, sigma, iters=100):
 
 
 class KResult(NamedTuple):
+    """A k-point calculation: energies, the density matrices ``P^k``, bands
+    ``eps``, occupations ``occ`` and orbitals ``C`` of every k, the Fermi
+    level ``mu`` under smearing, and the k-points it was solved at."""
+
     e_tot: float          # the free energy E - TS under smearing, else E
     energy: float         # E (internal)
     ts: float             # the entropy term σ S (0 without smearing)

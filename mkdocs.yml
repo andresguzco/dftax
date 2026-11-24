@@ -65,6 +65,7 @@ nav:
       - Batched evaluation: tutorials/batched.md
       - Properties: tutorials/properties.md
       - Implicit differentiation: tutorials/implicit-diff.md
+      - Periodic systems: tutorials/periodic.md
   - API reference:
       - Building a calculation: api/build.md
       - Grid specs: api/grids.md
@@ -75,6 +76,7 @@ nav:
       - Multi-device execution: api/multi-device.md
       - Functionals: api/functionals.md
       - Integrals and GTO: api/integrals.md
+      - Periodic systems: api/periodic.md
   - Misc:
       - FAQ: faq.md
       - Tips: tips.md

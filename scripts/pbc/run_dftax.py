@@ -110,11 +110,11 @@ def run_k(args, cell) -> dict:
     import dftax
     from dftax.energy.xc import functional
     from dftax.pbc import uniform
-    from dftax.pbc.kpoints import build_kcell, kmesh, scf_k
+    from dftax.pbc.kpoints import kmesh, kpoint_ks, scf_k
 
     t0 = time.perf_counter()
-    ks = build_kcell(cell, functional(XC[args.xc]), uniform(mesh=args.mesh),
-                     kmesh(*args.kmesh))
+    ks = kpoint_ks(cell, functional(XC[args.xc]), grid=uniform(mesh=args.mesh),
+                   kpts=kmesh(*args.kmesh))
     jax.block_until_ready(ks.hcore)
     t_build = time.perf_counter() - t0
     t0 = time.perf_counter()

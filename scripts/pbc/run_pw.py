@@ -32,6 +32,7 @@ HARTREE_EV = 27.211386245988
 def run(args) -> dict:
     from dftax.energy.xc import functional
     from dftax.pbc import Cell
+    from dftax.pbc import kmesh
     from dftax.pbc.pw import planewaves, pw_forces, pw_stress, scf_pw
 
     spec = systems()[args.system]
@@ -44,7 +45,7 @@ def run(args) -> dict:
     xc = functional(XC[args.xc])
     t0 = time.perf_counter()
     res = scf_pw(cell, xc, planewaves(args.ecut, mesh=args.mesh),
-                 kmesh=args.kmesh, smearing=args.smearing or None,
+                 kpts=kmesh(*args.kmesh), smearing=args.smearing or None,
                  e_tol=args.e_tol, d_tol=args.d_tol,
                  max_iter=200, verbose=args.verbose)
     t_scf = time.perf_counter() - t0

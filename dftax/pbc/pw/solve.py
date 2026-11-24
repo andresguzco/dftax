@@ -168,23 +168,26 @@ class PWResult(NamedTuple):
     mu: float | None = None    # Fermi level under smearing
 
 
-def scf_pw(cell, xc, pw: PlaneWaves, *, kmesh=(1, 1, 1),
+def scf_pw(cell, xc, pw: PlaneWaves, *, kpts=None,
            nbands: int | None = None, e_tol: float = 1e-9,
-           smearing: float | None = None,
+           smearing=None,
            d_tol: float = 1e-6, max_iter: int = 100, mixing: float = 0.5,
            kerker: float | None = 1.5, n_iter: int = 4, seed: int = 0,
            model: PWModel | None = None,
            verbose: bool = False) -> PWResult:
     """Self-consistent field of a cell in plane waves (closed shell, an
     insulator: the lowest ``nocc`` bands of every ``k`` doubly occupied; with
-    ``smearing``, Fermi-Dirac occupations of width ``smearing`` (Hartree)
-    with one Fermi level, and ``e_tot`` the free energy ``E - TS``).
+    ``smearing``, Fermi-Dirac occupations with one Fermi level, and
+    ``e_tot`` the free energy ``E - TS``).
 
     Args:
         cell: the :class:`~dftax.pbc.Cell` (its Gaussian basis is unused).
         xc: the functional (LDA or GGA).
         pw: the basis, :func:`~dftax.pbc.pw.planewaves`.
-        kmesh: a Gamma-centred Monkhorst-Pack mesh.
+        kpts: ``(kfrac, weights)``, as :func:`~dftax.pbc.kmesh` returns them
+            (default: the Gamma point alone).
+        smearing: a :func:`~dftax.ks.scf.fermi` spec, or its width
+            (Hartree) as a float; ``None`` is the insulator fill.
         nbands: bands per ``k`` (default: occupied plus a tenth, at least
             4; with smearing a fifth, at least 8).
         e_tol, d_tol: convergence of the energy (Ha) and of the density
@@ -195,8 +198,9 @@ def scf_pw(cell, xc, pw: PlaneWaves, *, kmesh=(1, 1, 1),
             keep, at this cell's atoms and lattice: finite differences at a
             fixed basis, which the stress is the derivative of.
     """
+    smearing = getattr(smearing, "sigma", smearing) or None
     if model is None:
-        kfrac, weights = monkhorst_pack(kmesh)
+        kfrac, weights = kpts if kpts is not None else monkhorst_pack((1, 1, 1))
         if nbands is None and smearing:
             nocc = int(cell.nelectron) // 2
             nbands = nocc + max(8, nocc // 5)

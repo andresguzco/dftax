@@ -155,9 +155,10 @@ def kcell_fields(plan, xc, kfrac, kw, coords, a) -> KPointKS:
         kfrac=kfrac, kweights=kw, nelec=plan.nelec, nocc=plan.nocc[0])
 
 
-def build_kcell(cell, xc, grid, kpts) -> KPointKS:
+def kpoint_ks(cell, xc, *, grid, kpts) -> KPointKS:
     """The k-point functional of a cell on the ``uniform(...)`` grid at
-    ``kpts = (kfrac, weights)`` (see :func:`kmesh`)."""
+    ``kpts = (kfrac, weights)`` (see :func:`kmesh`), solved by
+    :func:`dftax.scf` like the Gamma-point :class:`~dftax.KS`."""
     if cell.spin:
         raise NotImplementedError("k-points are closed-shell so far")
     plan = plan_cell(cell, xc, grid, None)
@@ -198,16 +199,19 @@ def _energy_of_geometry_k(cell, xc, res, grid, kpts):
     return energy, coords0, a0
 
 
-def kcell_forces(cell, xc, res: "KResult", *, grid, kpts):
+def kcell_forces(cell, xc, res: "KResult", *, grid, kpts=None):
     """Forces at a k-mesh, ``-dE/dR`` (Ha/Bohr): of the free energy under
-    smearing (the occupations frozen with the orbitals)."""
+    smearing (the occupations frozen with the orbitals). ``kpts``: those of
+    the result by default."""
+    kpts = res.kpts if kpts is None else kpts
     energy, coords0, a0 = _energy_of_geometry_k(cell, xc, res, grid, kpts)
     return -jax.jit(jax.grad(energy))(coords0, a0)
 
 
-def kcell_stress(cell, xc, res: "KResult", *, grid, kpts):
+def kcell_stress(cell, xc, res: "KResult", *, grid, kpts=None):
     """Stress at a k-mesh, ``(1/Ω) ∂E/∂ε`` (Ha/Bohr^3); the k-points keep
     their fractional coordinates, so they follow the strained lattice."""
+    kpts = res.kpts if kpts is None else kpts
     energy, coords0, a0 = _energy_of_geometry_k(cell, xc, res, grid, kpts)
 
     def strained(eps):
@@ -270,6 +274,7 @@ class KResult(NamedTuple):
     mu: float | None
     converged: bool
     n_iter: int
+    kpts: tuple | None = None   # (kfrac, weights) of the solve
 
 
 @eqx.filter_jit
@@ -277,14 +282,17 @@ def _energy_and_fock(ks, P):
     return ks.energy_and_fock(P)
 
 
-def scf_k(ks: KPointKS, *, smearing: float | None = None, e_tol=1e-10,
+def scf_k(ks: KPointKS, *, smearing=None, e_tol=1e-10,
           d_tol=1e-7, max_iter=100, diis_space=8, verbose=False,
           lindep: float = 1e-8) -> KResult:
     """SCF of a k-point cell: an insulator (the lowest ``nocc`` bands of every
-    k doubly occupied) or, with ``smearing`` (Hartree), Fermi-Dirac
-    occupations with one Fermi level; ``e_tot`` is then the free energy.
-    ``lindep``: the canonical-orthogonalization threshold (as PySCF's
-    ``remove_linear_dep_``)."""
+    k doubly occupied) or, with ``smearing`` (a :func:`~dftax.ks.scf.fermi`
+    spec or its width in Hartree), Fermi-Dirac occupations with one Fermi
+    level; ``e_tot`` is then the free energy. ``lindep``: the
+    canonical-orthogonalization threshold (as PySCF's
+    ``remove_linear_dep_``). :func:`dftax.scf` calls this for a
+    :class:`KPointKS`."""
+    smearing = getattr(smearing, "sigma", smearing) or None
     X, keep = _orthonormalizers(ks.S, lindep)
     # dropped directions get an energy far above every band, so they stay
     # empty (their orbitals are zero vectors)
@@ -348,4 +356,4 @@ def scf_k(ks: KPointKS, *, smearing: float | None = None, e_tol=1e-10,
         P = density(C, occ)
     return KResult(e_tot=e - ts, energy=e, ts=ts, P=P, eps=eps,
                    occ=jnp.asarray(occ), C=C, mu=mu, converged=converged,
-                   n_iter=it)
+                   n_iter=it, kpts=(ks.kfrac, ks.kweights))

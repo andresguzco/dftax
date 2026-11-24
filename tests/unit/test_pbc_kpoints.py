@@ -106,7 +106,7 @@ def test_si2_kmesh_energy_matches_pyscf():
 
     from dftax.energy.xc import LDA
     from dftax.pbc import uniform
-    from dftax.pbc.kpoints import build_kcell, kmesh, scf_k
+    from dftax.pbc.kpoints import kmesh, kpoint_ks, scf_k
 
     alat = 5.431
     a = 0.5 * alat * np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
@@ -122,7 +122,7 @@ def test_si2_kmesh_energy_matches_pyscf():
     kabs = pc.get_abs_kpts(kfrac)
 
     cell = Cell.from_xyz(atoms, a, "gth-szv", "gth-pade")
-    ks = build_kcell(cell, LDA(), uniform(mesh=mesh), (kfrac, kw))
+    ks = kpoint_ks(cell, LDA(), grid=uniform(mesh=mesh), kpts=(kfrac, kw))
     coords, _ = uniform_grid(jnp.asarray(cell.a), mesh)
     h_ref, h_kin_nl = _pyscf_hcore_k(pc, coords, kabs)
     np.testing.assert_allclose(ks.hcore, h_kin_nl, atol=1e-9)
@@ -144,29 +144,27 @@ def test_si2_kmesh_energy_matches_pyscf():
 def test_kpoint_forces_and_stress_match_finite_differences():
     """Rattled silicon on a 2x2x2 k-mesh with Fermi smearing (fractional
     occupations, the free energy): forces and stress against finite
-    differences of converged free energies."""
+    differences of converged free energies, through the common verbs."""
+    from dftax import fermi, forces, scf
     from dftax.energy.xc import LDA
-    from dftax.pbc import uniform
-    from dftax.pbc.kpoints import (
-        build_kcell, kcell_forces, kcell_stress, kmesh, scf_k,
-    )
+    from dftax.pbc import kmesh, kpoint_ks, stress, uniform
 
     alat = 5.431 * 1.8897261246
     a = 0.5 * alat * np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
     coords = np.array([[0.0, 0.0, 0.0],
                        [0.25 * alat + 0.10, 0.25 * alat - 0.05, 0.25 * alat + 0.07]])
-    grid, kpts, sigma = uniform(mesh=(15, 15, 15)), kmesh(2, 2, 2), 0.02
+    grid, kpts = uniform(mesh=(15, 15, 15)), kmesh(2, 2, 2)
 
     def solve(R, L):
         cell = Cell(["Si", "Si"], R, L, "gth-szv", "gth-pade")
-        res = scf_k(build_kcell(cell, LDA(), grid, kpts), smearing=sigma,
-                    e_tol=1e-12, d_tol=1e-9)
+        res = scf(kpoint_ks(cell, LDA(), grid=grid, kpts=kpts),
+                  smearing=fermi(sigma=0.02), e_tol=1e-12, d_tol=1e-9)
         assert res.converged
         return cell, res
 
     cell, res = solve(coords, a)
-    F = np.asarray(kcell_forces(cell, LDA(), res, grid=grid, kpts=kpts))
-    sigma_t = np.asarray(kcell_stress(cell, LDA(), res, grid=grid, kpts=kpts))
+    F = np.asarray(forces(cell, LDA(), res, grid=grid))
+    sigma_t = np.asarray(stress(cell, LDA(), res, grid=grid))
     h = 1e-3
     d = np.zeros((2, 3))
     d[1, 0] = h

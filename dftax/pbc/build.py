@@ -46,7 +46,8 @@ class Uniform:
     chunk: int | str | None = "auto"
 
 
-def uniform(*, mesh=None, cutoff: float | None = None,
+def uniform(*, mesh: tuple[int, int, int] | None = None,
+            cutoff: float | None = None,
             chunk: int | str | None = "auto") -> Uniform:
     """The uniform real-space grid of a cell: the quadrature of the XC energy
     and the grid of the FFT Hartree term.

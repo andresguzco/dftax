@@ -200,8 +200,10 @@ def forces(
             backend. Smeared (fractionally occupied) hybrid results need the
             materialized backend.
 
-    A periodic :class:`~dftax.pbc.Cell` takes its ``grid=uniform(...)``
-    and no ``coulomb=`` (see :func:`dftax.pbc.derivatives.cell_forces`).
+    A periodic :class:`~dftax.pbc.Cell` takes the result of any periodic
+    engine (Gamma point, k-points, plane waves), the ``grid=uniform(...)``
+    of a Gaussian calculation and no ``coulomb=`` (see
+    :func:`dftax.pbc.derivatives.cell_forces`).
     """
     from dftax.pbc.cell import Cell
 
@@ -211,9 +213,6 @@ def forces(
         if coulomb is not None or dispersion is not None:
             raise NotImplementedError(
                 "a Cell takes no coulomb= or dispersion= yet.")
-        if grid is None:
-            raise TypeError("a Cell's forces need the grid=uniform(...) of "
-                            "the energy calculation.")
         return cell_forces(mol, xc, result, grid=grid)
     grid = becke() if grid is None else grid
     if not isinstance(grid, Becke):

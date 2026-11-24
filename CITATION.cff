@@ -4,14 +4,15 @@ title: "dftax: a differentiable Kohn-Sham DFT engine in JAX"
 abstract: >-
   A differentiable Kohn-Sham density functional theory engine in pure JAX/Equinox.
   Restricted and unrestricted DFT with autodiff Fock, analytic forces, response
-  properties, implicit-differentiation SCF response, density fitting, and a native
-  integration grid.
+  properties, implicit-differentiation SCF response, density fitting, a native
+  integration grid, and periodic systems with GTH pseudopotentials in Gaussian
+  and plane-wave bases.
 type: software
 authors:
   - family-names: "Guzmán-Cordero"
     given-names: "Andrés"
     email: "andres.guzman-cordero@mila.quebec"
-version: "0.9.3"
+version: "0.10.0"
 license: Apache-2.0
 repository-code: "https://github.com/andresguzco/dftax"
 url: "https://github.com/andresguzco/dftax"

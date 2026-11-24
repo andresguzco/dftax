@@ -321,9 +321,11 @@ def box_layout(mesh):
 # Traced evaluation
 # ---------------------------------------------------------------------------
 
-def _lattice_sums(basis_a, basis_b, shifts, plan: PairPlan, chunk):
+def _lattice_sums(basis_a, basis_b, shifts, plan: PairPlan, chunk, phases=None):
     """``sum_T <a_i | b_j shifted by T>`` and the kinetic twin, over
-    cartesian AOs, ``(na, nb)`` each.
+    cartesian AOs, ``(na, nb)`` each; with ``phases`` ``(nk, nT)``
+    (``exp(i k·T)`` of every image), the Bloch sums of each ``k`` instead,
+    complex ``(nk, na, nb)``.
 
     Each class runs the molecular engine's shell-pair kernel
     (:func:`~dftax.integrals.eri3c_bucketed._make_st_kernel`: a whole
@@ -334,7 +336,11 @@ def _lattice_sums(basis_a, basis_b, shifts, plan: PairPlan, chunk):
     """
     from dftax.integrals.eri3c_bucketed import _make_st_kernel
 
-    out = [jnp.zeros((plan.na, plan.nb), dtype=shifts.dtype) for _ in range(4)]
+    # with phases, the blocks of each image are gathered first (real), and
+    # the Bloch sums are one contraction with the phases at the end
+    shape = ((plan.na, plan.nb) if phases is None
+             else (plan.images.shape[0], plan.na, plan.nb))
+    out = [jnp.zeros(shape, dtype=shifts.dtype) for _ in range(4)]
     for c in plan.classes:
         nca, ncb = len(c.anga), len(c.angb)
         la, lb = sum(c.anga[0]), sum(c.angb[0])
@@ -352,12 +358,20 @@ def _lattice_sums(basis_a, basis_b, shifts, plan: PairPlan, chunk):
         for n, (vals, w) in enumerate(((Sv, c.weight), (Tv, c.weight),
                                        (Sv, c.weight * c.swap),
                                        (Tv, c.weight * c.swap))):
-            out[n] = out[n].at[r, k].add(vals * w[:, None, None])
+            vals = vals * w[:, None, None]
+            if phases is None:
+                out[n] = out[n].at[r, k].add(vals)
+            else:
+                out[n] = out[n].at[c.img[:, None, None], r, k].add(vals)
+    if phases is not None:
+        out = [jnp.einsum("kt,tij->kij", phases, M) for M in out]
     if not plan.symmetric:
         return out[0], out[1]
     # a symmetric plan holds each off-diagonal shell pair once: its blocks
-    # are written again, transposed
-    return out[0] + out[2].T, out[1] + out[3].T
+    # are written again, transposed (and conjugated: the image -T of the
+    # swapped pair carries the phase exp(-i k·T))
+    tr = lambda M: jnp.conj(jnp.swapaxes(M, -1, -2))
+    return out[0] + tr(out[2]), out[1] + tr(out[3])
 
 
 def _to_final(M, basis_a, basis_b):
@@ -389,6 +403,62 @@ def cross_overlap(basis_a: BasisData, basis_b: BasisData, a, plan: PairPlan,
     shifts = plan.images.astype(a.dtype) @ a
     S, _ = _lattice_sums(basis_a, basis_b, shifts, plan, chunk)
     return _to_final(S, basis_a, basis_b)
+
+
+def bloch_phases(images, kfrac):
+    """``exp(i k·T)`` of every image ``T = n·a`` and k-point (fractional
+    ``kfrac``): ``(nk, nT)``, as ``exp(2πi k·n)``."""
+    return jnp.exp(2j * jnp.pi * (jnp.asarray(kfrac) @ images.T))
+
+
+@eqx.filter_jit
+def overlap_kinetic_k(basis: BasisData, a, plan: PairPlan, kfrac,
+                      chunk: int = 4096):
+    """Bloch overlap and kinetic matrices of every k-point,
+    ``S^k_μν = sum_T exp(i k·T) <μ | ν(r - T)>``, complex ``(nk, nao, nao)``."""
+    shifts = plan.images.astype(a.dtype) @ a
+    S, K = _lattice_sums(basis, basis, shifts, plan, chunk,
+                         bloch_phases(plan.images, kfrac))
+    return _to_final(S, basis, basis), _to_final(K, basis, basis)
+
+
+@eqx.filter_jit
+def cross_overlap_k(basis_a: BasisData, basis_b: BasisData, a, plan: PairPlan,
+                    kfrac, chunk: int = 4096):
+    """Bloch overlap of the orbital basis with the projectors per k-point,
+    complex ``(nk, nao, nproj)``."""
+    shifts = plan.images.astype(a.dtype) @ a
+    S, _ = _lattice_sums(basis_a, basis_b, shifts, plan, chunk,
+                         bloch_phases(plan.images, kfrac))
+    return _to_final(S, basis_a, basis_b)
+
+
+def block_values_k(basis: BasisData, shifts, fun, img, mask, pts, phases):
+    """Bloch AO values and gradients on one block of points for every
+    k-point, ``φ^k_μ(r) = sum_T exp(i k·T) φ_μ(r - T)``: complex
+    ``(nk, B, nao)`` and ``(nk, B, nao, 3)``. The images are evaluated once;
+    the Bloch sum is a matrix product with the one-hot map of the entries
+    to their rows carrying each k's phases (its real and imaginary parts
+    apart, so the products stay real), with no scatter."""
+    sub = BasisData(
+        centers=basis.centers[fun] + shifts[img],
+        exponents=basis.exponents[fun],
+        coefficients=basis.coefficients[fun] * mask[:, None],
+        angular=basis.angular[fun], cart2sph=None, max_l=basis.max_l)
+    v, g = jax.vmap(lambda r: eval_gto_and_grad(sub, r))(pts)  # (B, L), (B, L, 3)
+    ncart = basis.centers.shape[0]
+    L = fun.shape[0]
+    onehot = jnp.zeros((L, ncart), dtype=v.dtype).at[jnp.arange(L), fun].set(1.0)
+    ph = phases[:, img]                                          # (nk, L)
+    Wr = ph.real[:, :, None] * onehot[None]                      # (nk, L, ncart)
+    Wi = ph.imag[:, :, None] * onehot[None]
+    vk = (jnp.einsum("bl,klm->kbm", v, Wr)
+          + 1j * jnp.einsum("bl,klm->kbm", v, Wi))               # (nk, B, ncart)
+    gk = (jnp.einsum("blx,klm->kbmx", g, Wr)
+          + 1j * jnp.einsum("blx,klm->kbmx", g, Wi))             # (nk, B, ncart, 3)
+    if basis.cart2sph is not None:
+        return vk @ basis.cart2sph, jnp.einsum("kbcx,cs->kbsx", gk, basis.cart2sph)
+    return vk, gk
 
 
 def block_values(basis: BasisData, shifts, fun, img, mask, pts):
@@ -447,3 +517,20 @@ def _ao_on_grid(basis, a, coords, plan, chunk):
     nao = v.shape[-1]
     return (v.reshape(-1, nao)[:plan.npts],
             g.reshape(-1, nao, 3)[:plan.npts])
+
+
+@eqx.filter_jit
+def ao_on_grid_k(basis: BasisData, a, coords, plan: ValuePlan, kfrac):
+    """Bloch AO values and gradients of every k-point on grid points,
+    complex ``(nk, ng, nao)`` and ``(nk, ng, nao, 3)`` (all blocks at once:
+    for tests and small grids)."""
+    nblk = plan.fun.shape[0]
+    pts = _pad_points(coords, nblk * plan.block).reshape(nblk, plan.block, 3)
+    shifts = plan.images.astype(a.dtype) @ a
+    phases = bloch_phases(plan.images, kfrac)
+    v, g = jax.vmap(lambda f, t, m, p: block_values_k(
+        basis, shifts, f, t, m, p, phases))(plan.fun, plan.img, plan.mask, pts)
+    nk, nao = v.shape[1], v.shape[-1]
+    v = jnp.moveaxis(v, 1, 0).reshape(nk, -1, nao)[:, :plan.npts]
+    g = jnp.moveaxis(g, 1, 0).reshape(nk, -1, nao, 3)[:, :plan.npts]
+    return v, g

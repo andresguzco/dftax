@@ -10,10 +10,11 @@ basis with the Hartree term on a uniform grid. The local part of one atom is
 
 and its Fourier transform, a function of G^2 alone, is :func:`vloc_G`.
 
-The tables (CP2K's potential and basis-set files) are not vendored yet. They
-are read from ``$DFTAX_GTH_DATA`` when it is set (a directory holding
-``pseudo/<name>.dat`` and ``basis/<name>.dat``) and otherwise from the copies
-an installed PySCF carries; nothing of PySCF is imported.
+The tables (CP2K's potential and basis-set files, GPL-2.0) are not vendored
+with dftax (Apache-2.0). They are read from ``$DFTAX_GTH_DATA`` when it is
+set (a directory holding ``pseudo/<name>.dat`` and ``basis/<name>.dat``) and
+otherwise from the copies an installed PySCF carries (``pip install
+dftax[periodic]``); nothing of PySCF is imported.
 """
 
 from __future__ import annotations
@@ -53,9 +54,10 @@ def _data_dir() -> Path:
     spec = importlib.util.find_spec("pyscf")
     if spec is None or spec.origin is None:
         raise FileNotFoundError(
-            "GTH tables are not vendored with dftax yet: set DFTAX_GTH_DATA "
+            "GTH tables are not vendored with dftax: set DFTAX_GTH_DATA "
             "to a directory holding pseudo/<name>.dat and basis/<name>.dat "
-            "(CP2K format), or install pyscf, whose copies are then read."
+            "(CP2K format), or install pyscf (pip install dftax[periodic]), "
+            "whose copies are then read."
         )
     return Path(spec.origin).parent / "pbc" / "gto"
 

@@ -45,6 +45,9 @@ def run(args) -> dict:
     cell = Cell(list(spec.symbols), spec.cart * ANGSTROM_TO_BOHR,
                 spec.a * ANGSTROM_TO_BOHR, args.basis, args.pseudo)
 
+    if tuple(args.kmesh) != (1, 1, 1) or args.smearing:
+        return run_k(args, cell)
+
     t0 = time.perf_counter()
     grid = uniform(mesh=args.mesh)
     ks = KS(cell, functional(XC[args.xc]), grid=grid)
@@ -102,6 +105,50 @@ def run(args) -> dict:
     }
 
 
+def run_k(args, cell) -> dict:
+    """A k-mesh (and smearing): the k-point engine."""
+    import dftax
+    from dftax.energy.xc import functional
+    from dftax.pbc import uniform
+    from dftax.pbc.kpoints import kmesh, kpoint_ks, scf_k
+
+    t0 = time.perf_counter()
+    ks = kpoint_ks(cell, functional(XC[args.xc]), grid=uniform(mesh=args.mesh),
+                   kpts=kmesh(*args.kmesh))
+    jax.block_until_ready(ks.hcore)
+    t_build = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    res = scf_k(ks, smearing=args.smearing or None, e_tol=args.e_tol,
+                d_tol=args.d_tol, max_iter=200, verbose=args.verbose)
+    t_scf = time.perf_counter() - t0
+    eps, occ = np.asarray(res.eps), np.asarray(res.occ)
+    out = {
+        "code": f"dftax {dftax.__version__}", "system": args.system,
+        "natom": len(cell.symbols), "volume_factor": args.volume_factor,
+        "rattle": args.rattle, "basis": args.basis, "pseudo": args.pseudo,
+        "xc": args.xc, "kmesh": list(args.kmesh), "smearing": args.smearing,
+        "mesh": [int(n) for n in args.mesh], "nao": int(ks.S.shape[-1]),
+        "nelectron": int(ks.nelec), "converged": bool(res.converged),
+        "n_iter": int(res.n_iter),
+        # e_tot is the internal energy (PySCF's e_tot), e_free the free one
+        "e_tot": float(res.energy), "e_free": float(res.e_tot),
+        "vbm": float(eps[occ > 1.0].max()), "cbm": float(eps[occ < 1.0].min()),
+        "summary": {"nuc": float(ks.e_nn)},
+        "seconds_build": t_build, "seconds_scf": t_scf,
+    }
+    out["gap"] = out["cbm"] - out["vbm"]
+    from dftax.pbc.kpoints import kcell_forces, kcell_stress
+
+    grid, kpts = uniform(mesh=args.mesh), kmesh(*args.kmesh)
+    for key, fn in (("forces", kcell_forces), ("stress", kcell_stress)):
+        if getattr(args, key):
+            t0 = time.perf_counter()
+            out[key] = np.asarray(fn(cell, functional(XC[args.xc]), res,
+                                     grid=grid, kpts=kpts)).tolist()
+            out["seconds_" + key] = time.perf_counter() - t0
+    return out
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("system", choices=sorted(systems()))
@@ -116,6 +163,10 @@ def main():
     p.add_argument("--d-tol", type=float, default=1e-7)
     p.add_argument("--forces", action="store_true")
     p.add_argument("--stress", action="store_true")
+    p.add_argument("--kmesh", type=int, nargs=3, default=(1, 1, 1))
+    p.add_argument("--verbose", action="store_true")
+    p.add_argument("--smearing", type=float, default=0.0,
+                   help="Fermi-Dirac width, Hartree")
     p.add_argument("--out", default=None)
     args = p.parse_args()
 
@@ -123,9 +174,10 @@ def main():
     if args.ref:
         with open(args.ref) as f:
             ref = json.load(f)
-        if ref["system"] != args.system or ref["kmesh"] != [1, 1, 1]:
-            raise SystemExit("the reference is another system or not Gamma-only")
-        for key in ("basis", "pseudo", "xc", "mesh", "rattle"):
+        if ref["system"] != args.system:
+            raise SystemExit("the reference is another system")
+        for key in ("basis", "pseudo", "xc", "mesh", "rattle", "kmesh",
+                    "smearing"):
             setattr(args, key, ref[key])
         args.volume_factor = ref["volume_factor"]
     if args.mesh is None:
@@ -142,9 +194,11 @@ def main():
     if ref is not None:
         d = {"e_tot": out["e_tot"] - ref["e_tot"]}
         d.update({k: out["summary"][k] - ref["summary"][k]
-                  for k in out["summary"]})
+                  for k in out["summary"] if k in ref.get("summary", {})})
         print("dftax - reference (Ha): " + ", ".join(
             f"{k} {v:+.2e}" for k, v in d.items()))
+        if "e_free" in out and ref.get("e_free") is not None:
+            print(f"free energy: dftax - reference {out['e_free'] - ref['e_free']:+.2e} Ha")
         print(f"per atom: {d['e_tot'] / out['natom']:+.2e} Ha; reference "
               f"{ref['code']}, mesh {ref['mesh']}")
         for key in ("forces", "stress"):

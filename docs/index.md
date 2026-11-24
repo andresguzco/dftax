@@ -14,7 +14,9 @@ Because it is ordinary JAX, a DFT calculation can sit inside a larger
 differentiable or machine-learning pipeline.
 
 The runtime is self-contained: pure JAX/Equinox, with no `libcint`, `libxc`,
-or Maple. PySCF appears only as a test-time reference oracle.
+or Maple. PySCF appears only as a test-time reference oracle (and, for
+periodic cells, as the source of the GTH table files, which are GPL-2.0 and
+not shipped with dftax).
 
 ## Highlights
 
@@ -38,6 +40,11 @@ or Maple. PySCF appears only as a test-time reference oracle.
 - Analytic forces (Pulay terms included, and Mermin forces under smearing),
   implicit-diff SCF response (CPHF), dipole, polarizability, Hessian,
   frequencies, IR/Raman, and alchemical derivatives.
+- Periodic systems: crystals with GTH pseudopotentials in a Gaussian basis
+  (at the Gamma point, where every molecular solver runs unchanged, or on a
+  k-mesh with Fermi smearing for metals) or in plane waves, with forces and
+  the stress tensor; checked against PySCF and GPAW
+  ([guide](tutorials/periodic.md)).
 - Batched energies and forces over many geometries via `vmap`.
 - Multi-GPU: one `mesh()` value shards the quadrature and the DF tensors
   across a device mesh, still fully differentiable.
@@ -48,6 +55,7 @@ or Maple. PySCF appears only as a test-time reference oracle.
 ```bash
 pip install dftax            # CPU
 pip install dftax[cuda12]    # + CUDA 12 jaxlib (Linux GPU)
+pip install dftax[periodic]  # + the GTH tables for periodic cells
 ```
 
 ## Quick example
@@ -81,10 +89,13 @@ whole mental model. Then the [examples gallery](examples/water.ipynb)
 - [Batched evaluation](tutorials/batched.md): `vmap` over many geometries.
 - [Properties](tutorials/properties.md): dipole, polarizability, IR/Raman, alchemy.
 - [Implicit differentiation](tutorials/implicit-diff.md): CPHF response, analytic polarizability.
+- [Periodic systems](tutorials/periodic.md): crystals in a Gaussian basis or plane waves, k-points, stress.
 - [API reference](api/build.md) · [FAQ](faq.md) · [Tips](tips.md)
 
 Accuracy and performance records live in
-[`scripts/bench/BENCHMARKS.md`](https://github.com/andresguzco/dftax/blob/main/scripts/bench/BENCHMARKS.md)
-and [`scripts/gpu/GPU_VALIDATION.md`](https://github.com/andresguzco/dftax/blob/main/scripts/gpu/GPU_VALIDATION.md).
+[`scripts/bench/BENCHMARKS.md`](https://github.com/andresguzco/dftax/blob/main/scripts/bench/BENCHMARKS.md),
+[`scripts/gpu/GPU_VALIDATION.md`](https://github.com/andresguzco/dftax/blob/main/scripts/gpu/GPU_VALIDATION.md)
+and, for periodic systems,
+[`scripts/pbc/BASELINES.md`](https://github.com/andresguzco/dftax/blob/main/scripts/pbc/BASELINES.md).
 The examples are also plain scripts in
 [`examples/`](https://github.com/andresguzco/dftax/tree/main/examples).

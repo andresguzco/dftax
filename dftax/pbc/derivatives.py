@@ -26,8 +26,17 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from typing import TYPE_CHECKING
+
 from dftax.pbc.build import CellAt, Uniform, cell_fields, plan_cell
 from dftax.pbc.lattice import volume
+
+if TYPE_CHECKING:
+    from dftax.energy.xc import XCFunctional
+    from dftax.ks.scf import KSResult
+    from dftax.pbc.cell import Cell
+    from dftax.pbc.kpoints import KResult
+    from dftax.pbc.pw import PWResult
 
 
 def _frozen_density(result, S0):
@@ -75,29 +84,64 @@ def _energy_of_geometry(cell, xc, result, grid, spin):
     return energy, coords0, a0
 
 
-def cell_forces(cell, xc, result, *, grid: Uniform,
+def _by_engine(kind, cell, xc, result, grid):
+    """The derivative of a k-point or a plane-wave result, which carries its
+    engine (and its k-points, and for plane waves its functional and basis);
+    ``None`` for the Gamma-point Gaussian engine."""
+    from dftax.pbc.kpoints import KResult, kcell_forces, kcell_stress
+    from dftax.pbc.pw import PWResult, pw_forces, pw_stress
+
+    if isinstance(result, PWResult):
+        return (pw_forces if kind == "forces" else pw_stress)(cell, result)
+    if isinstance(result, KResult):
+        _need_grid(grid)
+        fn = kcell_forces if kind == "forces" else kcell_stress
+        return fn(cell, xc, result, grid=grid)
+    _need_grid(grid)
+    return None
+
+
+def _need_grid(grid):
+    if grid is None:
+        raise TypeError("the Gaussian engine's derivatives need the "
+                        "grid=uniform(...) of the energy calculation.")
+
+
+def cell_forces(cell: Cell, xc: XCFunctional,
+                result: KSResult | KResult | PWResult | tuple, *,
+                grid: Uniform | None = None,
                 spin: int | None = None) -> Float[Array, "n_atom 3"]:
     """Forces on the atoms of a cell, ``-dE/dR`` (Ha/Bohr), ``(n_atom, 3)``.
 
     Args:
         cell: the :class:`~dftax.pbc.Cell` of the energy calculation.
         xc: its functional.
-        result: the converged :class:`~dftax.ks.scf.KSResult` (or the
-            occupied coefficients per spin channel).
-        grid: the ``uniform(...)`` grid of the energy calculation.
+        result: the converged result of any engine: a
+            :class:`~dftax.ks.scf.KSResult` (Gamma point, or the occupied
+            coefficients per spin channel), a
+            :class:`~dftax.pbc.kpoints.KResult` (k-points) or a
+            :class:`~dftax.pbc.pw.PWResult` (plane waves, which needs no
+            ``grid``). Under smearing, the derivative of the free energy.
+        grid: the ``uniform(...)`` grid of a Gaussian calculation.
         spin: ``2S`` when it differs from the cell's (read from the result
             otherwise).
     """
+    out = _by_engine("forces", cell, xc, result, grid)
+    if out is not None:
+        return out
     energy, coords0, a0 = _energy_of_geometry(cell, xc, result, grid, spin)
     return -jax.grad(energy)(coords0, a0)
 
 
-def stress(cell, xc, result, *, grid: Uniform,
+def stress(cell: Cell, xc: XCFunctional,
+           result: KSResult | KResult | PWResult | tuple, *,
+           grid: Uniform | None = None,
            spin: int | None = None) -> Float[Array, "3 3"]:
     """Stress tensor of a cell, ``(1/Ω) ∂E/∂ε`` (Ha/Bohr^3), ``(3, 3)``.
 
     Arguments as :func:`cell_forces`. The strain moves the lattice vectors,
-    the atoms (fixed fractional coordinates) and the grid points together.
+    the atoms (fixed fractional coordinates) and the grid points together;
+    the plane-wave stress is that of a fixed plane-wave set.
 
     Example:
         ```python
@@ -105,6 +149,9 @@ def stress(cell, xc, result, *, grid: Uniform,
         sigma = stress(cell, LDA(), res, grid=uniform(mesh=(33, 33, 33)))
         ```
     """
+    out = _by_engine("stress", cell, xc, result, grid)
+    if out is not None:
+        return out
     energy, coords0, a0 = _energy_of_geometry(cell, xc, result, grid, spin)
 
     def strained(eps):

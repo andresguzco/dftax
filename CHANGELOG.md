@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **wB97 and LC-BLYP** (`WB97()`, `LCBLYP()`; `functional("wb97")`,
+  `functional("lc-blyp")`): long-range-corrected hybrids, whose exact
+  exchange is long-range only. wB97 is the wB97X form at ω = 0.4 with its own
+  B97 coefficients; LC-BLYP is short-range B88 exchange (ITYH) plus LYP at
+  ω = 0.33. Parameters as libxc `HYB_GGA_XC_WB97` and `HYB_GGA_XC_LC_BLYP`.
+  Against PySCF with exact exchange: energies to 2e-10 Ha (water, CH3 and NH2
+  in def2-svp, restricted and unrestricted) and forces to 1e-8 Ha/Bohr; both
+  run on every backend that runs range-separated hybrids.
+- **Dispersion for long-range-corrected functionals**: D4 (BJ, EEQ, ATM) for
+  wB97, LC-BLYP and LC-wPBE and D3(BJ) for LC-wPBE, the published sets of
+  dftd4 and simple-dftd3; `d4()` picks them up from the functional's name.
+  `scripts/gen_d3_data.py` and `gen_d4_data.py` take `--damping` to rewrite
+  only the damping table of the bundled data.
+
 ## [0.10.0] - 2026-11-24
 
 ### Added

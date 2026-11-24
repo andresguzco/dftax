@@ -106,8 +106,19 @@ def build_basis_data(
     """
     coords = np.asarray(coords_bohr, dtype=np.float64).reshape(-1, 3)
     Zs = [symbol_to_Z(s) for s in symbols]
-    bdata = bse.get_basis(basis_name, elements=sorted(set(Zs)), header=False)
-    elements = bdata["elements"]
+    gth = basis_name.lower().startswith("gth-")
+    if gth:
+        # The valence basis sets of the GTH pseudopotentials (periodic
+        # cells): CP2K tables, not on the Basis Set Exchange.
+        from dftax.pbc.gth import load_basis_shells
+
+        elements = {
+            str(Z): {"electron_shells": load_basis_shells(basis_name, s)}
+            for s, Z in set(zip(symbols, Zs))
+        }
+    else:
+        bdata = bse.get_basis(basis_name, elements=sorted(set(Zs)), header=False)
+        elements = bdata["elements"]
 
     # Gather every contracted shell: (l, exponents, raw coefficients, center, atom).
     raw_shells: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, int]] = []
@@ -116,6 +127,15 @@ def build_basis_data(
         for shell in shells:
             exps = np.asarray(shell["exponents"], dtype=np.float64)
             for l, c_raw in _iter_contractions(shell):
+                if gth and l >= 2 and np.count_nonzero(c_raw) > 1:
+                    # the tables' contraction coefficients are not
+                    # normalized, and only l <= 1 contractions are
+                    # renormalized below
+                    raise NotImplementedError(
+                        f"{basis_name!r} has a contracted l={l} shell; only "
+                        f"single-primitive d and higher shells are supported "
+                        f"for GTH basis sets (the DZVP/TZV2P/QZV3P families)."
+                    )
                 raw_shells.append((l, exps, c_raw, center, atom_idx))
 
     max_prim = max(len(exps) for (_, exps, _, _, _) in raw_shells)

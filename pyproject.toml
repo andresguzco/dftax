@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dftax"
-version = "0.9.3"
+version = "0.10.0"
 description = "A differentiable Kohn-Sham DFT engine in pure JAX: autodiff Fock and forces, response properties, density fitting, native grids."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -46,6 +46,11 @@ cuda12 = ["jax[cuda12]>=0.10.0"]
 # test suite (and as an optional convenience path for building a system from a
 # PySCF Mole). The compute path is pure JAX.
 test = ["pytest>=8.0", "scipy>=1.11", "pyscf>=2.11.0"]
+# Periodic cells read the GTH pseudopotential and basis tables (CP2K's files,
+# GPL-2.0, so not vendored here) from $DFTAX_GTH_DATA or from the copies an
+# installed PySCF carries; this extra installs those. Nothing of PySCF is
+# imported.
+periodic = ["pyscf>=2.11.0"]
 docs = [
     "mkdocs-material>=9.5",
     "mkdocstrings[python]>=0.25",

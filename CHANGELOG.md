@@ -6,6 +6,37 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-24
+
+### Added
+- **Periodic systems (`dftax.pbc`).** Kohn-Sham DFT of crystals with GTH
+  pseudopotentials, LDA and GGA, in two bases:
+  - *Gaussian basis* in PySCF's FFTDF formulation: `Cell`, the uniform
+    grid `uniform(mesh=...)`, lattice-summed one-electron matrices and GTH
+    projectors screened per shell pair and image, the FFT Hartree term,
+    the Ewald ion-ion energy, and the XC quadrature streamed in grid
+    blocks. At the Gamma point `KS(cell, xc, grid=...)` runs every
+    molecular solver unchanged (restricted and spin-polarized); on a
+    k-mesh, `kpoint_ks(cell, xc, grid=..., kpts=kmesh(n1, n2, n3))` is
+    solved by `scf` with complex Hermitian matrices per k, canonical
+    orthogonalization per k, one Fermi level under `fermi()` smearing and
+    DIIS over the stacked Fock matrices. Energies match PySCF to 1e-8 Ha or
+    better (Si64 8.5e-12, alpha-quartz 72 atoms 2.6e-9).
+  - *Plane waves*: `scf_pw(cell, xc, planewaves(ecut), kpts=..., smearing=...)`,
+    analytic GTH projectors in reciprocal space, LOBPCG with the Teter
+    preconditioner, Pulay mixing with Kerker preconditioning. Against GPAW
+    with the same HGH potentials: band gaps to 2 meV, forces and stresses
+    to 1e-5 and 1e-6, silicon's lattice constant to 0.0011 Angstrom and
+    bulk modulus to 0.1 GPa.
+  - Forces and stress tensors of every engine by autodiff at the frozen
+    density (`forces(cell, xc, res, ...)`, `stress(cell, xc, res, ...)`),
+    of the free energy under smearing, checked against finite differences.
+  - GTH tables are read from `$DFTAX_GTH_DATA` or from an installed PySCF
+    (`pip install dftax[periodic]`); they are GPL-2.0 and not vendored.
+  - Guide (`docs/tutorials/periodic.md`), API page, the example
+    `examples/07_silicon_periodic.py`, and the baseline record with its
+    reference data and scripts in `scripts/pbc/` (`BASELINES.md`).
+
 ## [0.9.3] - 2026-10-21
 
 ### Fixed

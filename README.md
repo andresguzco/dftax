@@ -33,15 +33,22 @@ unrolled solver. And because it is ordinary JAX, the whole engine jits, vmaps
 over geometries, and runs on GPU; a DFT calculation drops into a training loop
 or an end-to-end functional fit like any other differentiable block.
 
+Molecules and crystals: periodic cells run with GTH pseudopotentials in a
+Gaussian basis (at the Gamma point or on a k-mesh) or in plane waves, with
+forces and the stress tensor by the same autodiff.
+
 The runtime carries no `libcint`, `libxc`, or Maple: basis sets come from the
 [Basis Set Exchange](https://www.basissetexchange.org/) at setup, the molecular
-grid is built natively, and PySCF appears only as a test-time reference.
+grid is built natively, and PySCF appears only as a test-time reference (and,
+for periodic cells, as the source of the GTH table files, which are GPL-2.0
+and not shipped here).
 
 ## Installation
 
 ```bash
 pip install dftax            # CPU
 pip install dftax[cuda12]    # + CUDA-12 jaxlib (Linux GPU)
+pip install dftax[periodic]  # + the GTH tables for periodic cells
 ```
 
 ## Quick start
@@ -67,6 +74,35 @@ Every choice is a value passed to the builder, not a global flag: a nonzero
 `d4()` adds a dispersion correction, `scf(ks, accel=adiis())` accelerates hard
 SCF cases, and `scf(ks, smearing=fermi())` gives fractional occupations and
 the Mermin free energy for metallic or degenerate systems.
+
+## Periodic systems
+
+```python
+import numpy as np
+from dftax import KS, fermi, forces, scf
+from dftax.energy.xc import LDA
+from dftax.pbc import Cell, kmesh, kpoint_ks, planewaves, scf_pw, stress, uniform
+
+a = 0.5 * 5.431 * np.array([[0, 1, 1], [1, 0, 1], [1, 1, 0]])   # Angstrom
+cell = Cell.from_xyz("Si 0 0 0; Si 1.358 1.358 1.358", a,
+                     basis="gth-dzvp", pseudo="gth-pade")
+grid = uniform(mesh=(21, 21, 21))
+
+res = scf(KS(cell, LDA(), grid=grid))                                  # Gaussian, Gamma
+res = scf(kpoint_ks(cell, LDA(), grid=grid, kpts=kmesh(4, 4, 4)))      # Gaussian, k-mesh
+F, sigma = forces(cell, LDA(), res, grid=grid), stress(cell, LDA(), res, grid=grid)
+
+res = scf_pw(cell, LDA(), planewaves(15.0), kpts=kmesh(4, 4, 4),
+             smearing=fermi(sigma=0.001))                              # plane waves
+F, sigma = forces(cell, LDA(), res), stress(cell, LDA(), res)
+```
+
+The Gaussian engine reproduces PySCF's periodic code (same basis, potential
+and grid) to 1e-8 Ha or better, from two-atom cells to 72-atom quartz; the
+plane waves reproduce GPAW's band gaps, forces, stresses and silicon's
+equation of state with the same potentials. The record is
+[`scripts/pbc/BASELINES.md`](scripts/pbc/BASELINES.md); the guide is
+[Periodic systems](https://andresguzco.github.io/dftax/tutorials/periodic/).
 
 ## Scaling up
 
@@ -122,6 +158,9 @@ vibrational frequencies match PySCF to a few cm⁻¹.
   stream or shard yet.
 - GPU correctness is validated interactively on an A100 rather than in CPU CI,
   and large-N GPU throughput is not yet benchmarked.
+- Periodic cells: GTH pseudopotentials only (no all-electron), LDA and GGA
+  (no hybrids), closed-shell k-points and plane waves (spin-polarized only at
+  the Gamma point in the Gaussian basis).
 
 ## Documentation
 
@@ -148,7 +187,7 @@ a good neighbor to it, not a replacement.
   author  = {Guzm{\'a}n-Cordero, Andr{\'e}s},
   title   = {dftax: a differentiable Kohn-Sham DFT engine in JAX},
   url     = {https://github.com/andresguzco/dftax},
-  version = {0.8.1},
+  version = {0.10.0},
   year    = {2026},
 }
 ```

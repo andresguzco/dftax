@@ -1,0 +1,20 @@
+{
+ "code": "gpaw 25.7.0, ase 3.29.0",
+ "system": "al4",
+ "natom": 4,
+ "volume_factor": 1.0,
+ "rattle": 0.0,
+ "setups": "hgh",
+ "xc": "LDA_X+LDA_C_VWN",
+ "ecut": 15.0,
+ "kmesh": [
+  4,
+  4,
+  4
+ ],
+ "smearing": 0.005,
+ "nelectron": 12.0,
+ "e_free": -8.39995857558284,
+ "e_extrapolated": -8.397627918799659,
+ "seconds_scf": 2.3314779540523887
+}

@@ -36,6 +36,13 @@ _SLOW_MODULES = {
     # 212 s: contracts K against the materialized 4-center tensor at two
     # bases. K symmetric / linear in P is covered in the default tier.
     "test_exchange_k_symmetry",
+    # finite differences of forces and stress: SCFs in plane waves and at
+    # k-points
+    "test_pbc_planewaves", "test_pbc_kpoints",
+    # nine SCFs of a silicon cell (finite differences of forces and stress;
+    # 25 s on 6 CPU cores). test_pbc_gaussian (37 s since the lattice sums
+    # are screened) stays in the default tier with test_pbc_shared.
+    "test_pbc_derivatives",
 }
 
 # Kept OUT of the slow tier on purpose, because each guards a silent wrong

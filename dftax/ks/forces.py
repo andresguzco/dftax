@@ -199,7 +199,21 @@ def forces(
             path uses the cartesian auxiliary span, like the streamed SCF
             backend. Smeared (fractionally occupied) hybrid results need the
             materialized backend.
+
+    A periodic :class:`~dftax.pbc.Cell` takes the result of any periodic
+    engine (Gamma point, k-points, plane waves), the ``grid=uniform(...)``
+    of a Gaussian calculation and no ``coulomb=`` (see
+    :func:`dftax.pbc.derivatives.cell_forces`).
     """
+    from dftax.pbc.cell import Cell
+
+    if isinstance(mol, Cell):
+        from dftax.pbc.derivatives import cell_forces
+
+        if coulomb is not None or dispersion is not None:
+            raise NotImplementedError(
+                "a Cell takes no coulomb= or dispersion= yet.")
+        return cell_forces(mol, xc, result, grid=grid)
     grid = becke() if grid is None else grid
     if not isinstance(grid, Becke):
         raise ValueError("forces need a geometry-following grid: pass becke(...).")

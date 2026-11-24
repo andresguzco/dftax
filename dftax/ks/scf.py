@@ -504,7 +504,24 @@ def scf(
         res = scf(ks, guess=sad())               # fewer iterations
         res.e_tot, res.converged, res.P[0]       # P is spin-stacked
         ```
+
+    A periodic cell at a k-mesh (a :class:`~dftax.pbc.kpoints.KPointKS`,
+    from :func:`~dftax.pbc.kpoint_ks`) is solved by
+    :func:`~dftax.pbc.kpoints.scf_k` with ``smearing``, the tolerances,
+    ``max_iter``, ``diis_space`` and ``verbose`` passed on; it starts from
+    the core Hamiltonian, keeps its own linear-dependence threshold (PySCF's)
+    and takes no ``guess``, ``accel`` or ``level_shift``.
     """
+    if not isinstance(ks, KS):
+        from dftax.pbc.kpoints import KPointKS, scf_k
+
+        if isinstance(ks, KPointKS):
+            if guess is not None or accel is not None or level_shift:
+                raise NotImplementedError(
+                    "k-points take no guess=, accel= or level_shift= yet")
+            return scf_k(ks, smearing=smearing, e_tol=e_tol, d_tol=d_tol,
+                         max_iter=max_iter, diis_space=diis_space,
+                         verbose=verbose)
     _reject_smeared_frozen_exchange(ks, smearing)
     X = canonical_orthonormalizer(ks.S, lindep_thresh)
     P0 = density_from_guess(ks, guess, X)

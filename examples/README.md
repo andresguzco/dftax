@@ -10,9 +10,12 @@ Runnable from the repo root (`uv run python examples/<file>.py`):
 | `04_density_fitting.py` | exact ERI vs RI density fitting vs streamed + screened DF |
 | `05_batched.py` | batched KS over many geometries (vmap), energies + analytic forces |
 | `06_properties.py` | response properties: dipole, polarizability, IR spectrum, alchemy |
+| `07_silicon_periodic.py` | bulk silicon: Gaussian basis at Gamma and on a k-mesh, plane waves; forces, pressure, gaps |
 
-All are PySCF-free and follow the same pattern: build with
-`KS(mol, xc, grid=..., coulomb=...)`, then solve with `scf` (or `minimize`).
+All follow the same pattern: build with `KS(mol, xc, grid=..., coulomb=...)`,
+then solve with `scf` (or `minimize`). The molecular ones are PySCF-free; the
+periodic one reads the GTH tables from an installed PySCF
+(`pip install dftax[periodic]`).
 For GPU, install the CUDA extra (`uv sync --extra cuda12`).
 
 > The rendered, executed versions of these examples (plus geometry

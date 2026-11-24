@@ -31,9 +31,11 @@ from dftax.energy.xc import XCFunctional
 from dftax.basis.loader import build_basis_data
 from dftax.grid import Becke, becke, becke_grid, becke_grid_size, points
 from dftax.integrals import overlap_matrix
+from dftax.integrals.eri4c import eri4c_matrix_bucketed, plan_eri4c
 from dftax.ks.energy import KS, System, _resolve_chunk, _resolve_df_chunk
 from dftax.ks.scf import KSResult
 from dftax.ks.terms import (
+    ExactCoulomb,
     ExternalCoulombSpec,
     PackedDFForcesCoulomb,
     _metric_pinv,
@@ -376,9 +378,13 @@ def forces(
         nao_final,
     )
 
+    exact_eri = aux_t is None
+    eri_plan = plan_eri4c(basis_t) if exact_eri else None
+    omega_x = float(getattr(xc, "omega", 0.0)) if hf_lr != 0.0 else None
+
     def energy(coords: Float[Array, "n_atom 3"]) -> Array:
         basis = eqx.tree_at(lambda b: b.centers, basis_t, coords[atom_idx])
-        spec = None
+        spec = ExternalCoulombSpec() if exact_eri else None
         if aux_t is not None:
             aux_basis = eqx.tree_at(lambda b: b.centers, aux_t, coords[aux_atom_idx])
             # Screening rides in the slab plans on the streamed path (a traced
@@ -399,6 +405,16 @@ def forces(
             xc, grid=points(gc, gw, chunk=xc_chunk), coulomb=spec, spin=spin,
             dispersion=dispersion,
         )
+        if exact_eri:
+            ks = eqx.tree_at(
+                lambda k: k.coulomb, ks,
+                ExactCoulomb(
+                    eri=eri4c_matrix_bucketed(basis, plan=eri_plan), hf_coeff=hf_ax,
+                    eri_lr=(None if omega_x is None
+                            else eri4c_matrix_bucketed(basis, omega=omega_x, plan=eri_plan)),
+                    hf_coeff_lr=hf_lr,
+                ),
+            )
         if slab_plans is not None:
             # The streamed RI-K's custom_vjp differentiates wrt P only, and
             # the flat element streaming is the slow engine under grad; swap

@@ -59,6 +59,7 @@ nav:
           - Density fitting & streaming: examples/density-fitting.ipynb
           - Properties, dipole to IR: examples/properties.ipynb
           - Implicit differentiation: examples/implicit-diff.ipynb
+          - "Crystals: silicon two ways": examples/periodic.ipynb
   - Guides:
       - Coulomb backends: tutorials/coulomb-backends.md
       - Forces: tutorials/forces.md

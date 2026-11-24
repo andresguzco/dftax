@@ -8,7 +8,9 @@ on a k-mesh. The plane-wave engine expands the orbitals in plane waves up to
 a kinetic-energy cutoff. Both use the same pseudopotentials, so on a fine
 enough grid and a complete enough basis they agree, and each is checked
 against an independent code: the Gaussian engine against PySCF, the plane
-waves against GPAW (see [Accuracy](#accuracy)).
+waves against GPAW (see [Accuracy](#accuracy)). The example
+[Crystals: silicon two ways](../examples/periodic.ipynb) runs both engines
+end to end.
 
 The GTH tables are CP2K's files, which are GPL-2.0 and therefore not shipped
 with dftax. `pip install dftax[periodic]` installs PySCF, whose copies are

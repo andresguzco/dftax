@@ -156,9 +156,21 @@ and the DF tensor across devices, over the GPUs of one node or, after
 [Coulomb backends](tutorials/coulomb-backends.md) page has the full ladder and a
 backend-choice table.
 
+## 8. Crystals
+
+A periodic `Cell` (`dftax.pbc`) adds lattice vectors and a GTH
+pseudopotential to the atoms, and the same verbs apply. In a Gaussian basis,
+`KS(cell, xc, grid=uniform(mesh=...))` is the Gamma-point functional, solved
+by any of the solvers above; `kpoint_ks(cell, xc, grid=..., kpts=kmesh(4, 4, 4))`
+puts it on a k-mesh, and `scf(..., smearing=fermi())` handles metals. In plane
+waves, `scf_pw(cell, xc, planewaves(ecut), kpts=...)`. `forces` and `stress`
+take the result of any of them. The [Periodic systems](tutorials/periodic.md)
+guide has the details, including which engine suits which cell.
+
 ## Next steps
 
 Read [Forces](tutorials/forces.md) and [Properties](tutorials/properties.md) for
-the gradient toolbox, or jump to the [API reference](api/build.md). The
+the gradient toolbox, [Periodic systems](tutorials/periodic.md) for crystals,
+or jump to the [API reference](api/build.md). The
 [FAQ](faq.md) and [Tips](tips.md) collect the practical lore (convergence,
 grids, performance).

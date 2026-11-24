@@ -22,7 +22,8 @@ not shipped with dftax).
 
 - Closed- and open-shell (spin-polarized) DFT through one spin-stacked `KS`
   functional; LDA, PBE, PBE0, B3LYP, CAM-B3LYP, ωB97X, ωB97X-V and ωB97M-V
-  (with VV10 nonlocal correlation), and r2SCAN, with orbital bases up to 5Z/6Z
+  (with VV10 nonlocal correlation), the long-range-corrected ωB97 and
+  LC-BLYP, and r2SCAN, with orbital bases up to 5Z/6Z
   (h and i shells).
 - Solvers for every regime: on-device DIIS SCF (optional level shifting and
   ADIIS acceleration), trust-region Newton (`newton`, saddle-robust

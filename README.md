@@ -59,7 +59,8 @@ jax.config.update("jax_enable_x64", True)   # DFT energies want float64
 
 from dftax import KS, Molecule, scf
 from dftax.energy.xc import PBE   # or functional("..."): LDA, PBE0, B3LYP,
-                                  # CAM-B3LYP, wB97X(-V), wB97M-V, r2SCAN
+                                  # CAM-B3LYP, wB97, wB97X(-V), wB97M-V,
+                                  # LC-BLYP, r2SCAN
 
 mol = Molecule.from_xyz("O 0 0 0; H 0.757 0.587 0; H -0.757 0.587 0", "sto-3g")
 res = scf(KS(mol, PBE()))            # DIIS SCF -> KSResult

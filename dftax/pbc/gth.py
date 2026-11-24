@@ -190,3 +190,96 @@ def vloc_G(G2, zion, rloc, cloc):
             + cloc[2] * (15.0 - 10.0 * x + x ** 2)
             + cloc[3] * (105.0 - 105.0 * x + 21.0 * x ** 2 - x ** 3))
     return coul + (2.0 * jnp.pi) ** 1.5 * rloc ** 3 * gauss * poly
+
+
+def _r2_power_terms(i: int):
+    """The monomials of ``(x^2 + y^2 + z^2)^i``: ``((2p, 2q, 2r), coefficient)``."""
+    import math
+
+    out = []
+    for p in range(i + 1):
+        for q in range(i + 1 - p):
+            r = i - p - q
+            out.append(((2 * p, 2 * q, 2 * r),
+                        math.factorial(i) // (math.factorial(p)
+                                              * math.factorial(q)
+                                              * math.factorial(r))))
+    return out
+
+
+def projector_basis(potentials, coords):
+    """The nonlocal projectors of all atoms as a Gaussian basis, with their
+    coupling matrix: ``(BasisData, H)``, or ``None`` when no atom has any.
+
+    The GTH projectors are Gaussians times a power of ``r``,
+
+        p_i^{lm}(r) = sqrt(2) r^(l + 2(i-1)) exp(-r^2 / (2 r_l^2)) Y_lm
+                      / (r_l^(l + (4i-1)/2) sqrt(Γ(l + (4i-1)/2))) ,
+
+    so the first of a channel is exactly a normalized Gaussian shell of
+    exponent ``1 / (2 r_l^2)``, and the next ones are that shell times
+    ``r^2``, ``r^4`` (cartesian Gaussians of degree ``l + 2``, ``l + 4``)
+    with a ratio of normalizations. Written as a ``BasisData`` whose
+    ``cart2sph`` carries those combinations, their overlaps with the orbital
+    basis come from the same integral code as everything else, and
+
+        V_nl = B H Bᵀ ,   B = <orbital | projector> ,
+
+    with ``H`` block diagonal: ``h^l ⊗ 1`` over the ``m`` of each channel.
+    Functions are ordered (atom, l, i, m).
+    """
+    import math
+
+    from dftax.basis.loader import _block_diag, _cart2sph_blocks, gto_norm
+    from dftax.energy.gto import BasisData, _CART_COMPONENTS, _contracted_norm
+
+    c2s = _cart2sph_blocks()
+    centers, angular, exps, maps, hblocks = [], [], [], [], []
+    max_l = 0
+    for pot, center in zip(potentials, np.asarray(coords, dtype=np.float64)):
+        for l, (r_l, h) in enumerate(pot.projectors):
+            n = h.shape[0]
+            if n == 0:
+                continue
+            alpha = 0.5 / r_l ** 2
+            comps = _CART_COMPONENTS[l]
+            # the cartesian coefficients of the normalized shell, as the
+            # basis loader builds them for a single primitive
+            norm = gto_norm(l, alpha)
+            k = [norm * (_contracted_norm(np.array([alpha]), np.array([norm]), c)
+                         if l <= 1 else 1.0) for c in comps]
+            for i in range(n):
+                deg = l + 2 * i
+                if deg > 6:
+                    raise NotImplementedError(
+                        f"{pot.symbol}: projector l={l}, i={i + 1} needs "
+                        f"cartesian Gaussians of degree {deg}; the integral "
+                        f"engine stops at 6."
+                    )
+                max_l = max(max_l, deg)
+                target = _CART_COMPONENTS[deg]
+                index = {c: j for j, c in enumerate(target)}
+                ratio = r_l ** (-2 * i) * math.sqrt(
+                    math.gamma(l + 1.5) / math.gamma(l + 2 * i + 1.5))
+                M = np.zeros((len(target), 2 * l + 1))
+                for j, (ax, ay, az) in enumerate(comps):
+                    for (px, py, pz), mult in _r2_power_terms(i):
+                        M[index[(ax + px, ay + py, az + pz)]] += (
+                            ratio * mult * k[j] * c2s[l][j])
+                maps.append(M)
+                for c in target:
+                    centers.append(center)
+                    angular.append(c)
+                    exps.append(alpha)
+            hblocks.append(np.kron(h, np.eye(2 * l + 1)))
+    if not maps:
+        return None
+    basis = BasisData(
+        centers=jnp.asarray(np.array(centers)),
+        exponents=jnp.asarray(np.array(exps)[:, None]),
+        coefficients=jnp.ones((len(exps), 1)),
+        angular=jnp.asarray(np.array(angular, dtype=np.int32)),
+        cart2sph=jnp.asarray(_block_diag(maps)),
+        max_l=int(max_l),
+    )
+    return basis, _block_diag(hblocks)

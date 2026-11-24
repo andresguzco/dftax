@@ -869,6 +869,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="examples/periodic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Crystals: silicon two ways
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1063,6 +1091,34 @@
     
   
     Implicit differentiation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="tutorials/periodic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Periodic systems
   
 
     
@@ -1387,6 +1443,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/periodic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Periodic systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1542,7 +1626,9 @@ quantities come from implicit differentiation of the SCF fixed point (CPHF).
 Because it is ordinary JAX, a DFT calculation can sit inside a larger
 differentiable or machine-learning pipeline.</p>
 <p>The runtime is self-contained: pure JAX/Equinox, with no <code>libcint</code>, <code>libxc</code>,
-or Maple. PySCF appears only as a test-time reference oracle.</p>
+or Maple. PySCF appears only as a test-time reference oracle (and, for
+periodic cells, as the source of the GTH table files, which are GPL-2.0 and
+not shipped with dftax).</p>
 <h2 id="highlights">Highlights<a class="headerlink" href="#highlights" title="Permanent link">¤</a></h2>
 <ul>
 <li>Closed- and open-shell (spin-polarized) DFT through one spin-stacked <code>KS</code>
@@ -1565,6 +1651,11 @@ or Maple. PySCF appears only as a test-time reference oracle.</p>
 <li>Analytic forces (Pulay terms included, and Mermin forces under smearing),
   implicit-diff SCF response (CPHF), dipole, polarizability, Hessian,
   frequencies, IR/Raman, and alchemical derivatives.</li>
+<li>Periodic systems: crystals with GTH pseudopotentials in a Gaussian basis
+  (at the Gamma point, where every molecular solver runs unchanged, or on a
+  k-mesh with Fermi smearing for metals) or in plane waves, with forces and
+  the stress tensor; checked against PySCF and GPAW
+  (<a href="tutorials/periodic/">guide</a>).</li>
 <li>Batched energies and forces over many geometries via <code>vmap</code>.</li>
 <li>Multi-GPU: one <code>mesh()</code> value shards the quadrature and the DF tensors
   across a device mesh, still fully differentiable.</li>
@@ -1573,6 +1664,7 @@ or Maple. PySCF appears only as a test-time reference oracle.</p>
 <h2 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">¤</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>dftax<span class="w">            </span><span class="c1"># CPU</span>
 pip<span class="w"> </span>install<span class="w"> </span>dftax<span class="o">[</span>cuda12<span class="o">]</span><span class="w">    </span><span class="c1"># + CUDA 12 jaxlib (Linux GPU)</span>
+pip<span class="w"> </span>install<span class="w"> </span>dftax<span class="o">[</span>periodic<span class="o">]</span><span class="w">  </span><span class="c1"># + the GTH tables for periodic cells</span>
 </code></pre></div>
 <h2 id="quick-example">Quick example<a class="headerlink" href="#quick-example" title="Permanent link">¤</a></h2>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
@@ -1600,11 +1692,14 @@ whole mental model. Then the <a href="examples/water/">examples gallery</a>
 <li><a href="tutorials/batched/">Batched evaluation</a>: <code>vmap</code> over many geometries.</li>
 <li><a href="tutorials/properties/">Properties</a>: dipole, polarizability, IR/Raman, alchemy.</li>
 <li><a href="tutorials/implicit-diff/">Implicit differentiation</a>: CPHF response, analytic polarizability.</li>
+<li><a href="tutorials/periodic/">Periodic systems</a>: crystals in a Gaussian basis or plane waves, k-points, stress.</li>
 <li><a href="api/build/">API reference</a> · <a href="faq/">FAQ</a> · <a href="tips/">Tips</a></li>
 </ul>
 <p>Accuracy and performance records live in
-<a href="https://github.com/andresguzco/dftax/blob/main/scripts/bench/BENCHMARKS.md"><code>scripts/bench/BENCHMARKS.md</code></a>
-and <a href="https://github.com/andresguzco/dftax/blob/main/scripts/gpu/GPU_VALIDATION.md"><code>scripts/gpu/GPU_VALIDATION.md</code></a>.
+<a href="https://github.com/andresguzco/dftax/blob/main/scripts/bench/BENCHMARKS.md"><code>scripts/bench/BENCHMARKS.md</code></a>,
+<a href="https://github.com/andresguzco/dftax/blob/main/scripts/gpu/GPU_VALIDATION.md"><code>scripts/gpu/GPU_VALIDATION.md</code></a>
+and, for periodic systems,
+<a href="https://github.com/andresguzco/dftax/blob/main/scripts/pbc/BASELINES.md"><code>scripts/pbc/BASELINES.md</code></a>.
 The examples are also plain scripts in
 <a href="https://github.com/andresguzco/dftax/tree/main/examples"><code>examples/</code></a>.</p>
 

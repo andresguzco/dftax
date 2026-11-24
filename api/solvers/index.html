@@ -780,6 +780,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/periodic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Crystals: silicon two ways
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -974,6 +1002,34 @@
     
   
     Implicit differentiation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/periodic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Periodic systems
   
 
     
@@ -1507,6 +1563,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../periodic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Periodic systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1910,7 +1994,13 @@ energies through level crossings); <code>None</code> is the aufbau fill.</p>
 <span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">guess</span><span class="o">=</span><span class="n">sad</span><span class="p">())</span>               <span class="c1"># fewer iterations</span>
 <span class="n">res</span><span class="o">.</span><span class="n">e_tot</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">P</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>       <span class="c1"># P is spin-stacked</span>
 </code></pre></div>
-</details>
+</details>        <p>A periodic cell at a k-mesh (a :class:<code>~dftax.pbc.kpoints.KPointKS</code>,
+from :func:<code>~dftax.pbc.kpoint_ks</code>) is solved by
+:func:<code>~dftax.pbc.kpoints.scf_k</code> with <code>smearing</code>, the tolerances,
+<code>max_iter</code>, <code>diis_space</code> and <code>verbose</code> passed on; it starts from
+the core Hamiltonian, keeps its own linear-dependence threshold (PySCF's)
+and takes no <code>guess</code>, <code>accel</code> or <code>level_shift</code>.</p>
+
 
     </div>
 

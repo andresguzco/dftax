@@ -430,6 +430,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#8-crystals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Crystals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#next-steps" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -915,6 +926,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../examples/periodic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Crystals: silicon two ways
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1109,6 +1148,34 @@
     
   
     Implicit differentiation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/periodic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Periodic systems
   
 
     
@@ -1433,6 +1500,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/periodic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Periodic systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1705,9 +1800,19 @@ and the DF tensor across devices, over the GPUs of one node or, after
 <code>distributed()</code>, of a whole multi-node allocation). The
 <a href="../tutorials/coulomb-backends/">Coulomb backends</a> page has the full ladder and a
 backend-choice table.</p>
+<h2 id="8-crystals">8. Crystals<a class="headerlink" href="#8-crystals" title="Permanent link">¤</a></h2>
+<p>A periodic <code>Cell</code> (<code>dftax.pbc</code>) adds lattice vectors and a GTH
+pseudopotential to the atoms, and the same verbs apply. In a Gaussian basis,
+<code>KS(cell, xc, grid=uniform(mesh=...))</code> is the Gamma-point functional, solved
+by any of the solvers above; <code>kpoint_ks(cell, xc, grid=..., kpts=kmesh(4, 4, 4))</code>
+puts it on a k-mesh, and <code>scf(..., smearing=fermi())</code> handles metals. In plane
+waves, <code>scf_pw(cell, xc, planewaves(ecut), kpts=...)</code>. <code>forces</code> and <code>stress</code>
+take the result of any of them. The <a href="../tutorials/periodic/">Periodic systems</a>
+guide has the details, including which engine suits which cell.</p>
 <h2 id="next-steps">Next steps<a class="headerlink" href="#next-steps" title="Permanent link">¤</a></h2>
 <p>Read <a href="../tutorials/forces/">Forces</a> and <a href="../tutorials/properties/">Properties</a> for
-the gradient toolbox, or jump to the <a href="../api/build/">API reference</a>. The
+the gradient toolbox, <a href="../tutorials/periodic/">Periodic systems</a> for crystals,
+or jump to the <a href="../api/build/">API reference</a>. The
 <a href="../faq/">FAQ</a> and <a href="../tips/">Tips</a> collect the practical lore (convergence,
 grids, performance).</p>
 

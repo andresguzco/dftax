@@ -17,7 +17,7 @@ Hermitian Rayleigh-Ritz problem.
 from __future__ import annotations
 
 import time
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import equinox as eqx
 import jax
@@ -26,6 +26,11 @@ import numpy as np
 
 from dftax.pbc.lattice import gvectors, volume
 from dftax.pbc.pw.basis import PlaneWaves, monkhorst_pack
+
+if TYPE_CHECKING:
+    from dftax.energy.xc import XCFunctional
+    from dftax.ks.scf import FermiSpec
+    from dftax.pbc.cell import Cell
 from dftax.pbc.pw.energy import (
     PWModel, apply_h, build_model, density, energy_terms, initial_density,
     potential, projector_matrices, wavevectors,
@@ -168,9 +173,10 @@ class PWResult(NamedTuple):
     mu: float | None = None    # Fermi level under smearing
 
 
-def scf_pw(cell, xc, pw: PlaneWaves, *, kpts=None,
+def scf_pw(cell: Cell, xc: XCFunctional, pw: PlaneWaves, *,
+           kpts: tuple | None = None,
            nbands: int | None = None, e_tol: float = 1e-9,
-           smearing=None,
+           smearing: FermiSpec | float | None = None,
            d_tol: float = 1e-6, max_iter: int = 100, mixing: float = 0.5,
            kerker: float | None = 1.5, n_iter: int = 4, seed: int = 0,
            model: PWModel | None = None,
@@ -190,9 +196,11 @@ def scf_pw(cell, xc, pw: PlaneWaves, *, kpts=None,
             (Hartree) as a float; ``None`` is the insulator fill.
         nbands: bands per ``k`` (default: occupied plus a tenth, at least
             4; with smearing a fifth, at least 8).
-        e_tol, d_tol: convergence of the energy (Ha) and of the density
-            residual (electrons, ``∫|ρ_out - ρ_in|``).
-        mixing, kerker: Pulay step and Kerker wave vector (None: plain).
+        e_tol: convergence of the energy (Ha).
+        d_tol: convergence of the density residual (electrons,
+            ``∫|ρ_out - ρ_in|``).
+        mixing: the Pulay step.
+        kerker: the Kerker wave vector (None: plain Pulay).
         n_iter: eigensolver steps per SCF iteration.
         model: the plane-wave set of an earlier result (`result.model`) to
             keep, at this cell's atoms and lattice: finite differences at a

@@ -31,7 +31,8 @@ class PlaneWaves:
     mesh: tuple[int, int, int] | None = None
 
 
-def planewaves(ecut: float, *, mesh=None) -> PlaneWaves:
+def planewaves(ecut: float, *,
+               mesh: tuple[int, int, int] | None = None) -> PlaneWaves:
     """Plane waves up to the kinetic energy ``ecut`` (Hartree).
 
     Args:

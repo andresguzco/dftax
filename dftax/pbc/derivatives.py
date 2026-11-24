@@ -26,8 +26,17 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from typing import TYPE_CHECKING
+
 from dftax.pbc.build import CellAt, Uniform, cell_fields, plan_cell
 from dftax.pbc.lattice import volume
+
+if TYPE_CHECKING:
+    from dftax.energy.xc import XCFunctional
+    from dftax.ks.scf import KSResult
+    from dftax.pbc.cell import Cell
+    from dftax.pbc.kpoints import KResult
+    from dftax.pbc.pw import PWResult
 
 
 def _frozen_density(result, S0):
@@ -98,7 +107,9 @@ def _need_grid(grid):
                         "grid=uniform(...) of the energy calculation.")
 
 
-def cell_forces(cell, xc, result, *, grid: Uniform | None = None,
+def cell_forces(cell: Cell, xc: XCFunctional,
+                result: KSResult | KResult | PWResult | tuple, *,
+                grid: Uniform | None = None,
                 spin: int | None = None) -> Float[Array, "n_atom 3"]:
     """Forces on the atoms of a cell, ``-dE/dR`` (Ha/Bohr), ``(n_atom, 3)``.
 
@@ -122,7 +133,9 @@ def cell_forces(cell, xc, result, *, grid: Uniform | None = None,
     return -jax.grad(energy)(coords0, a0)
 
 
-def stress(cell, xc, result, *, grid: Uniform | None = None,
+def stress(cell: Cell, xc: XCFunctional,
+           result: KSResult | KResult | PWResult | tuple, *,
+           grid: Uniform | None = None,
            spin: int | None = None) -> Float[Array, "3 3"]:
     """Stress tensor of a cell, ``(1/Ω) ∂E/∂ε`` (Ha/Bohr^3), ``(3, 3)``.
 

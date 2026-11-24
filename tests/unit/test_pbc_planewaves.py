@@ -161,3 +161,33 @@ def test_stress_matches_finite_differences(si2_scf):
              for s in (1, -1)]
         np.testing.assert_allclose(sigma[i, j] * (1 if i == j else 2),
                                    (e[0] - e[1]) / (2 * h) / vol, atol=1e-7)
+
+
+def test_smeared_stress_matches_finite_differences():
+    """A metal (fcc aluminium, Fermi smearing, a k-mesh): the stress of the
+    free energy at a fixed plane-wave set against finite differences."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parents[2] / "scripts" / "pbc"))
+    from systems import ANGSTROM_TO_BOHR, systems
+
+    sp = systems()["al4"]
+    coords, a = sp.cart * ANGSTROM_TO_BOHR, sp.a * ANGSTROM_TO_BOHR
+
+    def solve(R, L, model=None):
+        cell = Cell(list(sp.symbols), R, L, "gth-szv", "gth-pade")
+        res = scf_pw(cell, LDA(), planewaves(6.0), kmesh=(2, 2, 2),
+                     smearing=0.01, model=model, e_tol=1e-11, d_tol=1e-8)
+        assert res.converged
+        return cell, res
+
+    cell, res = solve(coords, a)
+    sigma = np.asarray(pw_stress(cell, res))
+    h = 1e-3
+    eps = np.zeros((3, 3))
+    eps[0, 0] = h
+    e = [solve(coords @ (np.eye(3) + s * eps).T, a @ (np.eye(3) + s * eps).T,
+               res.model)[1].e_tot for s in (1, -1)]
+    np.testing.assert_allclose(sigma[0, 0], (e[0] - e[1]) / (2 * h)
+                               / abs(np.linalg.det(a)), atol=1e-7)

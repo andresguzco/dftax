@@ -111,7 +111,8 @@ bands (by default a tenth more than occupied, a fifth under smearing).
 
 Two things the baselines showed. Gaussian basis sets need care for
 stresses: in alpha-quartz the pressure is +6.0 GPa with `gth-dzvp`, +0.3
-GPa with `gth-tzv2p` and -4.4 GPa in plane waves, so equations of state of
+GPa with `gth-tzv2p` and -4.4 GPa in plane waves (in dftax and GPAW
+alike), so equations of state of
 oxides want at least TZV2P or plane waves. And `gth-dzvp` is nearly
 linearly dependent in fcc aluminium (the smallest overlap eigenvalue is
 2e-10 at some k), which the canonical orthogonalization handles but which

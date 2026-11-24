@@ -7,10 +7,12 @@
 #
 #   sbatch --output=$SCRATCH/dftax-pbc/logs/%x-%j.out scripts/pbc/ref_baselines_pyscf.sbatch
 #
-# Cheapest first, so the early results do not wait for quartz.
+# Cheapest first, so the early results do not wait for quartz. Runs with
+# forces converge the orbital gradient to 1e-8: PySCF's default,
+# sqrt(conv_tol), leaves force errors near 1e-6 Ha/Bohr (measured on Si8).
 #SBATCH --job-name=pbc-base-pyscf
 #SBATCH --account=aip-necludov
-#SBATCH --partition=cpubase_bycore_b2
+#SBATCH --partition=cpubase_bynode_b2
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=250G
 #SBATCH --time=12:00:00
@@ -35,9 +37,9 @@ run() {
 }
 
 run pyscf_si64_lda               si64 --mesh 66 66 66
-run pyscf_si64_lda_rattled       si64 --mesh 66 66 66 --rattle 0.05 --forces
+run pyscf_si64_lda_rattled       si64 --mesh 66 66 66 --rattle 0.05 --forces --conv-tol-grad 1e-8
 run pyscf_al32_lda_k222          al32 --kmesh 2 2 2 --smearing 0.005 --mesh 42 42 42
-run pyscf_al32_lda_k222_rattled  al32 --kmesh 2 2 2 --smearing 0.005 --mesh 42 42 42 --rattle 0.05 --forces
+run pyscf_al32_lda_k222_rattled  al32 --kmesh 2 2 2 --smearing 0.005 --mesh 42 42 42 --rattle 0.05 --forces --conv-tol-grad 1e-8
 run pyscf_quartz72_lda           quartz72 --mesh 122 122 134
 run pyscf_quartz72_lda_rattled   quartz72 --mesh 122 122 134 --rattle 0.05
 exit $fail

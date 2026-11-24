@@ -81,6 +81,10 @@ def run(args) -> dict:
         "e_extrapolated": float(atoms.get_potential_energy() / Hartree),
         "seconds_scf": time.perf_counter() - t0,
     }
+    # band edges over the k-mesh (by electron count, as GPAW takes them)
+    homo, lumo = atoms.calc.get_homo_lumo()
+    out["vbm"], out["cbm"] = float(homo / Hartree), float(lumo / Hartree)
+    out["gap"] = out["cbm"] - out["vbm"]
     if args.forces:
         out["forces"] = (atoms.get_forces() * Bohr / Hartree).tolist()
     if args.stress:

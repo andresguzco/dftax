@@ -32,9 +32,6 @@ import numpy as np
 from jaxtyping import Array, Float, Int
 
 from dftax.energy.gto import BasisData, eval_gto_and_grad, shell_records
-from dftax.integrals.overlap import (
-    _contracted_integral, _kinetic_primitive_3d, _overlap_primitive_3d,
-)
 from dftax.pbc.lattice import lattice_images
 from dftax.utils.vmap import vmap as chunked_vmap
 
@@ -80,24 +77,60 @@ def _value_reach(ls, exps, cmax, precision):
     return r[np.arange(r.shape[0]), last]
 
 
+def _round_up(n: int, step: int) -> int:
+    """``n`` rounded up to a multiple of ``step``: plans of nearby
+    geometries then share their shapes, and so their compiled programs."""
+    return max(step, -(-n // step) * step)
+
+
+def _padded_images(n):
+    """Integer translations as floats, padded with zeros (never referenced)
+    to a multiple of 16 rows."""
+    out = np.zeros((_round_up(len(n), 16), 3))
+    out[:len(n)] = n
+    return jnp.asarray(out)
+
+
+class PairClass(eqx.Module):
+    """The shell triples of one angular-momentum class ``(l_a, l_b)`` of a
+    lattice sum, padded with zero-weight triples."""
+
+    ra: Int[Array, "n"]                      # first cartesian row, bra shell
+    rb: Int[Array, "n"]                      # first cartesian row, ket shell
+    img: Int[Array, "n"]
+    weight: Float[Array, "n"]                # 1, and 0 on the padding
+    swap: Float[Array, "n"]                  # 1 where the transposed block is
+                                             # written too (symmetric plans)
+    anga: tuple = eqx.field(static=True)     # cartesian components, bra
+    angb: tuple = eqx.field(static=True)
+    npa: int = eqx.field(static=True)        # primitives, bra
+    npb: int = eqx.field(static=True)
+
+
 class PairPlan(eqx.Module):
     """The screened terms of a lattice sum ``sum_T <a_i | O | b_j(r - T)>``:
-    ``(i, j, image)`` triples over cartesian rows, sorted by ``(i, j)``.
+    ``(bra shell, ket shell, image)`` triples, by angular-momentum class.
 
-    A symmetric plan (a basis with itself) holds only ``i <= j``.
+    A symmetric plan (a basis with itself) holds only the shell pairs with
+    bra <= ket, and marks the off-diagonal ones for the transposed write.
     """
 
-    i: Int[Array, "n"]
-    j: Int[Array, "n"]
-    img: Int[Array, "n"]
+    classes: tuple[PairClass, ...]
     images: Float[Array, "nT 3"]             # integer translations, as floats
+    na: int = eqx.field(static=True)         # cartesian rows, bra basis
+    nb: int = eqx.field(static=True)
     symmetric: bool = eqx.field(static=True)
+
+
+def _shell_nprim(basis):
+    return np.array([r[3] for r in shell_records(basis.angular,
+                                                 basis.exponents)])
 
 
 def plan_pairs(basis: BasisData, a, precision: float = 1e-12,
                other: BasisData | None = None) -> PairPlan:
-    """The triples of a lattice-summed one-electron matrix of ``basis`` with
-    ``other`` (default: itself, a symmetric matrix).
+    """The shell triples of a lattice-summed one-electron matrix of
+    ``basis`` with ``other`` (default: itself, a symmetric matrix).
 
     Two shells whose most diffuse primitives ``α`` and ``β`` sit ``d`` apart
     overlap as ``exp(-μ d^2)``, ``μ = αβ/(α+β)``, times a polynomial of
@@ -109,6 +142,7 @@ def plan_pairs(basis: BasisData, a, precision: float = 1e-12,
     other = basis if sym else other
     la, ra, ca_n, ca, ea, cma = _shell_table(basis)
     lb, rb, cb_n, cb, eb, cmb = _shell_table(other)
+    pa, pb = _shell_nprim(basis), _shell_nprim(other)
     amin, bmin = _most_diffuse(ea, cma), _most_diffuse(eb, cmb)
     log_eps = float(np.log(precision))
 
@@ -145,33 +179,35 @@ def plan_pairs(basis: BasisData, a, precision: float = 1e-12,
         J_.append(J)
         t_.append(t)
     I_, J_, t_ = (np.concatenate(x) for x in (I_, J_, t_))
+    used, t_ = np.unique(t_, return_inverse=True)
+    t_ = t_.reshape(-1)
 
-    # shell triples to cartesian rows; within one shell of a symmetric plan,
-    # only the upper triangle
-    rows_i, rows_j, rows_t = [], [], []
-    for ci in np.unique(ca_n[I_]):
-        for cj in np.unique(cb_n[J_]):
-            sel = (ca_n[I_] == ci) & (cb_n[J_] == cj)
+    ang_a, ang_b = np.asarray(basis.angular), np.asarray(other.angular)
+    classes = []
+    for l1 in np.unique(la[I_]):
+        for l2 in np.unique(lb[J_]):
+            sel = (la[I_] == l1) & (lb[J_] == l2)
             if not sel.any():
                 continue
-            ii = ra[I_[sel]][:, None, None] + np.arange(ci)[None, :, None]
-            jj = rb[J_[sel]][:, None, None] + np.arange(cj)[None, None, :]
-            ii, jj, tt = np.broadcast_arrays(ii, jj, t_[sel][:, None, None])
-            m = np.ones(ii.shape, dtype=bool)
-            if sym:
-                m = ~((I_[sel] == J_[sel])[:, None, None] & (ii > jj))
-            rows_i.append(ii[m])
-            rows_j.append(jj[m])
-            rows_t.append(tt[m])
-    i, j, t = (np.concatenate(x) for x in (rows_i, rows_j, rows_t))
-    order = np.lexsort((t, j, i))
-    used, t = np.unique(t[order], return_inverse=True)
+            I, J, t = I_[sel], J_[sel], t_[sel]
+            n, npad = I.size, _round_up(I.size, 512)
+            # padding: the class's first triple again, weight 0
+            pad = lambda x: np.concatenate([x, np.full(npad - n, x[0])])
+            weight = np.concatenate([np.ones(n), np.zeros(npad - n)])
+            swap = (I != J).astype(np.float64) if sym else np.zeros(n)
+            r1, r2 = int(ra[I[0]]), int(rb[J[0]])
+            classes.append(PairClass(
+                ra=jnp.asarray(pad(ra[I]), dtype=jnp.int32),
+                rb=jnp.asarray(pad(rb[J]), dtype=jnp.int32),
+                img=jnp.asarray(pad(t), dtype=jnp.int32),
+                weight=jnp.asarray(weight),
+                swap=jnp.asarray(np.concatenate([swap, np.zeros(npad - n)])),
+                anga=tuple(map(tuple, ang_a[r1:r1 + ca_n[I[0]]].tolist())),
+                angb=tuple(map(tuple, ang_b[r2:r2 + cb_n[J[0]]].tolist())),
+                npa=int(pa[I].max()), npb=int(pb[J].max())))
     return PairPlan(
-        i=jnp.asarray(i[order], dtype=jnp.int32),
-        j=jnp.asarray(j[order], dtype=jnp.int32),
-        img=jnp.asarray(t.reshape(-1), dtype=jnp.int32),
-        images=jnp.asarray(cand[used], dtype=jnp.float64),
-        symmetric=sym)
+        classes=tuple(classes), images=_padded_images(cand[used]),
+        na=int(ra[-1] + ca_n[-1]), nb=int(rb[-1] + cb_n[-1]), symmetric=sym)
 
 
 class ValuePlan(eqx.Module):
@@ -237,7 +273,7 @@ def plan_values(basis: BasisData, a, coords, *, block: int = 512,
                 < reach[None, :, None])                      # (nb, nsh, nT)
         keep = np.repeat(keep, ncomp, axis=1)                # rows, in order
         lists.extend(np.nonzero(k) for k in keep)
-    L = max(1, max(f.size for f, _ in lists))
+    L = _round_up(max(f.size for f, _ in lists), 128)
     ncart = int(row0[-1] + ncomp[-1])
     fun = np.full((nblk, L), ncart - 1, dtype=np.int32)     # sorted padding
     img = np.zeros((nblk, L), dtype=np.int32)
@@ -247,45 +283,81 @@ def plan_values(basis: BasisData, a, coords, *, block: int = 512,
     used, img = np.unique(img, return_inverse=True)
     return ValuePlan(
         fun=jnp.asarray(fun), img=jnp.asarray(img.reshape(nblk, L), dtype=jnp.int32),
-        mask=jnp.asarray(mask), images=jnp.asarray(cand[used], dtype=jnp.float64),
+        mask=jnp.asarray(mask), images=_padded_images(cand[used]),
         npts=int(ng), block=int(block))
 
 
-def morton_order(mesh) -> np.ndarray:
-    """The points of a uniform mesh (flattened in C order) along a Z-order
-    curve, ``(N,)``: consecutive points then form compact blocks, which is
-    what the screening of :func:`plan_values` needs."""
-    n1, n2, n3 = (int(n) for n in mesh)
-    idx = np.indices((n1, n2, n3)).reshape(3, -1).astype(np.uint64)
-    code = np.zeros(idx.shape[1], dtype=np.uint64)
-    for bit in range(int(max(n1, n2, n3) - 1).bit_length()):
-        for axis in range(3):
-            code |= ((idx[axis] >> np.uint64(bit)) & np.uint64(1)) << np.uint64(
-                3 * bit + 2 - axis)
-    return np.argsort(code, kind="stable")
+def _box_edge(n: int) -> int:
+    """Points along one axis of a box: 6 to 10, the fewest repeats needed
+    to fill ``n``, the larger edge on a tie."""
+    return min(range(10, 5, -1), key=lambda b: -(-n // b) * b - n)
+
+
+def box_layout(mesh):
+    """The points of a uniform mesh in blocks of consecutive points, each
+    block one index-aligned box of the mesh (6 to 10 points a side, chosen
+    per axis to fit the mesh): compact, which is what the screening of
+    :func:`plan_values` needs.
+
+    Returns ``(order, valid, block)``: the mesh index (C order) of every
+    position, whether the position is a mesh point of its own, and the
+    points per block. A box at the upper edge of an axis the box does not
+    divide is filled with repeats of its last plane (``valid`` False, to be
+    given zero weight), so the repeats stay inside the box.
+    """
+    n = np.array([int(m) for m in mesh])
+    box = np.array([_box_edge(int(m)) for m in n])
+    nb = -(-n // box)
+    boxes = np.indices(tuple(nb)).reshape(3, -1)            # (3, nbox)
+    local = np.indices(tuple(box)).reshape(3, -1)           # (3, block)
+    g = boxes[:, :, None] * box[:, None, None] + local[:, None, :]
+    valid = np.all(g < n[:, None, None], axis=0)
+    g = np.minimum(g, (n - 1)[:, None, None])
+    order = (g[0] * n[1] + g[1]) * n[2] + g[2]
+    return order.reshape(-1), valid.reshape(-1), int(np.prod(box))
 
 
 # ---------------------------------------------------------------------------
 # Traced evaluation
 # ---------------------------------------------------------------------------
 
-def _lattice_sum(basis_a, basis_b, shifts, plan: PairPlan, primitive_fn, chunk):
-    """``sum_T <a_i | O | b_j shifted by T>`` over cartesian AOs, ``(na, nb)``."""
-    def one(i, j, t):
-        return _contracted_integral(
-            basis_a.exponents[i], basis_a.coefficients[i],
-            basis_a.centers[i], basis_a.angular[i],
-            basis_b.exponents[j], basis_b.coefficients[j],
-            basis_b.centers[j] + shifts[t], basis_b.angular[j], primitive_fn)
+def _lattice_sums(basis_a, basis_b, shifts, plan: PairPlan, chunk):
+    """``sum_T <a_i | b_j shifted by T>`` and the kinetic twin, over
+    cartesian AOs, ``(na, nb)`` each.
 
-    vals = chunked_vmap(one, in_axes=(0, 0, 0), chunk_size=chunk)(
-        plan.i, plan.j, plan.img)
-    na, nb = basis_a.centers.shape[0], basis_b.centers.shape[0]
-    M = jax.ops.segment_sum(vals, plan.i * nb + plan.j, num_segments=na * nb,
-                            indices_are_sorted=True).reshape(na, nb)
-    if plan.symmetric:
-        M = M + M.T - jnp.diag(jnp.diag(M))
-    return M
+    Each class runs the molecular engine's shell-pair kernel
+    (:func:`~dftax.integrals.eri3c_bucketed._make_st_kernel`: a whole
+    cartesian block per pair from small unrolled tables, cheap to
+    differentiate) on image-shifted ket centers; the blocks of every image
+    are added into the matrix. The map over triples is checkpointed, so a
+    derivative keeps one chunk's intermediates at a time.
+    """
+    from dftax.integrals.eri3c_bucketed import _make_st_kernel
+
+    out = [jnp.zeros((plan.na, plan.nb), dtype=shifts.dtype) for _ in range(4)]
+    for c in plan.classes:
+        nca, ncb = len(c.anga), len(c.angb)
+        la, lb = sum(c.anga[0]), sum(c.angb[0])
+        kern = _make_st_kernel(la, lb, np.array(c.anga), np.array(c.angb))
+        rows = c.ra[:, None] + jnp.arange(nca)[None, :]          # (n, nca)
+        cols = c.rb[:, None] + jnp.arange(ncb)[None, :]
+        Sv, Tv = chunked_vmap(kern, in_axes=(0,) * 6, chunk_size=chunk,
+                              checkpoint=True)(
+            basis_a.centers[c.ra], basis_b.centers[c.rb] + shifts[c.img],
+            basis_a.exponents[c.ra][:, :c.npa],
+            basis_b.exponents[c.rb][:, :c.npb],
+            basis_a.coefficients[rows][:, :, :c.npa],
+            basis_b.coefficients[cols][:, :, :c.npb])
+        r, k = rows[:, :, None], cols[:, None, :]
+        for n, (vals, w) in enumerate(((Sv, c.weight), (Tv, c.weight),
+                                       (Sv, c.weight * c.swap),
+                                       (Tv, c.weight * c.swap))):
+            out[n] = out[n].at[r, k].add(vals * w[:, None, None])
+    if not plan.symmetric:
+        return out[0], out[1]
+    # a symmetric plan holds each off-diagonal shell pair once: its blocks
+    # are written again, transposed
+    return out[0] + out[2].T, out[1] + out[3].T
 
 
 def _to_final(M, basis_a, basis_b):
@@ -297,29 +369,26 @@ def _to_final(M, basis_a, basis_b):
 
 
 @eqx.filter_jit
-def overlap_kinetic(basis: BasisData, a, plan: PairPlan, chunk: int = 32768):
+def overlap_kinetic(basis: BasisData, a, plan: PairPlan, chunk: int = 4096):
     """Lattice-summed overlap and kinetic matrices at the Gamma point.
 
     ``plan`` is :func:`plan_pairs` of the basis with itself; ``chunk``
-    triples are in flight at once.
+    shell triples are in flight at once.
     """
     shifts = plan.images.astype(a.dtype) @ a
-    S = _lattice_sum(basis, basis, shifts, plan, _overlap_primitive_3d, chunk)
-    K = _lattice_sum(basis, basis, shifts, plan, _kinetic_primitive_3d, chunk)
+    S, K = _lattice_sums(basis, basis, shifts, plan, chunk)
     return _to_final(S, basis, basis), _to_final(K, basis, basis)
 
 
 @eqx.filter_jit
 def cross_overlap(basis_a: BasisData, basis_b: BasisData, a, plan: PairPlan,
-                  chunk: int = 32768):
+                  chunk: int = 4096):
     """Lattice-summed overlap ``<a_i | sum_T b_j(r - T)>`` between two bases
     (the orbital basis and the pseudopotential projectors); ``plan`` is
     :func:`plan_pairs` with ``other=basis_b``."""
     shifts = plan.images.astype(a.dtype) @ a
-    return _to_final(
-        _lattice_sum(basis_a, basis_b, shifts, plan, _overlap_primitive_3d,
-                     chunk),
-        basis_a, basis_b)
+    S, _ = _lattice_sums(basis_a, basis_b, shifts, plan, chunk)
+    return _to_final(S, basis_a, basis_b)
 
 
 def block_values(basis: BasisData, shifts, fun, img, mask, pts):

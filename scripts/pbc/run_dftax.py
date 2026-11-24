@@ -28,6 +28,7 @@ from systems import ANGSTROM_TO_BOHR, systems  # noqa: E402
 
 # the functional names of the references (PySCF spelling) in dftax's
 XC = {"lda,vwn": "lda", "lda": "lda", "pbe": "pbe"}
+HARTREE_EV = 27.211386245988
 
 
 def run(args) -> dict:
@@ -45,7 +46,8 @@ def run(args) -> dict:
                 spec.a * ANGSTROM_TO_BOHR, args.basis, args.pseudo)
 
     t0 = time.perf_counter()
-    ks = KS(cell, functional(XC[args.xc]), grid=uniform(mesh=args.mesh))
+    grid = uniform(mesh=args.mesh)
+    ks = KS(cell, functional(XC[args.xc]), grid=grid)
     jax.block_until_ready(ks.hcore)
     t_build = time.perf_counter() - t0
 
@@ -53,7 +55,29 @@ def run(args) -> dict:
     res = scf(ks, e_tol=args.e_tol, d_tol=args.d_tol, max_iter=200)
     t_scf = time.perf_counter() - t0
     P = res.P
-    return {
+    # the streamed grid path takes the Hartree and local-pseudopotential
+    # energies with the XC energy, so only the held path splits the terms
+    # the way the references do
+    summary = {"nuc": float(ks.e_nn)}
+    if type(ks.xc_term).__name__ != "StreamedCellXC":
+        summary.update(
+            e1=float(jnp.sum(jnp.sum(P, axis=0) * ks.hcore)),
+            coul=float(ks.coulomb.energy(P, ks.S, ks.nocc)),
+            exc=float(ks.xc_term.energy(P)))
+    extra = {}
+    if args.forces:
+        t0 = time.perf_counter()
+        extra["forces"] = np.asarray(dftax.forces(
+            cell, functional(XC[args.xc]), res, grid=grid)).tolist()
+        extra["seconds_forces"] = time.perf_counter() - t0
+    if args.stress:
+        from dftax.pbc import stress
+
+        t0 = time.perf_counter()
+        extra["stress"] = np.asarray(stress(
+            cell, functional(XC[args.xc]), res, grid=grid)).tolist()
+        extra["seconds_stress"] = time.perf_counter() - t0
+    return extra | {
         "code": f"dftax {dftax.__version__}",
         "system": args.system,
         "natom": len(cell.symbols),
@@ -69,12 +93,10 @@ def run(args) -> dict:
         "converged": bool(res.converged),
         "n_iter": int(res.n_iter),
         "e_tot": float(res.e_tot),
-        "summary": {
-            "nuc": float(ks.e_nn),
-            "e1": float(jnp.sum(jnp.sum(P, axis=0) * ks.hcore)),
-            "coul": float(ks.coulomb.energy(P, ks.S, ks.nocc)),
-            "exc": float(ks.xc_term.energy(P)),
-        },
+        # band edges at Gamma (the only k-point): HOMO and LUMO
+        "vbm": float(res.mo_energy[0][res.nocc[0] - 1]),
+        "cbm": float(res.mo_energy[0][res.nocc[0]]),
+        "summary": summary,
         "seconds_build": t_build,
         "seconds_scf": t_scf,
     }
@@ -92,6 +114,8 @@ def main():
     p.add_argument("--rattle", type=float, default=0.0)
     p.add_argument("--e-tol", type=float, default=1e-10)
     p.add_argument("--d-tol", type=float, default=1e-7)
+    p.add_argument("--forces", action="store_true")
+    p.add_argument("--stress", action="store_true")
     p.add_argument("--out", default=None)
     args = p.parse_args()
 
@@ -123,8 +147,18 @@ def main():
             f"{k} {v:+.2e}" for k, v in d.items()))
         print(f"per atom: {d['e_tot'] / out['natom']:+.2e} Ha; reference "
               f"{ref['code']}, mesh {ref['mesh']}")
-        print("max |force| in the reference:",
-              float(np.abs(np.asarray(ref.get("forces", [[0.0]]))).max()))
+        for key in ("forces", "stress"):
+            if key in out and key in ref:
+                mine, theirs = np.asarray(out[key]), np.asarray(ref[key])
+                print(f"{key}: max |dftax - reference| "
+                      f"{np.abs(mine - theirs).max():.2e}, max |reference| "
+                      f"{np.abs(theirs).max():.2e} (seconds "
+                      f"{out['seconds_' + key]:.1f})")
+        if "gap" in ref:
+            gap = out["cbm"] - out["vbm"]
+            print(f"gap at Gamma: dftax {gap * HARTREE_EV:.5f} eV, reference "
+                  f"{ref['gap'] * HARTREE_EV:.5f} eV, difference "
+                  f"{gap - ref['gap']:+.2e} Ha")
 
 
 if __name__ == "__main__":

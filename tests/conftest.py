@@ -36,12 +36,10 @@ _SLOW_MODULES = {
     # 212 s: contracts K against the materialized 4-center tensor at two
     # bases. K symmetric / linear in P is covered in the default tier.
     "test_exchange_k_symmetry",
-    # 17 min on 6 CPU cores (the streamed-grid test 474 s, the Si2 energy
-    # 274 s, the lattice-summed matrices 237 s): every basis function is
-    # summed over every lattice image, hundreds of them for the diffuse GTH
-    # exponents. The shared periodic layer (test_pbc_shared, seconds) stays
-    # in the default tier.
-    "test_pbc_gaussian",
+    # nine SCFs of a silicon cell (finite differences of forces and stress;
+    # 25 s on 6 CPU cores). test_pbc_gaussian (37 s since the lattice sums
+    # are screened) stays in the default tier with test_pbc_shared.
+    "test_pbc_derivatives",
 }
 
 # Kept OUT of the slow tier on purpose, because each guards a silent wrong

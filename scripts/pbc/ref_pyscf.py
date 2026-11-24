@@ -56,6 +56,8 @@ def run(args) -> dict:
     mf = dft.KRKS(cell, cell.make_kpts(list(args.kmesh)))
     mf.xc = args.xc
     mf.conv_tol = args.conv_tol
+    if args.conv_tol_grad is not None:          # default: sqrt(conv_tol)
+        mf.conv_tol_grad = args.conv_tol_grad
     mf.max_cycle = 200
     if args.smearing:
         from pyscf.pbc.scf.addons import smearing_
@@ -75,6 +77,8 @@ def run(args) -> dict:
         "xc": args.xc,
         "kmesh": list(args.kmesh),
         "smearing": args.smearing,
+        "conv_tol": args.conv_tol,
+        "conv_tol_grad": args.conv_tol_grad,
         "mesh": [int(n) for n in cell.mesh],
         "ke_cutoff": None if cell.ke_cutoff is None else float(cell.ke_cutoff),
         "rcut": float(cell.rcut),
@@ -87,6 +91,12 @@ def run(args) -> dict:
         "summary": {k: float(np.real(v)) for k, v in mf.scf_summary.items()},
         "seconds_scf": time.perf_counter() - t0,
     }
+    # band edges over the k-mesh: highest level more than half occupied,
+    # lowest level less than half (a metal gives a gap near zero)
+    e = np.concatenate([np.asarray(x).ravel() for x in mf.mo_energy])
+    occ = np.concatenate([np.asarray(x).ravel() for x in mf.mo_occ])
+    out["vbm"], out["cbm"] = float(e[occ > 1.0].max()), float(e[occ < 1.0].min())
+    out["gap"] = out["cbm"] - out["vbm"]
     # under smearing e_tot is the internal energy; the free energy is the
     # variational one and e_zero PySCF's extrapolation to zero width
     for key in ("e_free", "e_zero", "entropy"):
@@ -127,6 +137,9 @@ def main():
     p.add_argument("--rattle", type=float, default=0.0,
                    help="standard deviation of the displacements, Angstrom")
     p.add_argument("--conv-tol", type=float, default=1e-10)
+    p.add_argument("--conv-tol-grad", type=float, default=None,
+                   help="orbital-gradient tolerance (PySCF default: "
+                        "sqrt(conv_tol), which bounds force errors near 1e-6)")
     p.add_argument("--forces", action="store_true")
     p.add_argument("--stress", action="store_true")
     p.add_argument("--out", required=True)

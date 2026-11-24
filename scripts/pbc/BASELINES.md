@@ -43,6 +43,7 @@ Same basis, potential and mesh; `run_dftax.py <system> --ref <json>`.
 | Si8, 7 volumes | 2x2x2 | | <= 1e-8 | | | <= 1.3e-7 |
 | quartz9, 8 volumes | 2x2x2 | | <= 1e-8 | | | <= 1.3e-7 |
 | **Si64** | Gamma | 66^3 | **8.5e-12** | | | |
+| **Si64 rattled** | Gamma | 66^3 | **1.3e-10** | **2.6e-9** (4) | | 4e-11 |
 | **quartz72** | Gamma | 122x122x134 | **2.6e-9** | | | |
 | **quartz72 rattled** | Gamma | 122x122x134 | **2.7e-9** | | | 1.2e-7 |
 | **Al32**, smeared | 2x2x2 | 42^3 | pending | | | |
@@ -57,6 +58,9 @@ is nearly linearly dependent in fcc Al (smallest overlap eigenvalue 1.8e-10
 at some k), and without matching the dropped directions the two codes
 differ by 2.6e-4.
 (3) The PySCF reference stopped at its iteration limit, unconverged.
+(4) Largest reference force 4.3e-2. dftax's DIIS reached `e_tol=1e-11` but
+not `d_tol=1e-8` (its commutator norm) within 200 iterations, as on the
+rattled Si8; the energy, forces and gap are at the reference already.
 
 ## Plane-wave engine against GPAW
 

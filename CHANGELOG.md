@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-24
+
 ### Added
 - **Periodic systems (`dftax.pbc`).** Kohn-Sham DFT of crystals with GTH
   pseudopotentials, LDA and GGA, in two bases:

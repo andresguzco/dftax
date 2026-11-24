@@ -63,6 +63,12 @@ def run(args) -> dict:
         from pyscf.pbc.scf.addons import smearing_
 
         mf = smearing_(mf, sigma=args.smearing, method="fermi")
+    if args.lindep:
+        # canonical orthogonalization at every k, whatever the condition
+        # number (the trigger set to 1), as dftax's scf_k does
+        from pyscf.scf.addons import remove_linear_dep_
+
+        mf = remove_linear_dep_(mf, threshold=args.lindep, lindep=1.0)
 
     t0 = time.perf_counter()
     e_tot = mf.kernel()
@@ -79,6 +85,7 @@ def run(args) -> dict:
         "smearing": args.smearing,
         "conv_tol": args.conv_tol,
         "conv_tol_grad": args.conv_tol_grad,
+        "lindep": args.lindep,
         "mesh": [int(n) for n in cell.mesh],
         "ke_cutoff": None if cell.ke_cutoff is None else float(cell.ke_cutoff),
         "rcut": float(cell.rcut),
@@ -140,6 +147,8 @@ def main():
     p.add_argument("--conv-tol-grad", type=float, default=None,
                    help="orbital-gradient tolerance (PySCF default: "
                         "sqrt(conv_tol), which bounds force errors near 1e-6)")
+    p.add_argument("--lindep", type=float, default=None,
+                   help="canonical-orthogonalization threshold of the overlap")
     p.add_argument("--forces", action="store_true")
     p.add_argument("--stress", action="store_true")
     p.add_argument("--out", required=True)

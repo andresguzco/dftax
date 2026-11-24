@@ -166,18 +166,15 @@ def build_kcell(cell, xc, grid, kpts) -> KPointKS:
                         jnp.asarray(cell.a))
 
 
-def _frozen_density_k(P, S0):
-    """``S -> P``: the density of every k held at its natural orbitals and
-    occupations (fractional under smearing), re-orthonormalized at the
-    moving overlap to first order (``B = 1.5 - 0.5 Φ^H S Φ``, exact in value
-    and derivative at the reference, as for the molecules)."""
-    s, U = jnp.linalg.eigh(S0)
-    s = jnp.clip(s, 1e-12, None)
-    sh = (U * jnp.sqrt(s)[:, None, :]) @ jnp.conj(jnp.swapaxes(U, -1, -2))
-    sih = (U / jnp.sqrt(s)[:, None, :]) @ jnp.conj(jnp.swapaxes(U, -1, -2))
-    f, V = jnp.linalg.eigh(sh @ P @ sh)
-    Phi = jax.lax.stop_gradient(sih @ V)
-    f = jax.lax.stop_gradient(f)
+def _frozen_density_k(C, occ):
+    """``S -> P``: the density of every k held at the SCF's own orbitals
+    ``C`` and occupations (fractional under smearing), re-orthonormalized
+    at the moving overlap to first order (``B = 1.5 - 0.5 C^H S C``, exact
+    in value and derivative at the reference, as for the molecules). The
+    orbitals come from the canonically orthogonalized space, so a near-
+    singular overlap is never inverted here."""
+    Phi = jax.lax.stop_gradient(C)
+    f = jax.lax.stop_gradient(jnp.asarray(occ))
 
     def density(S):
         H = lambda M: jnp.conj(jnp.swapaxes(M, -1, -2))
@@ -192,8 +189,7 @@ def _energy_of_geometry_k(cell, xc, res, grid, kpts):
     plan = plan_cell(cell, xc, grid, None)
     kfrac, kw = (jnp.asarray(x) for x in kpts)
     coords0, a0 = jnp.asarray(cell.atom_coords()), jnp.asarray(cell.a)
-    S0 = kcell_fields(plan, xc, kfrac, kw, coords0, a0).S
-    density = _frozen_density_k(res.P, S0)
+    density = _frozen_density_k(res.C, res.occ)
 
     def energy(coords, a):
         ks = kcell_fields(plan, xc, kfrac, kw, coords, a)
@@ -223,13 +219,27 @@ def kcell_stress(cell, xc, res: "KResult", *, grid, kpts):
 
 
 def _orthonormalizers(S, thresh=1e-8):
-    """Canonical orthonormalizers ``X^k`` (``X^H S X = 1``), the same number
-    of columns for every ``k``: those of eigenvalue above ``thresh`` at the
-    worst ``k``."""
-    s, U = np.linalg.eigh(np.asarray(S))
-    nmo = int(np.min(np.sum(s > thresh, axis=1)))
-    s, U = s[:, -nmo:], U[:, :, -nmo:]
-    return jnp.asarray(U / np.sqrt(s)[:, None, :])
+    """Canonical orthonormalizers ``X^k`` (``X^H S X = 1``) of every ``k``,
+    as PySCF's ``remove_linear_dep_`` builds them: the overlap normalized to
+    a unit diagonal, its eigenvectors of eigenvalue below ``thresh`` dropped
+    (a near-linearly-dependent basis, such as a diffuse one in a
+    close-packed metal). The ``k`` keep different numbers; the shorter ones
+    are padded with zero columns, returned with a mask ``(nk, nmo)`` so the
+    padding is never occupied."""
+    S = np.asarray(S)
+    nk, nao = S.shape[0], S.shape[1]
+    Xs = []
+    for Sk in S:
+        d = 1.0 / np.sqrt(np.diag(Sk).real)
+        s, U = np.linalg.eigh(d[:, None] * Sk * d[None, :])
+        keep = s >= thresh
+        Xs.append(d[:, None] * U[:, keep] / np.sqrt(s[keep]))
+    nmo = max(x.shape[1] for x in Xs)
+    X = np.zeros((nk, nao, nmo), dtype=S.dtype)
+    mask = np.zeros((nk, nmo))
+    for k, x in enumerate(Xs):
+        X[k, :, :x.shape[1]], mask[k, :x.shape[1]] = x, 1.0
+    return jnp.asarray(X), mask
 
 
 def _fermi(eps, w, nelec, sigma, iters=100):
@@ -256,6 +266,7 @@ class KResult(NamedTuple):
     P: jax.Array          # (nk, nao, nao)
     eps: jax.Array        # (nk, nmo)
     occ: jax.Array        # (nk, nmo)
+    C: jax.Array          # (nk, nao, nmo) orbitals (zero columns: dropped)
     mu: float | None
     converged: bool
     n_iter: int
@@ -267,16 +278,23 @@ def _energy_and_fock(ks, P):
 
 
 def scf_k(ks: KPointKS, *, smearing: float | None = None, e_tol=1e-10,
-          d_tol=1e-7, max_iter=100, diis_space=8, verbose=False) -> KResult:
+          d_tol=1e-7, max_iter=100, diis_space=8, verbose=False,
+          lindep: float = 1e-8) -> KResult:
     """SCF of a k-point cell: an insulator (the lowest ``nocc`` bands of every
     k doubly occupied) or, with ``smearing`` (Hartree), Fermi-Dirac
-    occupations with one Fermi level; ``e_tot`` is then the free energy."""
-    X = _orthonormalizers(ks.S)
+    occupations with one Fermi level; ``e_tot`` is then the free energy.
+    ``lindep``: the canonical-orthogonalization threshold (as PySCF's
+    ``remove_linear_dep_``)."""
+    X, keep = _orthonormalizers(ks.S, lindep)
+    # dropped directions get an energy far above every band, so they stay
+    # empty (their orbitals are zero vectors)
+    shift = jnp.asarray(np.where(keep > 0, 0.0, 1e6))
     w = np.asarray(ks.kweights)
     nk, nmo = X.shape[0], X.shape[2]
 
     def diagonalize(F):
         Fo = jnp.conj(jnp.swapaxes(X, -1, -2)) @ F @ X
+        Fo = Fo + shift[:, :, None] * jnp.eye(Fo.shape[-1])[None]
         eps, U = jnp.linalg.eigh(Fo)
         return eps, X @ U
 
@@ -329,4 +347,5 @@ def scf_k(ks: KPointKS, *, smearing: float | None = None, e_tol=1e-10,
         occ, ts, mu = occupy(eps)
         P = density(C, occ)
     return KResult(e_tot=e - ts, energy=e, ts=ts, P=P, eps=eps,
-                   occ=jnp.asarray(occ), mu=mu, converged=converged, n_iter=it)
+                   occ=jnp.asarray(occ), C=C, mu=mu, converged=converged,
+                   n_iter=it)

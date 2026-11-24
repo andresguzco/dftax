@@ -46,8 +46,8 @@ Same basis, potential and mesh; `run_dftax.py <system> --ref <json>`.
 | **Si64 rattled** | Gamma | 66^3 | **1.3e-10** | **2.6e-9** (4) | | 4e-11 |
 | **quartz72** | Gamma | 122x122x134 | **2.6e-9** | | | |
 | **quartz72 rattled** | Gamma | 122x122x134 | **2.7e-9** | | | 1.2e-7 |
-| **Al32**, smeared | 2x2x2 | 42^3 | pending | | | |
-| **Al32 rattled**, smeared | 2x2x2 | 42^3 | pending | pending | | |
+| **Al32**, smeared | 2x2x2 | 42^3 | **1.1e-9** (2, 5) | | | 2e-10 |
+| **Al32 rattled**, smeared | 2x2x2 | 42^3 | **9e-10** (2, 3, 5) | **4.9e-7** (3) | | 6e-9 |
 
 (1) Against a reference converged to `conv_tol_grad=1e-8`. PySCF's default
 `conv_tol_grad = sqrt(conv_tol)` bounds its own force error near 1e-6 (3e-6
@@ -61,6 +61,10 @@ differ by 2.6e-4.
 (4) Largest reference force 4.3e-2. dftax's DIIS reached `e_tol=1e-11` but
 not `d_tol=1e-8` (its commutator norm) within 200 iterations, as on the
 rattled Si8; the energy, forces and gap are at the reference already.
+(5) dftax at `e_tol=1e-11, d_tol=1e-8` ran its 200 iterations: the energy
+holds to 1e-13 Ha from iteration 20 on, while the commutator stays between
+3e-7 and 5e-7, the floor the near-singular `gth-dzvp` overlap sets (see
+[Basis sets](#basis-sets)).
 
 ## Plane-wave engine against GPAW
 
@@ -117,8 +121,12 @@ equations of state of oxides want at least TZV2P or plane waves. For
 silicon `gth-dzvp` is adequate (Si64 at Gamma: a0 5.446 Angstrom, B0 92.5
 GPa, against 5.396 Angstrom and 96.9 GPa in plane waves). For metals
 `gth-dzvp` works only with the canonical orthogonalization above, and its
-near-singular overlap limits how tightly the k-point SCF converges (the
-orbital gradient stalls near 1e-8); plane waves have no such problem.
+near-singular overlap limits how tightly the k-point SCF converges: the
+orthonormalizer of an overlap eigenvalue s scales by 1/sqrt(s), up to 1e4,
+so rounding noise in the Fock matrix reaches the commutator magnified up to
+1e8 (in Al32 it stops between 3e-7 and 5e-7, footnote 5; PySCF's orbital
+gradient on the rattled Al32 between 1.6e-6 and 4e-6). The energy is unaffected; pass `d_tol=1e-6` there.
+Plane waves have no such problem.
 
 ## Derivatives against finite differences
 
@@ -146,6 +154,7 @@ One A100 (80 GB), LDA, wall time:
 |---|---|---|---|---|
 | Si64 Gaussian, 66^3, 832 AOs | 37 s | 17 s | | |
 | quartz72 Gaussian, 122x122x134, 936 AOs | 22 s | 88 s | 69 s | 57 s |
+| Al32 Gaussian, 2x2x2, 42^3, 416 AOs | 23 s | 28 s (20 iterations of 1.4 s) | 46 s | |
 | Si64 plane waves, 40 Ha | | 76 s | | |
 | quartz72 plane waves, 200 Ha, 240x240x270 | | 893 s | | |
 
@@ -163,7 +172,7 @@ and not written). Pending: the VASP runs.
 # Gaussian engine against a PySCF reference (mesh, k-mesh, smearing read from it)
 python scripts/pbc/run_dftax.py si64 --ref scripts/pbc/reference/pyscf_si64_lda.json
 python scripts/pbc/run_dftax.py quartz72 --ref scripts/pbc/reference/pyscf_quartz72_lda_rattled.json
-python scripts/pbc/run_dftax.py al32 --ref scripts/pbc/reference/pyscf_al32_lda_k222_rattled.json --forces
+python scripts/pbc/run_dftax.py al32 --ref scripts/pbc/reference/pyscf_al32_lda_k222_lindep_rattled.json --forces
 
 # plane waves against a GPAW reference (cutoff, k-mesh, functional read from it)
 python scripts/pbc/run_pw.py si8 --ref scripts/pbc/reference/gpaw_si8_hgh_e40.json --forces --stress

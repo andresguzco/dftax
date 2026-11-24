@@ -118,8 +118,10 @@ alike), so equations of state of
 oxides want at least TZV2P or plane waves. And `gth-dzvp` is nearly
 linearly dependent in fcc aluminium (the smallest overlap eigenvalue is
 2e-10 at some k), which the canonical orthogonalization handles but which
-limits how tightly the SCF converges; plane waves have no such issue and are
-the more robust choice for metals.
+limits how tightly the SCF converges: the commutator stops near 5e-7 in a
+32-atom cell while the energy is converged to 1e-13 Ha, so pass
+`d_tol=1e-6` there. Plane waves have no such issue and are the more robust
+choice for metals.
 
 ## Accuracy
 
@@ -129,7 +131,8 @@ reproduce it are in `scripts/pbc/` (`BASELINES.md`).
 
 - **Gaussian engine against PySCF** (same basis, potential and mesh):
   total energies to 1e-8 Ha or better (8.5e-12 Ha for Si64, 2.6e-9 Ha for
-  quartz 72, 9e-12 Ha for Si2 on a 4x4x4 mesh, 9e-9 Ha for smeared Al4),
+  quartz 72, 9e-12 Ha for Si2 on a 4x4x4 mesh, 9e-9 Ha for smeared Al4 and
+  1.1e-9 Ha for smeared Al32 on a 2x2x2 mesh),
   band gaps to 1e-7 Ha, forces to the convergence of the references.
 - **Plane waves against GPAW** with the same HGH potentials, at equal cutoff
   and k-mesh: relative energies, band gaps (2 meV), forces (1e-5 Ha/Bohr)

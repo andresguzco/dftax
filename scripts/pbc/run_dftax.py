@@ -137,6 +137,15 @@ def run_k(args, cell) -> dict:
         "seconds_build": t_build, "seconds_scf": t_scf,
     }
     out["gap"] = out["cbm"] - out["vbm"]
+    from dftax.pbc.kpoints import kcell_forces, kcell_stress
+
+    grid, kpts = uniform(mesh=args.mesh), kmesh(*args.kmesh)
+    for key, fn in (("forces", kcell_forces), ("stress", kcell_stress)):
+        if getattr(args, key):
+            t0 = time.perf_counter()
+            out[key] = np.asarray(fn(cell, functional(XC[args.xc]), res,
+                                     grid=grid, kpts=kpts)).tolist()
+            out["seconds_" + key] = time.perf_counter() - t0
     return out
 
 

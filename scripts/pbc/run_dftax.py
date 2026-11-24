@@ -194,7 +194,7 @@ def main():
     if ref is not None:
         d = {"e_tot": out["e_tot"] - ref["e_tot"]}
         d.update({k: out["summary"][k] - ref["summary"][k]
-                  for k in out["summary"]})
+                  for k in out["summary"] if k in ref.get("summary", {})})
         print("dftax - reference (Ha): " + ", ".join(
             f"{k} {v:+.2e}" for k, v in d.items()))
         if "e_free" in out and ref.get("e_free") is not None:

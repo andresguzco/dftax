@@ -251,12 +251,14 @@ def _fermi(eps, w, nelec, sigma, iters=100):
     entropy term ``σ S``."""
     eps = np.asarray(eps)
     lo, hi = eps.min() - 40 * sigma, eps.max() + 40 * sigma
-    count = lambda mu: np.sum(w[:, None] * 2.0 / (1.0 + np.exp((eps - mu) / sigma)))
+    # 1 / (1 + exp(x)) as 0.5 (1 - tanh(x / 2)): no overflow at small sigma
+    fd = lambda mu: 0.5 * (1.0 - np.tanh(0.5 * (eps - mu) / sigma))
+    count = lambda mu: np.sum(w[:, None] * 2.0 * fd(mu))
     for _ in range(iters):
         mid = 0.5 * (lo + hi)
         lo, hi = (mid, hi) if count(mid) < nelec else (lo, mid)
     mu = 0.5 * (lo + hi)
-    p = 1.0 / (1.0 + np.exp((eps - mu) / sigma))
+    p = fd(mu)
     pc = np.clip(p, 1e-300, 1.0)
     qc = np.clip(1.0 - p, 1e-300, 1.0)
     ts = sigma * np.sum(w[:, None] * 2.0 * -(pc * np.log(pc) + qc * np.log(qc)))

@@ -582,51 +582,64 @@ def eri4c_matrix_bucketed(
     symmetry, and blocks within one scatter are disjoint because canonical
     quartets are distinct).
     """
-    from dftax.integrals.eri3c_bucketed import _IDX, _gather_rows, _scatter_blocks
+    from dftax.integrals.eri3c_bucketed import _IDX
 
     if plan is None:
         plan = plan_eri4c(basis)
     nao, classes = plan
-    cen = basis.centers
-    out = jnp.zeros((nao, nao, nao, nao), dtype=cen.dtype)
+    out = jnp.zeros((nao, nao, nao, nao), dtype=basis.centers.dtype)
     for (la, lb, lc, ldl, anga, angb, angc, angd,
          ra, rb, rc, rd, nprims) in classes:
-        npa, npb, npc, npd = nprims
-        ra = np.asarray(ra).astype(_IDX); rb = np.asarray(rb).astype(_IDX)
-        rc = np.asarray(rc).astype(_IDX); rd = np.asarray(rd).astype(_IDX)
-        nca, ncb, ncc, ncd = (
-            (l + 1) * (l + 2) // 2 for l in (la, lb, lc, ldl)
+        rows = [np.asarray(r).astype(_IDX) for r in (ra, rb, rc, rd)]
+        fn = _eri4c_class_program(
+            la, lb, lc, ldl, anga, angb, angc, angd, nprims, omega,
+            min(_eri4c_class_chunk(la, lb, lc, ldl, nprims), rows[0].shape[0]),
         )
-        ca = _gather_rows(basis.coefficients, ra, nca)[:, :, :npa]
-        cb = _gather_rows(basis.coefficients, rb, ncb)[:, :, :npb]
-        cc = _gather_rows(basis.coefficients, rc, ncc)[:, :, :npc]
-        cd = _gather_rows(basis.coefficients, rd, ncd)[:, :, :npd]
-        fn = _compiled_eri4c_kernel(
-            la, lb, lc, ldl, anga, angb, angc, angd, omega,
-            min(_eri4c_class_chunk(la, lb, lc, ldl, nprims), ra.shape[0]),
-        )
-        vals = fn(
-            cen[ra], cen[rb], cen[rc], cen[rd],
-            basis.exponents[ra][:, :npa], basis.exponents[rb][:, :npb],
-            basis.exponents[rc][:, :npc], basis.exponents[rd][:, :npd],
-            ca, cb, cc, cd,
-        )                                # (nquart, nca, ncb, ncc, ncd)
-        rows = (ra, rb, rc, rd)
-        for perm in (
-            (0, 1, 2, 3), (1, 0, 2, 3), (0, 1, 3, 2), (1, 0, 3, 2),
-            (2, 3, 0, 1), (3, 2, 0, 1), (2, 3, 1, 0), (3, 2, 1, 0),
-        ):
-            starts = np.stack([rows[p] for p in perm], axis=1).astype(_IDX)
-            out = _scatter_blocks(
-                out, starts, vals.transpose((0,) + tuple(p + 1 for p in perm))
-            )
+        out = fn(out, basis.centers, basis.exponents, basis.coefficients, *rows)
     if basis.cart2sph is not None:
-        Cs = basis.cart2sph
-        out = jnp.einsum("ai,abcd->ibcd", Cs, out)
-        out = jnp.einsum("bj,ibcd->ijcd", Cs, out)
-        out = jnp.einsum("ck,ijcd->ijkd", Cs, out)
-        out = jnp.einsum("dl,ijkd->ijkl", Cs, out)
+        out = _cart_to_sph_4c(out, basis.cart2sph)
     return out
+
+
+_QUARTET_PERMS = (
+    (0, 1, 2, 3), (1, 0, 2, 3), (0, 1, 3, 2), (1, 0, 3, 2),
+    (2, 3, 0, 1), (3, 2, 0, 1), (2, 3, 1, 0), (3, 2, 1, 0),
+)
+
+
+@lru_cache(maxsize=4096)
+def _eri4c_class_program(la, lb, lc, ldl, anga, angb, angc, angd, nprims,
+                         omega, chunk_size):
+    from dftax.integrals.eri3c_bucketed import _gather_rows, _scatter_blocks
+
+    ncs = tuple((l + 1) * (l + 2) // 2 for l in (la, lb, lc, ldl))
+    kern = _compiled_eri4c_kernel(la, lb, lc, ldl, anga, angb, angc, angd,
+                                  omega, chunk_size)
+
+    @jax.jit
+    def run(out, cen, exps, coefs, ra, rb, rc, rd):
+        rows = (ra, rb, rc, rd)
+        vals = kern(
+            *(cen[r] for r in rows),
+            *(exps[r][:, :n] for r, n in zip(rows, nprims)),
+            *(_gather_rows(coefs, r, nc)[:, :, :n]
+              for r, nc, n in zip(rows, ncs, nprims)),
+        )
+        for perm in _QUARTET_PERMS:
+            starts = jnp.stack([rows[p] for p in perm], axis=1)
+            out = _scatter_blocks(
+                out, starts, vals.transpose((0,) + tuple(p + 1 for p in perm)))
+        return out
+
+    return run
+
+
+@jax.jit
+def _cart_to_sph_4c(out, Cs):
+    out = jnp.einsum("ai,abcd->ibcd", Cs, out)
+    out = jnp.einsum("bj,ibcd->ijcd", Cs, out)
+    out = jnp.einsum("ck,ijcd->ijkd", Cs, out)
+    return jnp.einsum("dl,ijkd->ijkl", Cs, out)
 
 
 # ---------------------------------------------------------------------------

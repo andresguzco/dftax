@@ -72,20 +72,22 @@ def eri2c_matrix(
     omega: float | None = None,
     plan: tuple | None = None,
 ) -> Float[Array, "n_aux n_aux"]:
-    """Compute 2-center Coulomb matrix J_{PQ} = (P|Q).
+    """2-center electron repulsion integrals ``(P|Q)``, the density-fitting
+    metric.
 
-    Pure JAX, fully differentiable w.r.t. aux_basis.centers. Delegates to the
-    shell-class-bucketed engine (see :mod:`dftax.integrals.eri3c_bucketed`).
+    Differentiable with respect to ``aux_basis.centers``.
 
     Args:
-        aux_basis: BasisData for auxiliary basis (from extract_basis_data(auxmol)).
-        omega: None for the Coulomb kernel, a float for the long-range one.
-        plan: static pair skeleton from
-            :func:`~dftax.integrals.eri3c_bucketed.plan_pairs`; required when
-            traced with a fully-traced ``BasisData``, derived here otherwise.
+        aux_basis: the auxiliary basis.
+        omega: ``None`` for the Coulomb operator; a float for the
+            long-range operator ``erf(ω r₁₂)/r₁₂``.
+        plan: the shell-pair plan from
+            :func:`~dftax.integrals.eri3c_bucketed.plan_pairs`; needed only
+            when ``aux_basis`` is traced, as under ``jit`` with the basis as an
+            argument.
 
     Returns:
-        J matrix, shape (n_aux, n_aux) in spherical harmonics.
+        ``(naux, naux)`` array.
     """
     from dftax.integrals.eri3c_bucketed import eri2c_matrix_bucketed
 

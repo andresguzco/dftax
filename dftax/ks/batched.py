@@ -28,13 +28,22 @@ def _lowdin(S, eps: float = 1e-9):
 
 @dataclass
 class BatchedResult:
-    """Per-geometry results of a batched KS solve (leading axis = batch ``B``).
+    """Results of :func:`scf_batched`, one entry per geometry along the
+    leading axis ``B``.
 
-    A distinct type from the single-solve :class:`~dftax.ks.scf.KSResult`, so
-    consumers written against per-geometry scalars (``forces``,
-    ``if res.converged``) reject a batch loudly instead of mis-slicing it.
-    Orbital fields are ``None`` unless the run asked for them
-    (``return_orbitals=True``).
+    Attributes:
+        e_tot: total energies (Ha), ``(B,)``.
+        e_elec: electronic energies (Ha), ``(B,)``.
+        converged: whether each solve converged, ``(B,)``.
+        n_iter: iterations of each solve, ``(B,)``.
+        nocc: occupied orbitals per spin channel.
+        forces: forces (Ha/Bohr), ``(B, natom, 3)``, with ``forces=True``.
+        mo_energy: orbital energies, ``(B, nspin, nmo)``, with
+            ``return_orbitals=True``.
+        mo_coeff: orbital coefficients, ``(B, nspin, nao, nmo)``, with
+            ``return_orbitals=True``.
+        P: density matrices, ``(B, nspin, nao, nao)``, with
+            ``return_orbitals=True``.
     """
 
     e_tot: Float[Array, "B"]
@@ -61,25 +70,36 @@ def scf_batched(
     diis_space: int = 8, level_shift: float = 0.0,
     guess=None,
 ) -> BatchedResult:
-    """KS SCF over a batch of geometries ``coords_batch`` of shape
-    ``(B, n_atom, 3)`` (Bohr). ``mol`` supplies the (fixed) atoms + basis; only
-    the coordinates vary. ``spin`` follows the :class:`~dftax.ks.energy.KS`
-    rule (None → infer from ``mol``; explicit → polarized channels).
+    """SCF over many geometries of the same molecule in one compiled call.
 
-    With ``forces=True`` the result carries the analytic force tensor
-    ``(B, n_atom, 3)``; with ``return_orbitals=True`` it also carries
-    ``P``/``mo_coeff``/``mo_energy`` (O(B·nspin·nao²) memory, off by
-    default). ``mesh=`` shards the batch axis across a device mesh.
+    Args:
+        mol: the molecule; gives the atoms, basis, charge and spin.
+        coords_batch: nuclear coordinates (Bohr), ``(B, natom, 3)``.
+        xc: the exchange-correlation functional.
+        spin: as for :class:`~dftax.ks.energy.KS`.
+        grid: a :func:`~dftax.grid.becke` spec (rebuilt per geometry).
+        coulomb: :func:`~dftax.ks.terms.df` (the default) or plain
+            :func:`~dftax.ks.terms.exact`; ``screen`` is not supported.
+        dispersion: a :func:`~dftax.energy.d3.d3bj` or
+            :func:`~dftax.energy.d4.d4` spec.
+        forces: also compute the forces.
+        return_orbitals: also return the orbitals and densities
+            (``O(B·nao²)`` memory).
+        mesh: a :func:`~dftax.ks.shard.mesh` spec to divide the batch over
+            devices.
+        max_iter, e_tol, d_tol, diis_space, level_shift: as for
+            :func:`~dftax.ks.scf.scf`.
+        guess: a guess spec from :mod:`dftax.ks.guess`; density arrays are
+            not accepted.
 
-    ``guess`` is a spec from :mod:`dftax.ks.guess` (``core``/``sad``/``minao``/
-    ``sap``); it is resolved once (SAD/MinAO atomic densities are
-    geometry-independent) and applied per geometry inside the solve.
+    Returns:
+        A :class:`BatchedResult`.
 
-    ``coulomb`` follows the KS default (density fitting): the auxiliary basis
-    is built once as a template and re-centered per geometry. Value-based
-    knobs are rejected here (Schwarz ``screen`` needs concrete integrals, but
-    the per-geometry build is traced), and batched ``forces=True`` with a
-    *streamed* hybrid RI-K is rejected (its vjp has no geometry gradients).
+    Raises:
+        ValueError: ``grid`` is not a :func:`~dftax.grid.becke` spec,
+            ``exact`` with ``screen`` or ``stream``, or ``forces=True`` with a
+            hybrid on the streamed density-fitting backend.
+        TypeError: ``guess`` is not a spec.
     """
     grid = becke() if grid is None else grid
     if not isinstance(grid, Becke):

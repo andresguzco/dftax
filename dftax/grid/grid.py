@@ -57,63 +57,43 @@ def becke(
     screen_block: int = 2048,
     screen_buckets: int = 4,
 ) -> Becke:
-    """Atom-centered Becke grid: ``n_radial`` radial shells per atom, Lebedev
-    angular grids pruned per radial region (the dftax default quadrature).
+    """Atom-centered Becke quadrature, the default grid.
+
+    Each atom carries ``n_radial`` radial shells times a Lebedev angular grid,
+    pruned to coarser orders near the nucleus and in the tail; the atomic
+    grids are joined by Becke's fuzzy-cell partition (A. D. Becke, J. Chem.
+    Phys. 88, 2547 (1988)). The defaults reproduce PySCF's level-3 grid.
 
     Args:
-        n_radial: Chebyshev radial shells per atom: an int for every element,
-            or ``"pyscf"`` (default) for PySCF's level-3 count per period (50
-            for H-He, 75 for Li-Ne, 80 for Na-Ar, 90 for K-Kr, 95 for Rb-Xe).
-        lebedev: maximum Lebedev angular points per shell (a vendored order;
-            see :func:`~dftax.grid.lebedev.available_lebedev`), or ``"pyscf"``
-            for PySCF's level-3 order per period (302 through Ne, 434 beyond).
-            With pruning this is the bonding-region order; core and tail
-            shells use coarser grids.
-        radial: radial mapping of the Chebyshev nodes: ``"treutler"``
-            (default; Treutler-Ahlrichs M4 with their per-element ``xi``, as
-            in PySCF) or ``"becke"`` (``r = R (1+x)/(1-x)`` with half the
-            Bragg radius as ``R``). Treutler's mapping spends fewer shells in
-            the far tail, so it converges faster in ``n_radial``.
-        radii_adjust: heteronuclear cell-size adjustment of the Becke
-            partition: ``"treutler"`` (default; square root of the
-            Bragg-radius ratio, as in PySCF), ``"becke"`` (the ratio itself,
-            Becke 1988) or ``None`` for unadjusted cells.
-        partition: the cell function: ``"becke"`` (default; Becke's
-            three-fold smoothing, PySCF's default) or ``"stratmann"``
-            (Stratmann-Scuseria-Frisch, CPL 257, 213 (1996): exactly 0 or 1
-            past ``|ν| = 0.64``, so each point's weight takes only the cells
-            its owner's does not decide; PySCF's ``gen_grid.stratmann``). The
-            same points either way; only the weights differ.
-        chunk: XC-integral streaming. ``"auto"`` (default) materializes the AO
-            grid values when they fit a memory budget and streams over grid
-            chunks otherwise; ``None`` forces the materialized AO grid; an int
-            streams with that many points per chunk (AO values recomputed per
-            chunk, O(chunk·nao) memory).
-        prune: angular pruning scheme: ``"nwchem"`` (default; the standard
-            NWChem/PySCF region rule) or ``None`` for the full
-            ``n_radial x lebedev`` product grid (convergence studies).
-        r_max: drop radial shells beyond this radius (Bohr). Becke's mapping
-            otherwise emits tail points at r ~ 10³ Bohr where every basis
-            function underflows; Treutler's ends inside it. ``None`` keeps all
-            shells.
-        cutoff: zero the quadrature weights below this (applied on the
-            eager build path, i.e. the KS constructor). The points themselves
-            are kept, so the grid's size depends on the elements and the spec,
-            never the geometry, and a new geometry reuses every compiled
-            program. ``None`` keeps every weight as computed.
-        screen: amplitude threshold for per-block basis screening (see
-            :mod:`dftax.grid.screen`). The grid is reordered into compact
-            blocks and each block keeps only the shells that reach it, so the
-            XC term costs ``ng·nsub²`` instead of ``ng·nao²``. A float sets
-            the threshold, ``None`` evaluates the whole basis everywhere, and
-            ``"auto"`` (the default) turns it on from
-            ``SCREEN_AUTO_MIN_ATOMS`` atoms up. It is a large-system knob: a
-            small loss below the crossover, and a growing win above it.
-        screen_block: grid points per screening block. Larger blocks amortize
-            the gather but reach more shells.
-        screen_buckets: how many distinct padded shapes to compile. More
-            buckets waste less padding and cost more compilations; padding
-            everything to a single shape recovers nothing.
+        n_radial: radial shells per atom: an int for every element, or
+            ``"pyscf"`` for PySCF's level-3 count (50 for H-He, 75 for Li-Ne,
+            80 for Na-Ar, 90 for K-Kr, 95 for Rb-Xe).
+        lebedev: largest Lebedev order per shell (see
+            :func:`~dftax.grid.lebedev.available_lebedev`), or ``"pyscf"`` for
+            PySCF's level-3 order (302 through Ne, 434 beyond).
+        radial: radial mapping: ``"treutler"`` (Treutler and Ahlrichs, J.
+            Chem. Phys. 102, 346 (1995)), which needs fewer shells, or
+            ``"becke"``.
+        radii_adjust: size adjustment of the cells of unlike atoms:
+            ``"treutler"``, ``"becke"``, or ``None`` for none.
+        partition: the cell function: ``"becke"`` or ``"stratmann"``
+            (Stratmann, Scuseria and Frisch, Chem. Phys. Lett. 257, 213
+            (1996)). Only the weights differ.
+        chunk: memory strategy of the XC integral. ``"auto"`` stores the AO
+            values on the grid when they fit the memory budget and otherwise
+            recomputes them in chunks of points; ``None`` always stores them;
+            an int recomputes them in chunks of that many points.
+        prune: ``"nwchem"`` (NWChem's and PySCF's scheme) or ``None`` for the
+            full ``n_radial x lebedev`` grid.
+        r_max: radial shells beyond this radius (Bohr) are dropped; ``None``
+            keeps all.
+        cutoff: weights below this are set to zero; ``None`` keeps all.
+        screen: amplitude threshold below which basis functions are skipped
+            in each block of grid points. ``"auto"`` screens from 50 atoms
+            up; ``None`` never screens. It pays for large systems only.
+        screen_block: grid points per screening block.
+        screen_buckets: number of distinct block sizes compiled; more waste
+            less padding and compile more programs.
     """
     return Becke(n_radial=n_radial, lebedev=lebedev, radial=radial,
                  radii_adjust=radii_adjust, partition=partition, chunk=chunk,
@@ -122,10 +102,12 @@ def becke(
 
 
 def points(coords, weights, *, chunk: int | str | None = "auto") -> Points:
-    """An explicit quadrature grid ``(coords, weights)`` (e.g. from PySCF).
+    """An explicit quadrature grid, e.g. PySCF's.
 
-    ``chunk`` streams the XC integral over grid chunks (see :func:`becke`);
-    ``"auto"`` picks materialized vs streamed by memory budget.
+    Args:
+        coords: points (Bohr), ``(ngrid, 3)``.
+        weights: weights, ``(ngrid,)``.
+        chunk: memory strategy of the XC integral, as in :func:`becke`.
     """
     return Points(coords=coords, weights=weights, chunk=chunk)
 
@@ -221,13 +203,8 @@ def becke_grid_size(
     radial: str = "treutler",
     partition: str = "becke",
 ) -> int:
-    """Number of grid points :func:`becke_grid` will emit (static per spec).
-
-    Lets callers that build the grid under ``jit``/``vmap`` (forces, the
-    batched solver) make eager, shape-dependent decisions, e.g. resolving the
-    ``chunk="auto"`` streaming policy. The partition changes the weights
-    only, never the points.
-    """
+    """Number of points :func:`becke_grid` returns for these elements and
+    arguments; it does not depend on the geometry."""
     _check_partition(partition)
     return sum(
         r.shape[0] * order
@@ -251,26 +228,19 @@ def becke_grid(
     radii_adjust: str | None = "treutler",
     partition: str = "becke",
 ):
-    """Build a molecular quadrature grid (points in Bohr, weights).
+    """The points and weights of a :func:`becke` grid.
 
-    Each atom contributes ``n_radial`` radial shells (mapped per ``radial``)
-    times a Lebedev angular grid whose order is pruned per radial region (see
-    :func:`becke`); the per-atom grids are merged with a fuzzy-Voronoi
-    partition, its cells sized per ``radii_adjust`` and shaped per
-    ``partition`` (Becke's or Stratmann-Scuseria-Frisch's).
+    Takes the arguments of :func:`becke` that define the grid. The array
+    shapes depend only on ``symbols`` and the arguments, so the function
+    works under ``jit`` and ``vmap``, and the result is differentiable with
+    respect to ``coords_bohr``.
 
-    Returns ``(coords, weights)`` as JAX arrays of shape ``(n_grid, 3)`` and
-    ``(n_grid,)``, differentiable w.r.t. ``coords_bohr``. Shapes depend only
-    on ``symbols`` and the spec constants, so this can run under ``jit`` /
-    ``vmap`` with traced coordinates.
+    Args:
+        symbols: element symbols.
+        coords_bohr: nuclear coordinates (Bohr), ``(natom, 3)``.
 
-    Jitted, one compiled program per (symbols, spec) shape for every
-    geometry. The partition is one chunked pass over all atoms' points
-    (:func:`~dftax.grid.becke.becke_weights`), and each element's point
-    template is one constant, so the program and its constants grow with the
-    number of elements, not of atoms. Each point's owner and raw weight are
-    looked up from its index in per-atom tables, so no constant is of the
-    grid's size.
+    Returns:
+        ``(coords, weights)``, of shapes ``(ngrid, 3)`` and ``(ngrid,)``.
     """
     _check_partition(partition)
     coords = jnp.asarray(coords_bohr).reshape(-1, 3)

@@ -67,13 +67,9 @@ def uniform(*, mesh: tuple[int, int, int] | None = None,
 
 
 class FFTCoulomb(CoulombTerm):
-    """Hartree energy of the density of ``P`` on the uniform grid, by FFT.
-
-    Holds the periodic AO values on the grid (shared with the XC term) and
-    the lattice. The grid is held in blocks (:func:`box_layout`), so
-    ``inv`` puts the density back in mesh order for the FFT. The local
-    pseudopotential is linear in the density and lives in the core
-    Hamiltonian instead.
+    """Hartree energy of a cell's density, by FFT on the uniform grid: the
+    Coulomb term :class:`~dftax.ks.energy.KS` builds for a
+    :class:`~dftax.pbc.cell.Cell`.
     """
 
     ao: Float[Array, "ng nao"]

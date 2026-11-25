@@ -72,22 +72,19 @@ def _contracted_norm(
 
 
 class BasisData(eqx.Module):
-    """Precomputed GTO basis data extracted from a PySCF mol object.
-
-    All arrays are JAX arrays; construction is done once on CPU via
-    extract_basis_data(mol).
+    """A Gaussian basis set placed on a molecule, as the integral and grid
+    functions take it.
 
     Attributes:
-        centers:      Atom centre for each AO, shape (nao_cart, 3).
-        exponents:    Primitive exponents, zero-padded, shape (nao_cart, max_prim).
-        coefficients: Final contraction coefficients (primitive-normed *
-                      contracted-normed), zero-padded, shape (nao_cart, max_prim).
-        angular:      Cartesian angular momenta (lx, ly, lz), shape (nao_cart, 3).
-        cart2sph:     Cartesian-to-spherical transformation, shape (nao_cart, nao_sph),
-                      or None when the molecule uses Cartesian GTOs.
-        max_l:        Maximum total angular momentum in the basis (static int).
-                      Lets the integral builders size their recursion to the
-                      molecule instead of the global g-type cap.
+        centers: center of each cartesian AO (Bohr), ``(nao_cart, 3)``.
+        exponents: primitive exponents, zero-padded, ``(nao_cart, max_prim)``.
+        coefficients: normalized contraction coefficients, zero-padded,
+            ``(nao_cart, max_prim)``.
+        angular: cartesian powers ``(lx, ly, lz)`` of each AO,
+            ``(nao_cart, 3)``.
+        cart2sph: cartesian-to-spherical transformation,
+            ``(nao_cart, nao_sph)``, or ``None`` for a cartesian basis.
+        max_l: largest angular momentum in the basis.
     """
 
     centers: Float[Array, "nao_cart 3"]
@@ -99,16 +96,13 @@ class BasisData(eqx.Module):
 
 
 def extract_basis_data(mol: "object") -> BasisData:
-    """Extract GTO basis data from a PySCF Mole object.
-
-    This is a CPU-side function called once at setup.  It returns a
-    BasisData whose arrays live on the JAX default device.
+    """The :class:`BasisData` of a PySCF molecule.
 
     Args:
-        mol: A built PySCF gto.Mole object.
+        mol: a built PySCF ``gto.Mole``.
 
     Returns:
-        BasisData suitable for eval_gto.
+        Its :class:`BasisData`, spherical when ``mol.cart`` is false.
     """
     from pyscf import gto as pyscf_gto
 
@@ -313,17 +307,16 @@ def safe_int_pow(x, n):
 
 
 def eval_gto(basis: BasisData, r: Float[Array, "3"]) -> Float[Array, "nao"]:
-    """Evaluate contracted GTO basis functions at point r.
+    """Values of the contracted basis functions at one point.
 
-    Pure JAX, no PySCF calls, no pure_callback.  Fully differentiable via
-    JAX autodiff and compatible with jit and vmap.
+    Differentiable, and works under ``jit`` and ``vmap``.
 
     Args:
-        basis: Precomputed basis data from extract_basis_data(mol).
-        r:     3D coordinate in Bohr, shape (3,).
+        basis: the basis, from :func:`extract_basis_data`.
+        r: the point (Bohr), ``(3,)``.
 
     Returns:
-        AO values, shape (nao,), matching dft.numint.eval_ao(mol, r[None])[0].
+        ``(nao,)`` array, in the order of PySCF's ``eval_ao``.
     """
     return _eval_gto_flat(basis, r)
 

@@ -38,8 +38,7 @@ def uniform_grid(a, mesh):
 def lattice_images(a, rcut: float) -> np.ndarray:
     """Every integer triple ``n`` with ``|n·a| <= rcut``, ``(nimg, 3)``.
 
-    ``a`` must be concrete. The bound per axis is the number of lattice
-    planes within ``rcut``: planes normal to ``b_i`` are ``2π/|b_i|`` apart.
+    ``a`` must be concrete.
     """
     a = np.asarray(a, dtype=np.float64)
     b = 2.0 * np.pi * np.linalg.inv(a).T
@@ -64,9 +63,6 @@ def _fft_friendly(n: int) -> int:
 def mesh_for_cutoff(a, ke_cutoff: float) -> tuple[int, int, int]:
     """The smallest FFT-friendly mesh holding every plane wave with
     ``|G|^2 / 2 <= ke_cutoff`` (Hartree). ``a`` must be concrete.
-
-    A wave of index ``n_i`` along axis ``i`` has ``n_i = G·a_i / 2π``, at
-    most ``|G| |a_i| / 2π``; the mesh needs both signs and zero.
     """
     a = np.asarray(a, dtype=np.float64)
     gmax = np.sqrt(2.0 * ke_cutoff)

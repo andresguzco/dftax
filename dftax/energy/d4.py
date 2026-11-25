@@ -27,14 +27,15 @@ class D4Spec:
 
 
 def d4(method: str | None = None, *, atm: bool = False) -> D4Spec:
-    """Charge-dependent D4 dispersion correction.
+    """Grimme's charge-dependent D4 dispersion correction (E. Caldeweyher et
+    al., J. Chem. Phys. 150, 154122 (2019)).
+
+    Pass the result as ``KS(..., dispersion=d4())``.
 
     Args:
-        method: damping-parameter set name (``"pbe"``, ``"pbe0"``,
-            ``"b3lyp"``, ``"cam-b3lyp"``, ``"r2scan"``); ``None`` resolves it
-            from the functional the KS is built with.
-        atm: add the Axilrod-Teller-Muto three-body term on the D4
-            coefficients (``s9 = 1``); off by default.
+        method: name of the damping-parameter set, e.g. ``"pbe0"``; ``None``
+            takes the set of the functional the KS is built with.
+        atm: add the Axilrod-Teller-Muto three-body term (``s9 = 1``).
     """
     return D4Spec(method=method, atm=atm)
 

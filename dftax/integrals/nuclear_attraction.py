@@ -138,27 +138,23 @@ def nuclear_attraction_matrix(
     atom_charges: Float[Array, "n_atoms"],
     plan: tuple | None = None,
 ) -> Float[Array, "nao nao"]:
-    """Compute nuclear attraction matrix V_μν in the AO basis.
+    """Nuclear attraction matrix
+    ``V_μν = -Σ_A Z_A ∫ χ_μ(r) χ_ν(r) / |r - R_A| dr``.
 
-    V_μν = -Σ_A Z_A ∫ χ_μ(r) · 1/|r-R_A| · χ_ν(r) dr
-
-    Pure JAX, fully differentiable w.r.t. basis.centers and atom_coords.
-    Delegates to the shell-class-bucketed engine (see
-    :mod:`dftax.integrals.eri3c_bucketed`): the flat per-element build held
-    every (pair, nucleus) Hermite table at molecule-padded sizes at once and
-    owned the KS build's memory peak (27.5 GiB for ethanol/def2-svp).
+    Differentiable with respect to ``basis.centers`` and ``atom_coords``.
 
     Args:
-        basis: BasisData from extract_basis_data(mol).
-        atom_coords: Nuclear positions, shape (n_atoms, 3).
-        atom_charges: Nuclear charges, shape (n_atoms,).
-        plan: static pair skeleton from
-            :func:`~dftax.integrals.eri3c_bucketed.plan_pairs`; required when
-            this build is traced with a fully-traced ``BasisData``, derived
-            here otherwise.
+        basis: the orbital basis, from
+            :func:`~dftax.energy.gto.extract_basis_data`.
+        atom_coords: nuclear coordinates (Bohr), ``(natom, 3)``.
+        atom_charges: nuclear charges, ``(natom,)``.
+        plan: the shell-pair plan from
+            :func:`~dftax.integrals.eri3c_bucketed.plan_pairs`; needed only
+            when ``basis`` is traced, as under ``jit`` with the basis as an
+            argument.
 
     Returns:
-        V matrix, shape (nao, nao).
+        ``(nao, nao)`` array.
     """
     from dftax.integrals.eri3c_bucketed import nuclear_attraction_bucketed
 

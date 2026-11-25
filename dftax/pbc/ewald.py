@@ -24,8 +24,6 @@ def plan_ewald(a, coords) -> EwaldPlan:
     """Choose ``η`` and the terms of both sums for a concrete geometry.
 
     ``η = sqrt(π) / Ω^(1/3)`` balances the two sums for a cell of any size.
-    The real-space list reaches the cutoff plus the largest interatomic
-    separation, so every pair sees all of its images.
     """
     a = np.asarray(a, dtype=np.float64)
     coords = np.asarray(coords, dtype=np.float64)

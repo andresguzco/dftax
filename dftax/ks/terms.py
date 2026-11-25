@@ -39,13 +39,18 @@ class DFSpec:
 
 
 def exact(*, screen: float | None = None, stream: bool = False) -> ExactSpec:
-    """Exact 4-center ERI Coulomb/exchange (small systems; O(N⁴) memory).
+    """Exact 4-center Coulomb and exchange integrals, for small systems.
+
+    Memory grows as O(N⁴); see :func:`df` for larger systems.
 
     Args:
-        screen: optional Cauchy-Schwarz threshold; negligible ERI quartets are
-            skipped when materializing the tensor.
-        stream: contract J/K on the fly instead of materializing the ERI
-            tensor (O(N²) memory, slower; incompatible with ``screen``).
+        screen: Cauchy-Schwarz threshold; integral quartets whose bound is
+            below it are skipped. ``None`` keeps every quartet.
+        stream: contract Coulomb and exchange on the fly instead of storing
+            the integrals: O(N²) memory, slower.
+
+    Raises:
+        ValueError: ``screen`` together with ``stream=True``.
     """
     if screen is not None and stream:
         raise ValueError(
@@ -64,63 +69,44 @@ def df(
     whiten: bool | None = None,
     packed: bool | str = "auto",
 ) -> DFSpec:
-    """Density-fitted (RI) Coulomb/exchange with the given auxiliary basis.
+    """Density-fitted (RI) Coulomb and exact exchange, the default backend.
 
-    This is the KS default backend (O(N³) memory; RI error sub-mHa with a
-    JK-fitting set); :func:`exact` remains available for small systems and
-    reference comparisons.
+    Memory grows as O(N³) instead of the O(N⁴) of :func:`exact`; with a
+    JK-fitting auxiliary basis the fitting error is well below 1 mHa.
 
     Args:
-        auxbasis: JK-fitting auxiliary basis name (default
-            ``"def2-universal-jkfit"``, the universal set covering any orbital
-            basis), or an already built ``BasisData``.
-        chunk: RI memory strategy. ``"auto"`` (default) materializes the
-            nao²×naux 3-center tensor when it fits a memory budget and
-            otherwise streams RI-J/RI-K over budget-derived auxiliary chunks;
-            ``None`` forces the materialized tensor; an int streams with
-            exactly that chunk.
-        screen: relative Cauchy-Schwarz threshold dropping negligible bra
-            pairs (survivors are O(N) for extended systems). On the
-            materialized path it is a shell-pair compact gather that omits
-            the screened shell-pairs from the 3-center build (they stay
-            exactly zero); with an int ``chunk`` it restricts the streamed
-            RI-J bra sum to the significant AO pairs. ``None`` keeps every
-            pair, a bit-identical build. ``"auto"`` (default) screens at
-            ``DF_SCREEN_AUTO_CUTOFF`` from ``DF_SCREEN_AUTO_MIN_ATOMS`` atoms
-            up (the grid's gate) and keeps every pair below it; batched
-            geometries (``scf_batched``) never screen.
-        spherical: auxiliary basis span. ``None`` (default) uses spherical
-            harmonics on the materialized paths, single-device and
-            mesh-sharded alike (non-redundant fit, positive definite metric),
-            and cartesian components on the streamed path (which contracts
-            cartesian auxiliary elements on the fly). ``False`` forces
-            cartesian everywhere, e.g. to
-            compare a materialized result against a streamed one in the same
-            fit space; ``True`` asserts the spherical span and raises where
-            it is unsupported.
-        whiten: fold the metric into the materialized tensor once, ``B = Lᵀ T``
-            with ``L Lᵀ = V⁺`` (:class:`WhitenedDFCoulomb`): the same energy to
-            the density-fitting floor, no metric multiply per build, and an
-            orbital-route exchange that never forms ``nao x nao`` kernels.
-            ``None`` (default) whitens whenever the build is concrete and
-            single-device materialized, and keeps :class:`DFCoulomb` where the
-            geometry is traced (forces, Hessians, ``scf_batched``), whose
-            metric inverse carries the geometry derivative; ``False`` never
-            whitens; ``True`` asserts it and raises where it cannot apply.
-        packed: store the whitened tensor packed over the kept bra shell
-            pairs, ``(naux, npair)`` (:class:`PackedDFCoulomb`): about half
-            the memory before screening and only the kept pairs with it, at
-            the price of unpacking one aux block per exchange evaluation.
-            ``"auto"`` (default) packs where that pays: when pair screening
-            is on (``screen``) or when the square tensor would miss the
-            device budget and the packed one fits; ``True`` / ``False``
-            force it. Traced builds (no whitening) stay square.
+        auxbasis: auxiliary basis name, or a built ``BasisData``. The default,
+            ``"def2-universal-jkfit"``, fits any orbital basis.
+        chunk: memory strategy. ``"auto"`` stores the 3-center tensor when it
+            fits the device memory budget and otherwise streams it in
+            auxiliary chunks; ``None`` always stores it; an int streams in
+            chunks of that many auxiliary functions.
+        screen: relative Cauchy-Schwarz threshold below which AO pairs are
+            dropped from the fit. ``"auto"`` screens at 1e-10 from 50 atoms
+            up and keeps every pair below that; ``None`` keeps every pair.
+            Batched solves (``scf_batched``) never screen.
+        spherical: ``True`` fits with spherical auxiliary functions,
+            ``False`` with cartesian ones. ``None`` uses spherical functions
+            when the tensor is stored and cartesian ones when it is streamed.
+        whiten: store the tensor with the inverse metric folded in, which
+            saves one contraction per Fock build. ``None`` does so when the
+            geometry is not being differentiated and the tensor is stored on
+            one device.
+        packed: store only the kept AO pairs, ``(naux, npair)``, about half
+            the memory of the square tensor. ``"auto"`` packs when pairs are
+            screened or when only the packed tensor fits the memory budget.
+            Applies to the whitened tensor only.
+
+    Raises:
+        ValueError: ``spherical=True`` or ``whiten=True`` with an int
+            ``chunk`` (streaming is cartesian and unwhitened), or
+            ``packed=True`` with ``whiten=False`` or an int ``chunk``.
 
     Example:
         ```python
         KS(mol, xc)                                    # same as coulomb=df()
-        KS(mol, xc, coulomb=df(chunk=None))            # force materialized
-        KS(mol, xc, coulomb=df("def2-universal-jkfit", chunk=64))  # streamed
+        KS(mol, xc, coulomb=df(chunk=None))            # always store the tensor
+        KS(mol, xc, coulomb=df(chunk=64))              # stream in chunks of 64
         ```
     """
     if spherical is True and isinstance(chunk, int):
@@ -915,24 +901,12 @@ class PackedDFCoulomb(CoulombTerm):
 
 
 class ShardedDFCoulomb(CoulombTerm):
-    """Materialized RI-J with the 3-center tensor sharded over the aux axis.
+    """Density-fitted Coulomb and exchange with the stored 3-center tensor
+    divided over a device mesh along the auxiliary axis.
 
-    Each device holds a ``(nao², naux/ndev)`` slab of ``int3c`` (built
-    directly in shards; see :func:`dftax.ks.shard._build_int3c_sharded`) and
-    contracts its own slice of ``γ_P = Σ_μν (μν|P) P_μν``; the slices are
-    ``all_gather``-ed (γ is a tiny naux-vector) and the metric quadratic form
-    ``½ γᵀ V⁻¹ γ`` is evaluated replicated. Padded aux columns carry exact
-    zeros in both γ and the (zero-padded) metric inverse, so the energy is the
-    single-device value bit-for-bit up to summation order.
-
-    Hybrid exact exchange uses ``V⁻¹ = LLᵀ`` and
-    ``Tr(P K(P)) = Σ_X ⟨P W_X P, W_X⟩`` with ``W = int3c·L``: each device
-    builds only its own aux-slab of ``W`` (an all-to-all done as ``ndev``
-    rounds of ``psum``, one per destination slab), contracts its slab's
-    exchange partial against the replicated density, and the scalar partials
-    are ``psum``-reduced; per-device memory stays O(nao²·naux/ndev). Padded
-    aux rows are zero in ``int3c`` and null in the padded metric, so they
-    contribute exactly nothing to J or K.
+    Built by :class:`~dftax.ks.energy.KS` when given ``mesh=`` with a stored
+    tensor; each device holds ``nao²·naux/ndev`` of it. Energies equal the
+    single-device ones up to summation order.
     """
 
     int3c: Float[Array, "nao2 nauxp"]
@@ -1141,35 +1115,12 @@ class PackedDFForcesCoulomb(CoulombTerm):
 
 
 class ShardedStreamedDFCoulomb(CoulombTerm):
-    """Streamed RI-J with the auxiliary axis divided across a device mesh.
+    """Streamed density-fitted Coulomb and exchange over a device mesh.
 
-    The streamed backend never builds the ``(nao², naux)`` tensor, which is the
-    only thing that fits at protein scale; this divides its auxiliary axis over
-    the mesh as well, so the per-device work is ``naux/ndev`` auxiliary
-    functions streamed ``chunk`` at a time. Combining the two is the point: the
-    materialized aux-sharded backend still holds ``nao²·naux/ndev`` per device,
-    which for insulin at triple zeta is 15 TiB.
-
-    Each device streams its own contiguous slice of the auxiliary index range
-    into its piece of ``γ``, the pieces are ``all_gather``-ed (γ is a
-    ``naux``-vector, so this is negligible traffic), and the metric quadratic
-    form ``½ γᵀ V⁻¹ γ`` is evaluated replicated -- the same decomposition
-    :class:`ShardedDFCoulomb` uses, and for the same reason: γ is the only
-    quantity that has to cross devices.
-
-    The auxiliary basis is *replicated*, not sliced. The streamed kernel looks
-    an auxiliary function up by index (``_eri3c_elem(..., k)``) instead of
-    slicing a stored slab, so a device needs the whole (small) auxiliary basis
-    and only its own range of ``k``. Indices are assigned contiguously and the
-    range is padded to a multiple of the device count, with the padding masked
-    to zero, so the gathered γ is already in auxiliary order and truncating it
-    to ``naux`` is exact rather than needing a position map.
-
-    Hybrids shard too, on a different axis: streamed RI-K sums over occupied
-    orbitals, so each device scans its own slice of them and the partials are
-    ``psum``-reduced (:func:`_rik_energy_sharded`). Both halves of its
-    ``custom_vjp`` shard the same way, so the analytic exchange Fock it returns
-    is unchanged. Range-separated hybrids ride along on the attenuated metric.
+    Built by :class:`~dftax.ks.energy.KS` when given ``mesh=`` with
+    ``df(chunk=<int>)``: each device streams its share of the auxiliary
+    functions, ``chunk`` at a time, and no device stores the 3-center
+    tensor. Hybrids, range-separated ones included, are supported.
     """
 
     basis: BasisData
@@ -1621,15 +1572,13 @@ class ScreenedGridXC(XCTerm):
 
 
 class ShardedGridXC(XCTerm):
-    """XC integral sharded over grid points across a 1-D device mesh.
+    """Exchange-correlation quadrature with the grid points divided over a
+    device mesh.
 
-    ``inner`` is an ordinary :class:`GridXC` or :class:`StreamedGridXC` whose
-    grid-axis arrays are padded to a multiple of the device count and laid out
-    sharded over the mesh (see :func:`dftax.ks.shard._pad_shard_grid`). The
-    energy runs each device's slice through the *unmodified* inner math under
-    ``shard_map`` (the density is replicated, the partial energies are
-    ``psum``-reduced), so the quadrature is exactly the single-device sum and
-    the collective differentiates natively (autodiff Fock, forces).
+    Built by :class:`~dftax.ks.energy.KS` when given ``mesh=``; the energy
+    equals the single-device quadrature up to summation order and
+    differentiates as usual (Fock matrix, forces). VV10 (``WB97XV``) cannot
+    be sharded.
     """
 
     inner: XCTerm

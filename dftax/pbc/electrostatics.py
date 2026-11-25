@@ -28,9 +28,7 @@ def local_potential(coords, a, mesh, zion, rloc, cloc):
     """Local pseudopotential of all atoms on the uniform grid, already times
     the quadrature weight: ``(Ω/N) V_loc(r)``, ``(N,)``.
 
-    Its energy with a grid density is then just ``sum_r ρ(r) v(r)``. The
-    atoms' structure factors are accumulated one atom at a time, so the peak
-    is one grid-sized complex array whatever the number of atoms.
+    Its energy with a grid density is ``sum_r ρ(r) v(r)``.
     """
     mesh = tuple(int(n) for n in mesh)
     G = gvectors(a, mesh)

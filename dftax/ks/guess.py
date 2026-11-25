@@ -42,23 +42,18 @@ class SAPSpec:
 
 
 def core() -> CoreSpec:
-    """Core-Hamiltonian guess: aufbau fill of the ``hcore`` eigenvectors.
+    """Initial guess from the core Hamiltonian: the lowest eigenvectors of
+    ``hcore``, without electron repulsion.
 
-    The dftax default (``guess=None``); ignores electron repulsion, so it is
-    the weakest standard guess: fine for small closed-shell systems, slow to
-    converge (or saddle-prone under :func:`~dftax.ks.minimize.minimize`) for
-    larger ones.
+    The simplest and weakest guess; :func:`~dftax.ks.scf.scf` falls back to
+    it when the default :func:`minao` guess cannot be built.
     """
     return CoreSpec()
 
 
 def sad() -> SADSpec:
-    """Superposition of atomic densities from solved atoms.
-
-    Per unique element, a spherically-averaged (fractional-occupation) atomic
-    Hartree-Fock is converged in the molecule's own basis, and the atomic
-    densities are assembled block-diagonally. The strongest density-based
-    guess here; the per-element solves are tiny and cached.
+    """Superposition of atomic densities, each from a spherically averaged
+    atomic Hartree-Fock calculation in the molecule's basis.
     """
     return SADSpec()
 
@@ -79,15 +74,12 @@ def minao(basis: str = "sto-3g") -> MinAOSpec:
 
 
 def sap(fit: str = "sap_helfem_large", *, grid: Becke | None = None) -> SAPSpec:
-    """Superposition of atomic potentials: ``F0 = T + V_SAP``.
-
-    A potential-based guess (no density superposition): the screened effective
-    potential of each atom, Gaussian-fitted, summed over atoms and integrated
-    on a Becke grid. Robust and cheap; the only guess here whose quality does
-    not depend on a converged atomic density.
+    """Superposition of atomic potentials: the first Fock matrix is
+    ``T + Σ_A V_A`` with fitted atomic potentials ``V_A`` (S. Lehtola, J.
+    Chem. Theory Comput. 15, 1593 (2019)).
 
     Args:
-        fit: the Gaussian potential fit, a Basis Set Exchange name
+        fit: the potential fit, a Basis Set Exchange name
             (``"sap_helfem_large"``, ``"sap_helfem_small"``,
             ``"sap_grasp_large"``, ``"sap_grasp_small"``).
         grid: quadrature for the potential matrix, a

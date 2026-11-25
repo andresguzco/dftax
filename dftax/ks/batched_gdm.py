@@ -311,12 +311,15 @@ def _solve_batch(stacked: PaddedKS, P0s, max_iter, e_tol, d_tol, max_step,
 
 @dataclass
 class BatchedGDMResult:
-    """Per-system results of :func:`gdm_batched`, in input order.
+    """Results of :func:`gdm_batched`, in the order of the input systems.
 
-    ``fallback`` marks the systems the batch did not settle (not converged,
-    or converged to a state whose occupied orbitals are not the lowest ones)
-    and that were re-solved one at a time by :func:`~dftax.ks.gdm.gdm`; their
-    ``n_iter`` is that solve's.
+    Attributes:
+        e_tot: total energies (Ha).
+        converged: whether each system converged.
+        n_iter: energy evaluations of each system.
+        P: density matrix of each system, ``(nspin, nao, nao)``.
+        fallback: whether each system was re-solved alone with
+            :func:`~dftax.ks.gdm.gdm`.
     """
 
     e_tot: np.ndarray
@@ -374,25 +377,30 @@ def gdm_batched(kss: Sequence[KS], *, max_iter: int = 200,
                 guess: GuessSpec | jax.Array | None = None,
                 bucket: Bucket | None = None,
                 fallback: bool = True) -> BatchedGDMResult:
-    """Minimize the KS energy of every system in ``kss`` at once. The
-    tolerances and step controls are those of :func:`~dftax.ks.gdm.gdm`.
+    """Direct minimization of many systems at once, padded to common sizes
+    and solved in one compiled call.
+
+    The tolerances and step controls are those of :func:`~dftax.ks.gdm.gdm`.
 
     Args:
-        kss: built :class:`~dftax.ks.energy.KS` objects (materialized DF and
-            grid; see the module doc). Closed and open shells, and different
-            functionals, may be mixed: they are solved as one batch per spin
-            type and functional, results in input order.
-        bucket: the padded sizes, for a batch of one spin type; default the
-            smallest that fits each group. Passing a fixed bucket lets batches
-            of similar molecules share one compiled program.
-        guess: a guess spec as for :func:`~dftax.ks.scf.scf`, applied per
-            molecule before padding.
-        fallback: re-solve one at a time, with :func:`~dftax.ks.gdm.gdm`,
-            every system the batch leaves unconverged or converges to a
-            non-aufbau state (the batched loop keeps its preconditioner in
-            the guess frame and can settle in an excited stationary state on
-            hard cases such as Cr2; :func:`~dftax.ks.gdm.gdm` re-diagonalizes
-            at its resets). Marked in ``BatchedGDMResult.fallback``.
+        kss: the systems, each a :class:`~dftax.ks.energy.KS` built with
+            ``coulomb=df(chunk=None)`` and ``grid=becke(chunk=None)``. Closed
+            and open shells and different functionals may be mixed.
+        bucket: fixed padded sizes for a batch of one spin type and one
+            functional, so batches of similar molecules reuse one compiled
+            program; ``None`` uses the smallest sizes that fit.
+        guess: a guess, as for :func:`~dftax.ks.scf.scf`.
+        fallback: re-solve alone, with :func:`~dftax.ks.gdm.gdm`, every
+            system the batch leaves unconverged or in a state whose occupied
+            orbitals are not the lowest ones.
+
+    Returns:
+        A :class:`BatchedGDMResult`.
+
+    Raises:
+        NotImplementedError: a system with streamed density fitting or grid
+            values, or with VV10.
+        ValueError: a ``bucket`` with mixed spin types or functionals.
     """
     kss = list(kss)
     groups: dict[tuple, list[int]] = {}

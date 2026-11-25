@@ -18,16 +18,15 @@ class D3BJSpec:
 
 
 def d3bj(method: str | None = None, *, atm: bool = False) -> D3BJSpec:
-    """D3(BJ) dispersion correction (two-body, optionally with ATM).
+    """Grimme's D3 dispersion correction with Becke-Johnson damping (S.
+    Grimme, S. Ehrlich and L. Goerigk, J. Comput. Chem. 32, 1456 (2011)).
+
+    Pass the result as ``KS(..., dispersion=d3bj())``.
 
     Args:
-        method: damping-parameter set name (``"pbe"``, ``"pbe0"``,
-            ``"b3lyp"``, ``"cam-b3lyp"``, ``"r2scan"``); ``None`` resolves it
-            from the functional the KS is built with.
-        atm: add the Axilrod-Teller-Muto three-body term (``s9 = 1``); off by
-            default, matching the common two-body D3(BJ) convention. The term
-            is repulsive, O(nat³), and independent of the BJ damping
-            parameters (it uses the pairwise van-der-Waals radii).
+        method: name of the damping-parameter set, e.g. ``"pbe0"``; ``None``
+            takes the set of the functional the KS is built with.
+        atm: add the Axilrod-Teller-Muto three-body term (``s9 = 1``).
     """
     return D3BJSpec(method=method, atm=atm)
 

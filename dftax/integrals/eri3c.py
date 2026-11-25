@@ -218,27 +218,24 @@ def eri3c_matrix(
     omega: float | None = None,
     plan: tuple | None = None,
 ) -> Float[Array, "nao nao n_aux"]:
-    """Compute 3-center ERI tensor (μν|P) in the AO basis.
+    """3-center electron repulsion integrals ``(μν|P)``.
 
-    Pure JAX, fully differentiable w.r.t. basis.centers and aux_basis.centers.
-    Delegates to the shell-class-bucketed engine
-    (:func:`~dftax.integrals.eri3c_bucketed.eri3c_matrix_bucketed`): one
-    right-sized kernel per (l_a, l_b, l_aux) class instead of a
-    molecule-padded per-element build (50x on ethanol/def2-svp, sub-GiB
-    peak, identical to machine precision).
+    Differentiable with respect to ``basis.centers`` and
+    ``aux_basis.centers``.
 
     Args:
-        basis: BasisData for primary AO basis (from extract_basis_data(mol)).
-        aux_basis: BasisData for auxiliary basis (from extract_basis_data(auxmol)).
-        omega: None for the Coulomb kernel, a float for the long-range
-            ``erf(ω·r₁₂)/r₁₂`` kernel (range-separated hybrids).
-        plan: static bucket skeleton from
-            :func:`~dftax.integrals.eri3c_bucketed.plan_eri3c`; required when
-            this build is traced with a fully-traced ``BasisData`` (the
-            jitted ``_build_integrals`` passes it), derived here otherwise.
+        basis: the orbital basis, from
+            :func:`~dftax.energy.gto.extract_basis_data`.
+        aux_basis: the auxiliary basis.
+        omega: ``None`` for the Coulomb operator ``1/r₁₂``; a float for the
+            long-range operator ``erf(ω r₁₂)/r₁₂``.
+        plan: the shell-class plan from
+            :func:`~dftax.integrals.eri3c_bucketed.plan_eri3c`; needed only
+            when the bases are traced, as under ``jit`` with the bases as
+            arguments.
 
     Returns:
-        (μν|P) tensor, shape (nao, nao, n_aux) in spherical harmonics.
+        ``(nao, nao, naux)`` array.
     """
     from dftax.integrals.eri3c_bucketed import eri3c_matrix_bucketed
 

@@ -228,13 +228,12 @@ def hessian(mol, xc, *, method: str = "fd", step: float = 1e-3,
             **scf_kw) -> Float[Array, "n n"]:
     """Nuclear Hessian ``∂²E/∂R_A∂R_B`` (Ha/Bohr², shape ``(3N, 3N)``).
 
-    ``method="fd"`` (default): central finite difference of the analytic
-    Pulay-free forces (6N SCF solves). ``method="analytic"``: the exact
-    orbital-rotation Schur complement
-    ``H = E_RR − E_Rκ (E_κκ)⁻¹ E_κR`` at one tightly converged reference
-    (3N CG response solves; RKS and UKS, materialized Coulomb backends;
-    see :mod:`dftax.ks.hessian`). ``step`` applies to the FD path,
-    ``cg_iters`` to the analytic response solves.
+    ``method="fd"`` (default): central finite differences of the analytic
+    forces with displacement ``step`` (6N SCF solves). ``method="analytic"``:
+    coupled-perturbed response at one tightly converged density (3N
+    conjugate-gradient solves of up to ``cg_iters`` iterations); restricted
+    and unrestricted, with stored Coulomb integrals (``exact()`` or
+    ``df(chunk=None)``).
     """
     g = _becke_spec(grid)
     if method == "analytic":
@@ -325,18 +324,12 @@ def alchemical_deriv(
     grid: Becke | None = None, coulomb: ExactSpec | DFSpec | None = None,
     **scf_kw,
 ) -> Float[Array, "n_atom"]:
-    """Alchemical gradient ``∂E/∂Z_A`` at fixed electron count (Ha per unit charge).
+    """Alchemical gradient ``∂E/∂Z_A`` at fixed electron count (Ha per unit
+    nuclear charge), from the converged density (Hellmann-Feynman).
 
-    Hellmann-Feynman: the converged density (every spin channel, held fixed via
-    its solve-based projector) and the energy is differentiated w.r.t. the
-    nuclear charges, which enter only the nuclear-attraction and
-    nuclear-repulsion terms.
-
-    ``coulomb=None`` resolves to :func:`~dftax.ks.terms.exact` here (not the
-    DF default) for backward compatibility, but ``df(...)`` works: the
-    auxiliary basis is resolved eagerly against the molecule (its centers are
-    geometry-fixed here; only the charges vary), so the raw-:class:`System`
-    charge closure and the outer solve share the same fitted backend."""
+    ``coulomb=None`` uses :func:`~dftax.ks.terms.exact`, not the density
+    fitting default; ``df(...)`` is also accepted.
+    """
     from dftax.basis.loader import build_basis_data
     from dftax.energy.gto import BasisData
 

@@ -74,13 +74,16 @@ def _spin_counts(nelec: int, spin: int) -> tuple[int, int]:
 
 @dataclass(frozen=True)
 class System:
-    """A raw, already-built system: basis + geometry + electron/spin counts.
+    """A system given by its built basis, for callers that construct the
+    basis themselves.
 
-    The low-level :class:`KS` input for callers that construct the basis
-    themselves, e.g. forces, which rebuild the energy as a function of traced
-    nuclear coordinates via a ``tree_at``-recentered basis template. ``spin``
-    (= 2S) is the system's default spin; the :class:`KS` builder's ``spin``
-    argument overrides it.
+    Attributes:
+        basis: the orbital basis.
+        coords: nuclear coordinates (Bohr), ``(natom, 3)``.
+        charges: nuclear charges, ``(natom,)``.
+        nelec: number of electrons.
+        spin: number of unpaired electrons, ``2S``; the ``spin`` argument of
+            :class:`KS` overrides it.
     """
 
     basis: BasisData
@@ -398,13 +401,11 @@ def _build_integrals(
 
 
 class KS(eqx.Module):
-    """Spin-stacked KS total energy as a differentiable function of ``P``.
+    """The Kohn-Sham total energy as a differentiable function of the density
+    matrix.
 
-    Built directly from a system + functional + backend/grid values (see the
-    module docstring). ``P`` has shape ``(nspin, nao, nao)`` with
-    ``nspin = len(self.nocc)``: one doubly-occupied channel (``P[0] = 2ΣCCᵀ``)
-    for a closed shell, two unit-occupation channels (``P[σ] = ΣC_σC_σᵀ``) for
-    a spin-polarized system.
+    ``P`` has shape ``(nspin, nao, nao)``: one channel holding the total
+    density for a closed shell, α and β channels for a spin-polarized system.
     """
 
     S: Float[Array, "nao nao"]
@@ -434,33 +435,33 @@ class KS(eqx.Module):
 
         Args:
             system: a :class:`~dftax.system.molecule.Molecule`, a PySCF
-                ``Mole`` (setup only), or a raw :class:`System`.
-            xc: the exchange-correlation functional (e.g. ``PBE()``).
-            grid: quadrature choice, a :func:`~dftax.grid.becke` spec
-                (default), an explicit ``(coords, weights)`` tuple, or a
-                :func:`~dftax.grid.points` spec (explicit grid + streaming
-                chunk).
-            coulomb: Coulomb/exchange backend, :func:`~dftax.ks.terms.df`
-                (default: ``def2-universal-jkfit``, auto materialize/stream)
-                or :func:`~dftax.ks.terms.exact` (O(N⁴); also the raw-System
-                fallback).
-            spin: ``None`` infers from the system (closed shell → restricted);
-                an explicit ``spin`` (= 2S, including 0) requests
-                spin-polarized α/β channels.
-            mesh: a :func:`~dftax.ks.shard.mesh` spec to shard the calculation
-                across a device mesh (the XC quadrature and the DF 3-center
-                tensor; the dense nao² matrices stay replicated).
-                ``None`` = single device.
-            dispersion: a :func:`~dftax.energy.d3.d3bj` spec adds the two-body
-                D3(BJ) correction to ``total()`` (P-independent, so the SCF is
-                untouched; forces get its gradient by autodiff). Parameters
-                resolve from the functional's name unless given explicitly.
+                ``Mole``, a :class:`System`, or a periodic
+                :class:`~dftax.pbc.cell.Cell`.
+            xc: the exchange-correlation functional, e.g. ``PBE()``.
+            grid: the quadrature: a :func:`~dftax.grid.becke` spec (the
+                default), a ``(coords, weights)`` tuple, or a
+                :func:`~dftax.grid.points` spec. A Cell takes
+                :func:`~dftax.pbc.build.uniform`.
+            coulomb: :func:`~dftax.ks.terms.df` (the default) or
+                :func:`~dftax.ks.terms.exact`; a :class:`System` defaults to
+                ``exact()``.
+            spin: number of unpaired electrons, ``2S``. ``None`` takes the
+                system's value and solves a closed shell restricted; an
+                explicit value, 0 included, solves spin-polarized.
+            mesh: a :func:`~dftax.ks.shard.mesh` spec to divide the
+                quadrature and the density-fitting tensor over devices;
+                ``None`` runs on one device.
+            dispersion: a :func:`~dftax.energy.d3.d3bj` or
+                :func:`~dftax.energy.d4.d4` spec, added to the total energy.
+
+        Raises:
+            ValueError: ``spin`` inconsistent with the number of electrons.
+            NotImplementedError: ``coulomb``, ``mesh`` or ``dispersion`` with
+                a Cell.
 
         Example:
             ```python
-            ks = KS(mol, PBE0(),
-                    grid=becke(75, 302),
-                    coulomb=df("def2-universal-jkfit"))
+            ks = KS(mol, PBE0(), grid=becke(75, 302), coulomb=df(chunk=None))
             ```
         """
         if not jax.config.read("jax_enable_x64"):
@@ -730,21 +731,16 @@ class KS(eqx.Module):
     def energy_and_fock(
         self, P: Float[Array, "nspin nao nao"], idempotent: bool = True
     ) -> tuple[Scalar, Float[Array, "nspin nao nao"]]:
-        """``(E_total, F)`` for one density, sharing the work between them.
+        """Total energy and Fock matrix ``sym(∂E/∂P)`` for one density,
+        computed together at about the cost of one.
 
-        Computing the two separately walks the quadrature twice, because the
-        streaming backends checkpoint their grid blocks and ``grad``
-        rematerializes them. Each term is therefore asked for both at once
-        (:meth:`~dftax.ks.terms.XCTerm.energy_and_potential`,
-        :meth:`~dftax.ks.terms.CoulombTerm.energy_and_potential`).
+        Args:
+            P: density matrix, ``(nspin, nao, nao)``.
+            idempotent: whether ``P`` has integer occupations (``False``
+                under smearing).
 
-        ``idempotent`` says whether ``P`` is an integer-occupation projector:
-        true of an aufbau density, false under Fermi smearing. The Coulomb
-        term falls back to reverse mode when told otherwise.
-
-        The result is the same ``(total(P), sym(∂E/∂P))`` as the two separate
-        calls, which ``total`` / ``electronic`` still provide for every other
-        consumer (forces, the Hessian, Newton, direct minimization).
+        Returns:
+            ``(E, F)``, with ``F`` of the shape of ``P``.
         """
         e1, g1 = jax.value_and_grad(
             lambda Q: jnp.sum(jnp.sum(Q, axis=0) * self.hcore))(P)
@@ -757,17 +753,17 @@ class KS(eqx.Module):
         return e_rest + e_xc + self.e_nn + self.e_disp, F
 
     def energy_and_grad_orbitals(self, Cs, idempotent: bool = True):
-        """``(E_total, ∂E/∂C_σ)`` for the occupied orbitals of each channel.
+        """Total energy and its gradient with respect to the occupied
+        orbitals.
 
-        The density is ``P_σ = C_σ diag(w_σ) C_σᵀ`` with the occupations of
-        :meth:`occupations` (``2`` closed shell, ``1`` per spin channel), so
-        ``∂E/∂C_σ = 2 F_σ C_σ diag(w_σ)`` with ``F = sym(∂E/∂P)``.
-        The one-electron and two-electron parts take that route, through
-        their (cheap) potentials; the XC part, almost all of an iteration,
-        comes straight from the orbitals
-        (:meth:`~dftax.ks.terms.XCTerm.energy_and_grad_orbitals`), which never
-        forms the ``nao x nao`` XC potential. What a direct minimizer
-        (:func:`~dftax.ks.gdm.gdm`) needs, and nothing more.
+        Args:
+            Cs: occupied orbital coefficients per spin channel, each
+                ``(nao, nocc_σ)``.
+            idempotent: as in :meth:`energy_and_fock`.
+
+        Returns:
+            ``(E, grads)`` with ``grads[σ] = ∂E/∂C_σ = 2 F_σ C_σ diag(w_σ)``,
+            ``w`` from :meth:`occupations`.
         """
         ws = self.occupations()
         P = jnp.stack([(C * w) @ C.T for C, w in zip(Cs, ws)])
@@ -788,9 +784,8 @@ class KS(eqx.Module):
         return e1 + e_2e + e_xc + self.e_nn + self.e_disp, grads
 
     def occupations(self):
-        """Occupation of each channel's occupied orbitals: 2 each for a
-        closed shell, 1 each per spin channel. A padded system
-        (:mod:`dftax.ks.batched_gdm`) gives its padding slots 0."""
+        """Occupation numbers of the occupied orbitals per channel: 2 for a
+        closed shell, 1 per spin channel."""
         w = 2.0 if len(self.nocc) == 1 else 1.0
         return tuple(jnp.full((n,), w) for n in self.nocc)
 

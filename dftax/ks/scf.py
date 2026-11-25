@@ -26,12 +26,25 @@ def _fock_stacked(ks: KS, P: Float[Array, "nspin nao nao"]) -> Array:
 
 @dataclass
 class KSResult:
-    """Outcome of a KS solve (SCF or direct minimization), spin-stacked.
+    """Result of a Kohn-Sham solve (:func:`scf`, :func:`~dftax.ks.gdm.gdm`,
+    :func:`~dftax.ks.newton.newton`, :func:`~dftax.ks.minimize.minimize`).
 
-    All orbital/density fields carry a leading ``nspin`` axis (``nspin =
-    len(nocc)``): a closed shell is ``nspin = 1`` (``P[0]`` doubly occupied),
-    a spin-polarized system is ``nspin = 2`` (α, β). Batched solves return the
-    distinct :class:`~dftax.ks.batched.BatchedResult` instead.
+    Orbital and density arrays have a leading spin axis: ``nspin = 1`` for a
+    closed shell (``P[0]`` is the total density), ``nspin = 2`` (α, β) for a
+    spin-polarized system.
+
+    Attributes:
+        e_tot: total energy (Ha), including nuclear repulsion and dispersion;
+            under smearing, the free energy ``E - TS``.
+        e_elec: electronic energy (Ha), ``e_tot`` without nuclear repulsion
+            and dispersion.
+        converged: whether the convergence thresholds were met.
+        n_iter: number of iterations taken.
+        nocc: occupied orbitals per spin channel.
+        mo_energy: orbital energies (Ha), ``(nspin, nmo)``.
+        mo_coeff: orbital coefficients in the AO basis, ``(nspin, nao, nmo)``.
+        P: density matrix, ``(nspin, nao, nao)``.
+        ts: entropy term ``TS`` (Ha) under smearing, else 0.
     """
 
     e_tot: float
@@ -68,21 +81,14 @@ class FermiSpec:
 def fermi(*, sigma: float = 0.01) -> FermiSpec:
     """Fermi-Dirac smearing of the SCF occupations.
 
-    Occupations become ``f_i = w / (1 + exp((eps_i - mu) / sigma))`` with the
-    chemical potential ``mu`` solved per spin channel so the electron count
-    is conserved. Small-gap and metallic-like systems (transition metals,
-    stretched bonds, clusters) converge where integer aufbau occupations
-    flip-flop between quasi-degenerate configurations, and the occupations
-    become a smooth function of the orbital energies, which keeps the energy
-    differentiable through level crossings.
+    Occupations are ``f_i = w / (1 + exp((eps_i - mu) / sigma))``, with the
+    chemical potential ``mu`` fixed per spin channel by the electron count.
+    Use it for small-gap systems, where integer occupations do not converge.
 
-    The reported ``e_tot`` is the Mermin free energy ``A = E - sigma·S`` (the
-    Kohn-Sham energy at the smeared density minus the electronic-entropy term),
-    which is the quantity the finite-temperature SCF makes stationary and whose
-    gradient is the force. The entropy term is returned as ``KSResult.ts`` so
-    the KS energy (``e_tot + ts``) and the ``sigma -> 0`` estimate
-    (``e_tot + 0.5·ts``) are recoverable; taking ``sigma`` to zero sends the
-    free energy to the integer-occupation ground-state energy.
+    ``e_tot`` is then the free energy ``E - sigma·S``, whose gradient is the
+    force; ``KSResult.ts`` holds ``sigma·S``, so ``e_tot + ts`` is the
+    Kohn-Sham energy and ``e_tot + 0.5·ts`` estimates the ``sigma -> 0``
+    energy.
 
     Args:
         sigma: smearing width in Hartree (0.01 Ha ~ 3160 K electronic
@@ -132,25 +138,22 @@ class ADIISSpec:
 
 
 def adiis(*, space: int = 8, switch: float = 1e-1) -> ADIISSpec:
-    """ADIIS-accelerated SCF (Hu-Yang energy-model extrapolation).
+    """ADIIS acceleration for :func:`scf` (Hu and Yang, J. Chem. Phys. 132,
+    054109 (2010)).
 
-    Plain Pulay DIIS extrapolates on the commutator error and can oscillate
-    or limit-cycle when the starting density is poor (transition metals,
-    radicals, stretched geometries). ADIIS instead minimizes an interpolated
-    energy model over the density/Fock history, which cannot overshoot, and
-    switches to Pulay DIIS whenever the commutator norm is below ``switch``
-    (Pulay converges faster near the fixed point; the switch is re-entrant,
-    so an error that grows again hands back to ADIIS).
+    ADIIS minimizes a model of the energy over the previous densities and
+    Fock matrices, which does not overshoot from a poor start; while the
+    commutator norm is below ``switch`` the iterations use DIIS instead. Use
+    it when plain DIIS oscillates.
 
     Args:
-        space: history depth (shared by the ADIIS and Pulay buffers).
-        switch: commutator-norm threshold between the ADIIS and Pulay
-            extrapolations.
+        space: number of previous iterations kept, for ADIIS and DIIS alike.
+        switch: commutator norm below which DIIS takes over.
 
     Example:
         ```python
-        res = scf(ks, accel=adiis())             # robust far-from-convergence
-        res = scf(ks, accel=adiis(switch=1e-2))  # trust ADIIS longer
+        res = scf(ks, accel=adiis())
+        res = scf(ks, accel=adiis(switch=1e-2))
         ```
     """
     return ADIISSpec(space=space, switch=switch)
@@ -322,67 +325,54 @@ def scf(
     smearing: FermiSpec | None = None,
     verbose: bool = False,
 ) -> KSResult:
-    """Run KS SCF to self-consistency (restricted and spin-polarized alike).
+    """Solve the Kohn-Sham equations self-consistently.
+
+    Restricted (``nspin = 1``) and spin-polarized (``nspin = 2``) systems use
+    the same call; DIIS on the commutator ``FPS - SPF`` accelerates the
+    iterations.
 
     Args:
-        ks: the built :class:`~dftax.ks.energy.KS` energy functional.
-        max_iter: maximum SCF iterations.
-        e_tol: convergence threshold on the total-energy change (Ha).
+        ks: the energy functional, from :class:`~dftax.ks.energy.KS`, or a
+            k-point functional from :func:`~dftax.pbc.kpoint_ks` (solved by
+            :func:`~dftax.pbc.kpoints.scf_k`, which takes no ``guess``,
+            ``accel`` or ``level_shift``).
+        max_iter: maximum number of iterations.
+        e_tol: convergence threshold on the change of the total energy (Ha).
+            Density-fitted energies carry a floating-point noise of about
+            ``5e-11·|E|``, so thresholds below that do not converge reliably;
+            tighten ``d_tol`` instead.
+        d_tol: convergence threshold on the norm of the commutator, the
+            orbital gradient. PySCF's convention is ``d_tol = sqrt(e_tol)``.
+        diis_space: number of previous iterations DIIS extrapolates over.
+        lindep_thresh: overlap eigenvalues below this are dropped from the
+            orthonormal basis (removes linear dependencies).
+        level_shift: shift (Ha) added to the virtual orbital energies; damps
+            oscillations at the cost of slower convergence.
+        guess: initial density: :func:`~dftax.ks.guess.core`,
+            :func:`~dftax.ks.guess.sad`, :func:`~dftax.ks.guess.minao`,
+            :func:`~dftax.ks.guess.sap`, or a ``(nspin, nao, nao)`` density.
+            ``None`` is ``minao()``, or the core Hamiltonian where the atomic
+            densities are unavailable.
+        accel: :func:`adiis` for ADIIS far from convergence and DIIS near it
+            (its ``space`` replaces ``diis_space``); ``None`` is DIIS alone.
+        smearing: :func:`fermi` for Fermi-Dirac occupations; ``None`` fills
+            the lowest orbitals.
+        verbose: print the energy and commutator norm at every iteration.
 
-            An energy evaluation has a floating-point floor of roughly
-            ``5e-11·|E|``, essentially all of it in the density-fitted Coulomb
-            term (the RI metric pseudo-inverse retains directions down to 1e-7
-            of the largest eigenvalue, so contracting against the explicit
-            inverse is that ill-conditioned by construction; the XC quadrature
-            and the one-electron terms are clean to 1e-14). Measured by
-            sweeping the density along a line and fitting the parabola the
-            energy is analytically supposed to be: 1.06e-8 Ha on cubane,
-            2.30e-8 on bicyclo[2.2.2]octane, 2.07e-8 on adamantane, 3.52e-8 on
-            coronene. A threshold below that is not a test but a coin flip,
-            which is worth knowing before tightening this: on coronene,
-            ``e_tol=1e-9`` costs 102 iterations against 10 for ``1e-8``, and
-            buys 8.4e-9 Ha. The floor is far below chemical accuracy and does
-            not affect any energy difference; it only limits what this
-            argument can usefully be set to, and it grows with the molecule
-            while the default does not.
-        d_tol: convergence threshold on the DIIS commutator norm. This is the
-            orbital gradient, and unlike ``e_tol`` it has no such floor, so it
-            is the criterion to tighten and the one that keeps working as the
-            system grows. PySCF's convention for the pair is
-            ``d_tol = sqrt(e_tol)``.
-        diis_space: DIIS history depth (fixed buffer size).
-        lindep_thresh: overlap-eigenvalue cutoff for canonical orthonormalization.
-        level_shift: Saunders-Hillier virtual level shift (Ha).
-        guess: initial density, a spec from :func:`~dftax.ks.guess.core` /
-            :func:`~dftax.ks.guess.sad` / :func:`~dftax.ks.guess.minao` /
-            :func:`~dftax.ks.guess.sap`, or an explicit ``(nspin, nao, nao)``
-            density array (warm restart). ``None`` is
-            :func:`~dftax.ks.guess.minao`, falling back to the core
-            Hamiltonian where the atomic densities cannot be built.
-        accel: an :func:`adiis` spec runs the far-from-convergence
-            iterations with ADIIS (energy-model extrapolation, no
-            oscillation), blending into Pulay DIIS near the fixed point;
-            ``None`` is plain Pulay DIIS. When given, its ``space``
-            supersedes ``diis_space``.
-        smearing: a :func:`fermi` spec replaces the integer aufbau fill with
-            Fermi-Dirac fractional occupations (small-gap systems, smooth
-            energies through level crossings); ``None`` is the aufbau fill.
-        verbose: print per-iteration energy / error (via jax.debug.print).
+    Returns:
+        A :class:`KSResult`. ``converged`` is ``False`` (and a warning is
+        issued) when ``max_iter`` is reached first.
+
+    Raises:
+        NotImplementedError: ``smearing`` with a hybrid on the streamed
+            density-fitting backend (use ``coulomb=df(chunk=None)``), or
+            ``guess``, ``accel`` or ``level_shift`` with k-points.
 
     Example:
         ```python
-        ks = KS(mol, PBE())
-        res = scf(ks, e_tol=1e-9)
-        res = scf(ks, guess=sad())               # fewer iterations
-        res.e_tot, res.converged, res.P[0]       # P is spin-stacked
+        res = scf(KS(mol, PBE()), guess=sad())
+        res.e_tot, res.converged, res.P[0]
         ```
-
-    A periodic cell at a k-mesh (a :class:`~dftax.pbc.kpoints.KPointKS`,
-    from :func:`~dftax.pbc.kpoint_ks`) is solved by
-    :func:`~dftax.pbc.kpoints.scf_k` with ``smearing``, the tolerances,
-    ``max_iter``, ``diis_space`` and ``verbose`` passed on; it starts from
-    the core Hamiltonian, keeps its own linear-dependence threshold (PySCF's)
-    and takes no ``guess``, ``accel`` or ``level_shift``.
     """
     if not isinstance(ks, KS):
         from dftax.pbc.kpoints import KPointKS, scf_k

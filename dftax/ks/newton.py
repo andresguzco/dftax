@@ -217,31 +217,32 @@ def roks(
     guess: GuessSpec | Array | None = None,
     verbose: bool = False,
 ) -> KSResult:
-    """Restricted open-shell KS via shared-orbital Newton.
+    """Restricted open-shell Kohn-Sham, solved by trust-region Newton.
 
-    One set of spatial orbitals for both spin channels (alpha fills the
-    first ``nocc[0]``, beta the first ``nocc[1]``), so the wavefunction is a
-    spin eigenfunction with none of UKS's spin contamination. Implemented as
-    :func:`newton` over rotations of the single shared orbital set: kappa is
-    masked to the doubly-occupied/singly-occupied/virtual inter-block
-    rotations that change the density, and the constraint that the beta
-    space sits inside the alpha space holds by construction. Requires a
-    spin-polarized ``ks`` (``spin != 0``).
+    Both spin channels share one set of spatial orbitals (α fills the first
+    ``nocc[0]``, β the first ``nocc[1]``), so the result has no spin
+    contamination. ``ks`` must be spin-polarized (``spin != 0``).
 
     Args:
-        ks: the built spin-polarized :class:`~dftax.ks.energy.KS`.
+        ks: a spin-polarized :class:`~dftax.ks.energy.KS`.
         max_iter: maximum Newton iterations.
         g_tol: convergence threshold on the orbital-gradient norm.
         e_tol: convergence threshold on the energy change (Ha).
-        cg_iters: CG iterations for the Newton step.
-        trust: initial trust radius on the rotation norm.
-        guess: initial density, same forms as :func:`~dftax.ks.scf.scf`.
-        verbose: print per-iteration energy / gradient norm.
+        cg_iters: conjugate-gradient iterations per Newton step.
+        trust: initial trust radius on the rotation norm (rad).
+        guess: initial density, as in :func:`~dftax.ks.scf.scf`.
+        verbose: print the energy and gradient norm at every iteration.
+
+    Returns:
+        A :class:`~dftax.ks.scf.KSResult` with the same orbitals in both
+        channels.
+
+    Raises:
+        ValueError: ``ks`` is not spin-polarized.
 
     Example:
         ```python
-        ks = KS(mol, PBE(), spin=2)              # triplet
-        res = roks(ks)                           # E >= UKS, no contamination
+        res = roks(KS(mol, PBE(), spin=2))       # triplet
         ```
     """
     if len(ks.nocc) != 2:

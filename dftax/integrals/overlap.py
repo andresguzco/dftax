@@ -103,18 +103,20 @@ def _contracted_integral(alpha_a, coeff_a, center_a, ang_a,
 
 def overlap_matrix(basis: BasisData,
                    plan: tuple | None = None) -> Float[Array, "nao nao"]:
-    """Compute the overlap matrix S_μν in the AO basis.
+    """Overlap matrix ``S_μν = ⟨χ_μ|χ_ν⟩``.
 
-    Pure JAX, fully differentiable w.r.t. basis.centers. Delegates to the
-    shell-class-bucketed engine (see :mod:`dftax.integrals.eri3c_bucketed`);
-    ``plan`` is a static :func:`~dftax.integrals.eri3c_bucketed.plan_pairs`
-    skeleton, derived here when the basis metadata is concrete.
+    Differentiable with respect to ``basis.centers``.
 
     Args:
-        basis: BasisData from extract_basis_data(mol).
+        basis: the orbital basis, from
+            :func:`~dftax.energy.gto.extract_basis_data`.
+        plan: the shell-pair plan from
+            :func:`~dftax.integrals.eri3c_bucketed.plan_pairs`; needed only
+            when ``basis`` is traced, as under ``jit`` with the basis as an
+            argument.
 
     Returns:
-        S matrix, shape (nao, nao) where nao = nao_cart (or nao_sph if cart2sph).
+        ``(nao, nao)`` array, spherical when the basis is.
     """
     from dftax.integrals.eri3c_bucketed import overlap_kinetic_bucketed
 
@@ -170,16 +172,20 @@ def cross_overlap_matrix(
 
 def kinetic_matrix(basis: BasisData,
                    plan: tuple | None = None) -> Float[Array, "nao nao"]:
-    """Compute the kinetic energy matrix T_μν in the AO basis.
+    """Kinetic energy matrix ``T_μν = -½ ⟨χ_μ|∇²|χ_ν⟩``.
 
-    Pure JAX, fully differentiable w.r.t. basis.centers. Delegates to the
-    shell-class-bucketed engine (see :mod:`dftax.integrals.eri3c_bucketed`).
+    Differentiable with respect to ``basis.centers``.
 
     Args:
-        basis: BasisData from extract_basis_data(mol).
+        basis: the orbital basis, from
+            :func:`~dftax.energy.gto.extract_basis_data`.
+        plan: the shell-pair plan from
+            :func:`~dftax.integrals.eri3c_bucketed.plan_pairs`; needed only
+            when ``basis`` is traced, as under ``jit`` with the basis as an
+            argument.
 
     Returns:
-        T matrix, shape (nao, nao).
+        ``(nao, nao)`` array, spherical when the basis is.
     """
     from dftax.integrals.eri3c_bucketed import overlap_kinetic_bucketed
 

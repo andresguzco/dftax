@@ -1707,7 +1707,8 @@ builder:</p>
   advanced differentiable rebuilds.</li>
 <li><strong>xc</strong>: <code>LDA()</code>, <code>PBE()</code>, the hybrids <code>PBE0()</code> / <code>B3LYP()</code>, the
   range-separated <code>CAMB3LYP()</code> / <code>WB97X()</code> / <code>WB97XV()</code> (the last with VV10
-  nonlocal correlation), or the meta-GGA <code>R2SCAN()</code>. Functionals are Equinox
+  nonlocal correlation), the long-range-corrected <code>WB97()</code> / <code>LCBLYP()</code> (exact
+  exchange in the long range only), or the meta-GGA <code>R2SCAN()</code>. Functionals are Equinox
   modules; hybrids simply carry exact-exchange coefficients (range-separated
   ones add <code>omega</code>, and the engine builds the attenuated integrals on every
   DF backend).</li>

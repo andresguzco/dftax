@@ -34,7 +34,9 @@ build it for small systems / validation. For energies on larger systems use
 the fly and never materialise the full tensor (O(N²) memory).
 """
 
-from functools import lru_cache
+import os
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache, partial
 
 import jax
 import jax.numpy as jnp
@@ -582,51 +584,153 @@ def eri4c_matrix_bucketed(
     symmetry, and blocks within one scatter are disjoint because canonical
     quartets are distinct).
     """
-    from dftax.integrals.eri3c_bucketed import _IDX, _gather_rows, _scatter_blocks
-
     if plan is None:
         plan = plan_eri4c(basis)
-    nao, classes = plan
-    cen = basis.centers
-    out = jnp.zeros((nao, nao, nao, nao), dtype=cen.dtype)
-    for (la, lb, lc, ldl, anga, angb, angc, angd,
-         ra, rb, rc, rd, nprims) in classes:
-        npa, npb, npc, npd = nprims
-        ra = np.asarray(ra).astype(_IDX); rb = np.asarray(rb).astype(_IDX)
-        rc = np.asarray(rc).astype(_IDX); rd = np.asarray(rd).astype(_IDX)
-        nca, ncb, ncc, ncd = (
-            (l + 1) * (l + 2) // 2 for l in (la, lb, lc, ldl)
-        )
-        ca = _gather_rows(basis.coefficients, ra, nca)[:, :, :npa]
-        cb = _gather_rows(basis.coefficients, rb, ncb)[:, :, :npb]
-        cc = _gather_rows(basis.coefficients, rc, ncc)[:, :, :npc]
-        cd = _gather_rows(basis.coefficients, rd, ncd)[:, :, :npd]
-        fn = _compiled_eri4c_kernel(
-            la, lb, lc, ldl, anga, angb, angc, angd, omega,
-            min(_eri4c_class_chunk(la, lb, lc, ldl, nprims), ra.shape[0]),
-        )
-        vals = fn(
-            cen[ra], cen[rb], cen[rc], cen[rd],
-            basis.exponents[ra][:, :npa], basis.exponents[rb][:, :npb],
-            basis.exponents[rc][:, :npc], basis.exponents[rd][:, :npd],
-            ca, cb, cc, cd,
-        )                                # (nquart, nca, ncb, ncc, ncd)
-        rows = (ra, rb, rc, rd)
-        for perm in (
-            (0, 1, 2, 3), (1, 0, 2, 3), (0, 1, 3, 2), (1, 0, 3, 2),
-            (2, 3, 0, 1), (3, 2, 0, 1), (2, 3, 1, 0), (3, 2, 1, 0),
-        ):
-            starts = np.stack([rows[p] for p in perm], axis=1).astype(_IDX)
-            out = _scatter_blocks(
-                out, starts, vals.transpose((0,) + tuple(p + 1 for p in perm))
-            )
+    out = _eri4c_cart(plan, omega, basis.centers, basis.exponents,
+                      basis.coefficients)
     if basis.cart2sph is not None:
-        Cs = basis.cart2sph
-        out = jnp.einsum("ai,abcd->ibcd", Cs, out)
-        out = jnp.einsum("bj,ibcd->ijcd", Cs, out)
-        out = jnp.einsum("ck,ijcd->ijkd", Cs, out)
-        out = jnp.einsum("dl,ijkd->ijkl", Cs, out)
+        out = _cart_to_sph_4c(out, basis.cart2sph)
     return out
+
+
+def _eri4c_matrix_for_forces(basis, plan, omega=None):
+    out = _eri4c_cart_center_vjp(plan, omega, basis.centers, basis.exponents,
+                                 basis.coefficients)
+    if basis.cart2sph is not None:
+        out = _cart_to_sph_4c(out, basis.cart2sph)
+    return out
+
+
+def _class_rows_and_key(cls, omega):
+    from dftax.integrals.eri3c_bucketed import _IDX
+
+    la, lb, lc, ldl, anga, angb, angc, angd, ra, rb, rc, rd, nprims = cls
+    rows = [np.asarray(r).astype(_IDX) for r in (ra, rb, rc, rd)]
+    chunk = min(_eri4c_class_chunk(la, lb, lc, ldl, nprims), rows[0].shape[0])
+    return rows, (la, lb, lc, ldl, anga, angb, angc, angd, nprims, omega, chunk)
+
+
+def _compile_workers():
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:
+        return max(1, os.cpu_count() or 1)
+
+
+_COMPILED = {}
+
+
+def _compiled(jobs):
+    keys = [(tag, tuple((np.shape(a), str(a.dtype)) for a in args))
+            for tag, _, args in jobs]
+    todo = {}
+    for key, (_, fn, args) in zip(keys, jobs):
+        if key not in _COMPILED and key not in todo:
+            todo[key] = fn.lower(*(jax.ShapeDtypeStruct(np.shape(a), a.dtype)
+                                   for a in args))
+    if todo:
+        with ThreadPoolExecutor(min(len(todo), _compile_workers())) as ex:
+            _COMPILED.update(zip(todo, ex.map(lambda low: low.compile(),
+                                              todo.values())))
+    return [_COMPILED[k] for k in keys]
+
+
+def _traced(*xs):
+    return any(isinstance(x, jax.core.Tracer) for x in xs)
+
+
+def _eri4c_cart(plan, omega, cen, exps, coefs):
+    nao, classes = plan
+    out = jnp.zeros((nao, nao, nao, nao), dtype=cen.dtype)
+    jobs = [_class_rows_and_key(cls, omega) for cls in classes]
+    progs = [_eri4c_class_program(*key) for _, key in jobs]
+    if not _traced(cen, exps, coefs):
+        progs = _compiled([(("fwd", key), prog, (out, cen, exps, coefs, *rows))
+                           for (rows, key), prog in zip(jobs, progs)])
+    for (rows, _), prog in zip(jobs, progs):
+        out = prog(out, cen, exps, coefs, *rows)
+    return out
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(0, 1))
+def _eri4c_cart_center_vjp(plan, omega, cen, exps, coefs):
+    return _eri4c_cart(plan, omega, cen, exps, coefs)
+
+
+def _eri4c_cart_center_vjp_fwd(plan, omega, cen, exps, coefs):
+    return _eri4c_cart(plan, omega, cen, exps, coefs), (cen, exps, coefs)
+
+
+def _eri4c_cart_center_vjp_bwd(plan, omega, res, g):
+    cen, exps, coefs = res
+    dcen = jnp.zeros_like(cen)
+    jobs = [_class_rows_and_key(cls, omega) for cls in plan[1]]
+    progs = [_eri4c_class_center_vjp(*key) for _, key in jobs]
+    if not _traced(cen, exps, coefs, g):
+        progs = _compiled([(("bwd", key), prog, (dcen, cen, exps, coefs, *rows, g))
+                           for (rows, key), prog in zip(jobs, progs)])
+    for (rows, _), prog in zip(jobs, progs):
+        dcen = prog(dcen, cen, exps, coefs, *rows, g)
+    return dcen, jnp.zeros_like(exps), jnp.zeros_like(coefs)
+
+
+_eri4c_cart_center_vjp.defvjp(_eri4c_cart_center_vjp_fwd,
+                              _eri4c_cart_center_vjp_bwd)
+
+
+@lru_cache(maxsize=4096)
+def _eri4c_class_center_vjp(*key):
+    write = _eri4c_class_program(*key)
+
+    @jax.jit
+    def vjp(dcen, cen, exps, coefs, ra, rb, rc, rd, g):
+        _, pull = jax.vjp(
+            lambda c: write(jnp.zeros_like(g), c, exps, coefs, ra, rb, rc, rd),
+            cen)
+        return dcen + pull(g)[0]
+
+    return vjp
+
+
+_QUARTET_PERMS = (
+    (0, 1, 2, 3), (1, 0, 2, 3), (0, 1, 3, 2), (1, 0, 3, 2),
+    (2, 3, 0, 1), (3, 2, 0, 1), (2, 3, 1, 0), (3, 2, 1, 0),
+)
+
+
+@lru_cache(maxsize=4096)
+def _eri4c_class_program(la, lb, lc, ldl, anga, angb, angc, angd, nprims,
+                         omega, chunk_size):
+    from dftax.integrals.eri3c_bucketed import _gather_rows, _scatter_blocks
+
+    ncs = tuple((l + 1) * (l + 2) // 2 for l in (la, lb, lc, ldl))
+    kern = _compiled_eri4c_kernel(la, lb, lc, ldl, anga, angb, angc, angd,
+                                  omega, chunk_size)
+
+    @jax.jit
+    def run(out, cen, exps, coefs, ra, rb, rc, rd):
+        rows = (ra, rb, rc, rd)
+        vals = kern(
+            *(cen[r] for r in rows),
+            *(exps[r][:, :n] for r, n in zip(rows, nprims)),
+            *(_gather_rows(coefs, r, nc)[:, :, :n]
+              for r, nc, n in zip(rows, ncs, nprims)),
+        )
+        for perm in _QUARTET_PERMS:
+            starts = jnp.stack([rows[p] for p in perm], axis=1)
+            out = _scatter_blocks(
+                out, starts, vals.transpose((0,) + tuple(p + 1 for p in perm)))
+        return out
+
+    return run
+
+
+@jax.jit
+def _cart_to_sph_4c(out, Cs):
+    out = jnp.einsum("ai,abcd->ibcd", Cs, out)
+    out = jnp.einsum("bj,ibcd->ijcd", Cs, out)
+    out = jnp.einsum("ck,ijcd->ijkd", Cs, out)
+    return jnp.einsum("dl,ijkd->ijkl", Cs, out)
 
 
 # ---------------------------------------------------------------------------

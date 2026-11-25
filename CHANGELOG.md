@@ -21,6 +21,27 @@ to [Semantic Versioning](https://semver.org/).
   `scripts/gen_d3_data.py` and `gen_d4_data.py` take `--damping` to rewrite
   only the damping table of the bundled data.
 
+### Changed
+- **jax 0.12.0 and 0.12.1 are excluded.** Their GPU scatter kernel reads past
+  the end of its index buffer when a scatter fits in one thread block, and
+  fails with `CUDA_ERROR_ILLEGAL_ADDRESS` when that buffer ends at an unmapped
+  page ([openxla/xla#53560](https://github.com/openxla/xla/pull/53560), fixed
+  upstream after 0.12.1). dftax's small integral scatters hit it under the
+  default GPU memory preallocation. jax 0.11.2 passes the same reproducer on
+  an A100.
+
+### Fixed
+- **`forces()` with `coulomb=exact()` for hybrids.** The gradient
+  differentiated the whole jitted integral build as one program; water/def2-svp
+  with PBE0 ran out of 32 GB of host memory while compiling it, and smaller
+  cases recompiled about 250 per-class backward programs on every call. The
+  4-center tensors are now built one shell-quartet class at a time, each class
+  one cached program with a cached backward pass, and an eager build compiles
+  these programs in parallel. On water/def2-svp with 6 CPUs the first call in
+  a process takes about 9 min with a peak host memory of 10.5 GB, and calls
+  from the third on take 0.8 s (the second also compiles the fused integral
+  build, about 45 s). Forces match PySCF to 2e-9 Ha/Bohr.
+
 ## [0.10.0] - 2026-11-24
 
 ### Added

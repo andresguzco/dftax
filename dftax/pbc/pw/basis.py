@@ -1,17 +1,3 @@
-"""The plane-wave basis of a periodic cell.
-
-A Bloch orbital at wave vector ``k`` is expanded as
-
-    ψ_nk(r) = Ω^(-1/2) sum_G c_nkG exp(i (k + G)·r),   |k + G|^2 / 2 <= ecut,
-
-so its coefficients live on the integer triples ``m`` of ``G = m·b`` inside
-a sphere (one per ``k``). The spheres of all ``k`` are padded to one size
-with a mask, so every ``k`` runs the same program. The density, a sum of
-``|ψ|^2``, holds waves up to ``4 ecut`` and lives on the uniform mesh that
-holds them (no aliasing), where the Hartree, local-pseudopotential and XC
-energies are the ones the Gaussian engine already takes on its grid.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -25,8 +11,6 @@ from dftax.pbc.lattice import mesh_for_cutoff
 
 @dataclass(frozen=True)
 class PlaneWaves:
-    """The plane-wave basis of a cell (see :func:`planewaves`)."""
-
     ecut: float
     mesh: tuple[int, int, int] | None = None
 
@@ -53,23 +37,12 @@ def planewaves(ecut: float, *,
 
 
 def monkhorst_pack(kmesh, shift=(0, 0, 0), time_reversal: bool = True):
-    """A Monkhorst-Pack mesh in fractional coordinates of the reciprocal
-    lattice, ``(nk, 3)``, with its weights ``(nk,)`` (summing to 1).
-
-    ``shift = 0`` (default) centres the mesh on Gamma, which an even mesh
-    otherwise misses: a Gamma-centred ``n1 x n2 x n3`` mesh is exactly the
-    Gamma point of the ``n1 x n2 x n3`` supercell. With ``time_reversal``
-    (default) ``k`` and ``-k`` are one point of twice the weight: their
-    densities and band energies are equal for a real (spin-free) potential.
-    No other symmetry is used.
-    """
     n = np.array([int(x) for x in kmesh])
     s = np.array([float(x) for x in shift])
     axes = [(np.arange(n[d]) + 0.5 * s[d]) / n[d] for d in range(3)]
     k = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
     w = np.full(k.shape[0], 1.0 / k.shape[0])
     if time_reversal:
-        # integer labels 2 n k (mod 2 n) find each point's partner -k
         lab = np.round(2 * n * k).astype(int) % (2 * n)
         where = {tuple(x): i for i, x in enumerate(lab)}
         keep, wk, seen = [], [], set()
@@ -81,28 +54,20 @@ def monkhorst_pack(kmesh, shift=(0, 0, 0), time_reversal: bool = True):
             keep.append(i)
             wk.append(w[i] * (1.0 if j == i else 2.0))
         k, w = k[keep], np.asarray(wk)
-    k = k - np.round(k)                       # into (-1/2, 1/2]
+    k = k - np.round(k)
     return k, w
 
 
 @dataclass(frozen=True, eq=False)
 class PWPlan:
-    """The plane-wave spheres of every ``k``, fixed by the concrete lattice.
-
-    ``miller`` are the integer triples ``m`` (``G = m·b``), padded to one
-    length per ``k`` (``mask`` 0 on the padding); ``fft_idx`` is the flat
-    index of each wave on the density mesh (C order, negative indices
-    wrapped), the box a wavefunction is put into before its FFT.
-    """
-
     ecut: float
     mesh: tuple[int, int, int]
     kfrac: Float[Array, "nk 3"]
     weights: Float[Array, "nk"]
-    miller: Float[Array, "nk npw 3"]          # integers, as floats
+    miller: Float[Array, "nk npw 3"]
     mask: Float[Array, "nk npw"]
     fft_idx: Int[Array, "nk npw"]
-    npw: tuple[int, ...]                       # true sphere sizes
+    npw: tuple[int, ...]
 
     @property
     def nk(self) -> int:
@@ -110,8 +75,6 @@ class PWPlan:
 
 
 def plan_planewaves(a, pw: PlaneWaves, kfrac=None, weights=None) -> PWPlan:
-    """The spheres of the cell's lattice ``a`` (concrete) at the k-points
-    ``kfrac`` (fractional, default Gamma)."""
     a = np.asarray(a, dtype=np.float64)
     b = 2.0 * np.pi * np.linalg.inv(a).T
     if kfrac is None:
@@ -122,8 +85,6 @@ def plan_planewaves(a, pw: PlaneWaves, kfrac=None, weights=None) -> PWPlan:
     mesh = pw.mesh if pw.mesh is not None else mesh_for_cutoff(a, 4.0 * pw.ecut)
     n = np.array(mesh)
 
-    # every triple whose wave can fall inside the sphere of some k (|k| is
-    # at most half a reciprocal vector per axis, hence the +1)
     gmax = np.sqrt(2.0 * pw.ecut)
     nmax = np.floor(gmax * np.linalg.norm(a, axis=1) / (2.0 * np.pi)).astype(int) + 1
     m = np.stack(np.meshgrid(*[np.arange(-x, x + 1) for x in nmax],
@@ -134,8 +95,6 @@ def plan_planewaves(a, pw: PlaneWaves, kfrac=None, weights=None) -> PWPlan:
         spheres.append(m[0.5 * np.sum(q * q, axis=1) <= pw.ecut])
     npw = [len(s) for s in spheres]
     width = max(npw)
-    # the mesh must at least hold every wave (the default, 4 ecut, also
-    # holds every product of two, so the density is not aliased)
     reach = np.max([np.abs(s).max(0) for s in spheres], axis=0)
     if np.any(2 * reach + 1 > n):
         raise ValueError(f"mesh {mesh} is too small for ecut {pw.ecut}")

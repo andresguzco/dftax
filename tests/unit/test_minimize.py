@@ -1,10 +1,3 @@
-"""Direct variational minimization reaches the SCF ground state.
-
-The Adam-based direct minimizer optimizes E(P) over Löwdin-orthonormalized
-coefficients; at convergence it must reach the same energy as the DIIS SCF
-solver (and hence PySCF).
-"""
-
 import jax.numpy as jnp
 import pytest
 
@@ -39,7 +32,6 @@ class TestDirectMinimization:
 
 @pytest.mark.float64
 def test_params_dependent_optimizer():
-    """opt.update receives the params, so transforms that need them work."""
     import optax
     from dftax import Molecule, becke
 

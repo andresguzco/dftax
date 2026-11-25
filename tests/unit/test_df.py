@@ -1,9 +1,3 @@
-"""Density fitting (RI-J / RI-K) reproduces the exact-ERI energy.
-
-With a standard JK-fitting auxiliary basis, the RI Coulomb (and RI exact
-exchange, for hybrids) should match the full 4-center result to sub-mHa.
-"""
-
 import jax.numpy as jnp
 import pytest
 
@@ -19,7 +13,6 @@ AUX = "def2-universal-jkfit"
 @pytest.mark.pyscf
 @pytest.mark.float64
 class TestDensityFitting:
-    # LDA exercises RI-J; PBE0 additionally exercises RI-K.
     @pytest.mark.parametrize("xc_cls,pyscf_xc", [(PBE0, "pbe0")])
     def test_ri_matches_full_eri(self, xc_cls, pyscf_xc):
         mol = gto.M(atom=H2O, basis="sto-3g").build()
@@ -36,20 +29,12 @@ class TestDensityFitting:
         )
         assert res_df.converged
         assert res_df.P is not None
-        # RI error vs the exact 4-center result: sub-mHa.
         assert abs(res_df.e_tot - e_full) < 1e-3, f"RI err {res_df.e_tot - e_full}"
 
 
 @pytest.mark.pyscf
 @pytest.mark.float64
 def test_spherical_aux_knob():
-    """df(spherical=...) controls the auxiliary span on the materialized path.
-
-    The default upgrades to spherical harmonics (fewer auxiliary functions,
-    positive definite metric); spherical=False keeps the cartesian span the
-    streamed and sharded backends use; spherical=True with a streamed chunk
-    is rejected at the factory.
-    """
     mol = gto.M(atom=H2O, basis="sto-3g").build()
     grid = jnp.zeros((8, 3)), jnp.zeros((8,))
     ks_sph = KS(mol, LDA(), grid=grid, coulomb=df(AUX, whiten=False))
@@ -57,6 +42,6 @@ def test_spherical_aux_knob():
                  coulomb=df(AUX, spherical=False, whiten=False))
     naux_sph = ks_sph.coulomb.int3c.shape[-1]
     naux_cart = ks_cart.coulomb.int3c.shape[-1]
-    assert naux_sph < naux_cart  # h/i cartesian contaminants dropped
+    assert naux_sph < naux_cart
     with pytest.raises(ValueError):
         df(AUX, chunk=50, spherical=True)

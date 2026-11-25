@@ -1,5 +1,3 @@
-"""Fermi-Dirac smearing: sigma->0 limit, electron count, Mermin free energy."""
-
 import jax.numpy as jnp
 import pytest
 
@@ -31,23 +29,17 @@ def test_electron_count_conserved():
 
 @pytest.mark.float64
 def test_mermin_free_energy_is_variational():
-    """The reported e_tot under smearing is the Mermin free energy A = E - TS.
-    By the finite-temperature variational principle A sits at or below the
-    integer-occupation ground state, while the KS energy component (A + ts)
-    rises (entropy pushes weight into the gap). ts is non-negative."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     ks = KS(mol, PBE(), grid=becke(35, 50))
     r0 = scf(ks)
     r1 = scf(ks, smearing=fermi(sigma=0.02))
     assert r1.ts >= 0.0
-    assert r1.e_tot <= r0.e_tot + 1e-10               # free energy: lower bound
-    assert (r1.e_tot + r1.ts) >= r0.e_tot - 1e-10     # KS energy: raised
+    assert r1.e_tot <= r0.e_tot + 1e-10
+    assert (r1.e_tot + r1.ts) >= r0.e_tot - 1e-10
 
 
 @pytest.mark.float64
 def test_entropy_vanishes_for_gapped_at_small_sigma():
-    """A well-gapped system at tiny sigma has integer occupations, so the
-    entropy term vanishes and the free energy equals the aufbau energy."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     ks = KS(mol, PBE(), grid=becke(35, 50))
     r = scf(ks, smearing=fermi(sigma=0.001))

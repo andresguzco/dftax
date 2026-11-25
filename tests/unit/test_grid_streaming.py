@@ -1,10 +1,3 @@
-"""Chunked/streamed XC grid matches the materialized path.
-
-With ``points(..., chunk=)`` set, the AO grid is recomputed per chunk
-(O(chunk·nao) memory) instead of materialized; the resulting energy must be
-identical.
-"""
-
 import jax.numpy as jnp
 import pytest
 
@@ -25,9 +18,6 @@ def test_streamed_matches_materialized(xc_cls, pyscf_xc, water_mol):
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
 
-    # exact(): the test targets grid streaming, and the two separately
-    # converged runs must not ride on the DF stopping-tolerance flap
-    # through the RI metric (~5e-9, above the 1e-9 bound here).
     e_mat = scf(
         KS(water_mol, xc_cls(), grid=(grid[0], grid[1]), coulomb=exact())
     ).e_tot

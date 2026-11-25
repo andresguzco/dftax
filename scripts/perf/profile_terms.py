@@ -41,10 +41,6 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 GEOM_DIR = os.path.join(HERE, "geometries")
 
-# Vendored (scripts/perf/geometries) rather than read from geomeTRIC's data
-# directory like the GPU4PySCF harness does: a performance baseline that moves
-# when an unrelated package is upgraded is not a baseline. cubane and coronene
-# are the two rows in BENCHMARKS.md, so their numbers stay comparable.
 LADDER = [
     ("water", 3),
     ("cubane", 16),
@@ -57,7 +53,6 @@ WATER = "O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043"
 
 
 def read_xyz(name: str) -> str:
-    """A PySCF-style atom string (Angstrom) from the vendored geometries."""
     if name == "water":
         return WATER
     with open(os.path.join(GEOM_DIR, f"{name}.xyz")) as fh:
@@ -76,10 +71,6 @@ def git_sha() -> str:
         return "unknown"
 
 
-# ---------------------------------------------------------------------------
-# Measurement
-# ---------------------------------------------------------------------------
-
 def _peak_bytes() -> int:
     import jax
 
@@ -88,24 +79,11 @@ def _peak_bytes() -> int:
 
 
 def measure(fn, args, repeat: int, split_compile: bool = True) -> dict:
-    """Cold wall, warm wall and device peak for one jitted callable.
-
-    ``cold`` is the first call: Python tracing plus XLA compilation plus one
-    execution, i.e. what a user waiting for a single calculation pays. When the
-    jit API exposes it, tracing and compilation are also reported separately,
-    because they have different fixes (graph size against XLA), and
-    BENCHMARKS.md records that coronene's cold build splits about evenly
-    between the two.
-    """
     import jax
 
     rec: dict = {}
     if split_compile:
         try:
-            # eqx.filter_jit exposes .lower() but NOT .trace(); jax.jit has
-            # both. On the filter_jit path `trace_s` therefore covers tracing
-            # and lowering to StableHLO together. `compile_s` is XLA either
-            # way, which is the split that matters.
             t0 = time.perf_counter()
             lowered = (fn.trace(*args).lower() if hasattr(fn, "trace")
                        else fn.lower(*args))
@@ -115,7 +93,7 @@ def measure(fn, args, repeat: int, split_compile: bool = True) -> dict:
             rec["trace_s"] = t1 - t0
             rec["compile_s"] = t2 - t1
             del compiled, lowered
-        except Exception as exc:                # genuinely not lowerable
+        except Exception as exc:
             rec["lower_error"] = f"{type(exc).__name__}: {exc}"[:120]
 
     t0 = time.perf_counter()
@@ -137,19 +115,7 @@ def measure(fn, args, repeat: int, split_compile: bool = True) -> dict:
     return rec
 
 
-# ---------------------------------------------------------------------------
-# The build under test
-# ---------------------------------------------------------------------------
-
 def build(args):
-    """A ``KS`` at the harness's fixed conventions, plus a realistic density.
-
-    The conventions match ``scripts/bench/gpu4pyscf_bench.py`` so the numbers
-    here and there describe the same calculation: unpruned grid, block
-    screening on, minao guess. ``P`` is the minao density rather than an
-    arbitrary symmetric matrix, because the XC term's cost depends on how many
-    grid points clear its density threshold.
-    """
     import jax
     import jax.numpy as jnp
 
@@ -174,10 +140,6 @@ def build(args):
         [ks.S, ks.hcore, ks.coulomb, ks.xc_term]))
     build_s = time.perf_counter() - t0
 
-    # Re-resolved through the same helpers KS used rather than read off the
-    # term: what a term carries differs by backend (GridXC keeps ao/dao,
-    # ScreenedGridXC a reordered grid, DFCoulomb no aux basis at all). This
-    # gives every backend the same points and the same auxiliary span.
     coords = jnp.asarray(mol.atom_coords())
     grid_coords, _gw, _chunk = _resolve_grid(grid, list(mol.symbols), coords)
     grid_coords = jnp.asarray(grid_coords)
@@ -194,20 +156,6 @@ def build(args):
 
 
 def terms(ks, P, grid_coords, aux):
-    """``name -> (jitted callable, args)`` for every term we price.
-
-    Everything closes over ``ks`` through ``eqx.filter_jit`` so the integral
-    arrays are traced rather than baked in as constants; baking them lets XLA
-    constant-fold work that the real solve does every iteration (the DF
-    exchange path's metric contraction folds away entirely), which would
-    measure the harness instead of the engine.
-
-    The bucket plans are built here, eagerly, and closed over as static
-    python-int tuples. That is the engine's own two-phase contract (see
-    ``eri3c_bucketed``): a plan derived *inside* the traced build would hit
-    ``np.asarray`` on a tracer, which is exactly what the first run of this
-    harness did.
-    """
     import equinox as eqx
     import jax
 
@@ -223,9 +171,6 @@ def terms(ks, P, grid_coords, aux):
         eqx.filter_jit(lambda b: overlap_kinetic_bucketed(b, plan=pair_plan)),
         (ks.basis,))
 
-    # ao_flat is the original (gradient by jacfwd); ao_flatg is the analytic
-    # gradient that replaced it. See scripts/perf/ao_bench.py for the
-    # interleaved version of this comparison.
     from dftax.energy.gto import _eval_gto_flat, eval_gto_and_grad
 
     out["ao_flat"] = (
@@ -257,10 +202,6 @@ def terms(ks, P, grid_coords, aux):
                 lambda R: k.coulomb.energy(R, k.S, k.nocc))(Q)),
         (ks, P))
 
-    # The Coulomb term's own paired entry point. jk_e/jk_g measure
-    # coulomb.energy() and its reverse-mode gradient, which is the path the
-    # SCF no longer takes; jk_ev is what it does take, so a change to
-    # energy_and_potential is invisible in the first two and visible here.
     out["jk_ev"] = (
         eqx.filter_jit(
             lambda k, Q: k.coulomb.energy_and_potential(Q, k.S, k.nocc)),
@@ -269,9 +210,6 @@ def terms(ks, P, grid_coords, aux):
     out["fock"] = (
         eqx.filter_jit(
             lambda k, Q: jax.grad(lambda R: k.electronic(R))(Q)), (ks, P))
-    # What the SCF loop actually costs per iteration now: one call returning
-    # the energy and the Fock from one traversal of the quadrature. Compare
-    # against `fock` + `total`, which is what it replaced.
     out["enfock"] = (
         eqx.filter_jit(lambda k, Q: k.energy_and_fock(Q)), (ks, P))
     out["vandg"] = (
@@ -284,10 +222,6 @@ def terms(ks, P, grid_coords, aux):
 ALL_TERMS = ["hcore", "ao_flat", "ao_flatg", "int3c", "xc_e", "xc_g", "jk_e", "jk_g", "jk_ev",
              "total", "fock", "enfock", "vandg"]
 
-
-# ---------------------------------------------------------------------------
-# Driver
-# ---------------------------------------------------------------------------
 
 def run_one(args) -> list[dict]:
     import jax
@@ -309,10 +243,6 @@ def run_one(args) -> list[dict]:
         coulomb_term=type(ks.coulomb).__name__,
         xc_term=type(ks.xc_term).__name__,
         device=jax.devices()[0].device_kind, build_s=build_s,
-        # Whether the XLA compilation cache was populated decides the cold
-        # column entirely (BENCHMARKS.md: coronene 286 s cold, 198 s cached),
-        # so it is recorded rather than assumed. env.sh sets the directory;
-        # DFTAX_PERF_CACHE=cold points it at a fresh one.
         cache=os.environ.get("DFTAX_PERF_CACHE", "warm"),
         cache_dir=os.environ.get("JAX_COMPILATION_CACHE_DIR", ""),
         ts=time.strftime("%Y-%m-%dT%H:%M:%S"),

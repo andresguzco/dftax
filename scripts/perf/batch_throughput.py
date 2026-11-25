@@ -28,7 +28,6 @@ sys.path.insert(0, HERE)
 
 from profile_terms import git_sha  # noqa: E402
 
-# Approximate geometries (Angstrom); minima are not needed, only molecules.
 MOLECULES = {
     "water": "O 0 0 0; H 0.757 0.586 0; H -0.757 0.586 0",
     "ammonia": "N 0 0 0.12; H 0 0.94 -0.27; H 0.81 -0.47 -0.27; "
@@ -93,8 +92,6 @@ def main():
     jax.block_until_ready([ks.S for ks in kss])
     build_s = time.perf_counter() - t0
     n = len(kss)
-    # the builds again, warm (every shape compiled): what a dataset run pays
-    # per molecule once its molecule types have been seen
     t0 = time.perf_counter()
     rebuilt = [KS(Molecule.from_xyz(geo, args.basis), PBE(),
                   grid=becke(chunk=None)) for geo in geos]
@@ -106,9 +103,6 @@ def main():
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20
 
     def release():
-        # the compiled builds and solves are held by jit caches; one process
-        # holding a dozen molecules' worth of them ran a 32 GB host out of
-        # memory, and each arm recompiles on its first pass anyway
         jax.clear_caches()
         gc.collect()
 
@@ -121,8 +115,6 @@ def main():
         out = fn()
         return out, time.perf_counter() - t0
 
-    # warm each path once on the whole set (sequential paths compile per
-    # molecule shape; the batched one compiles once), then time a second pass
     seq_scf = lambda: [scf(ks) for ks in kss]                    # noqa: E731
     seq_gdm = lambda: [gdm(ks) for ks in kss]                    # noqa: E731
     batched = lambda: gdm_batched(kss)                           # noqa: E731

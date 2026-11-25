@@ -34,19 +34,16 @@ from dftax.energy.xc import LDA, PBE, PBE0
 from dftax import KS, becke, exact, scf
 from dftax.system.molecule import Molecule
 
-# sto-3g geometries (Angstrom). Water = closed shell (RKS); CH3 = doublet (UKS).
 WATER = "O 0.000000 0.000000 0.000000; H 0.758602 0.000000 0.504284; H 0.758602 0.000000 -0.504284"
 CH3 = "C 0 0 0; H 0 1.079 0; H 0.934 -0.539 0; H -0.934 -0.539 0"
 
 FUNCS = [("LDA", LDA, "slater,vwn5"), ("PBE", PBE, "pbe"), ("PBE0", PBE0, "pbe0")]
 
-DEV_TOL = 1e-9                                    # GPU == CPU (device consistency)
-REF_TOL = {"LDA": 5e-6, "PBE": 5e-5, "PBE0": 5e-5}  # GPU == PySCF (functional tol)
+DEV_TOL = 1e-9
+REF_TOL = {"LDA": 5e-6, "PBE": 5e-5, "PBE0": 5e-5}
 
 
 def _pyscf_ref(kind, atom, xcstr, basis, spin, level=3):
-    """PySCF reference energy + the grid (returned as numpy so device placement
-    is decided by the active ``jax.default_device`` when dftax consumes it)."""
     from pyscf import gto, dft
 
     mol = gto.M(atom=atom, basis=basis, spin=spin).build()
@@ -60,10 +57,8 @@ def _pyscf_ref(kind, atom, xcstr, basis, spin, level=3):
 
 
 def _energy_on(device, kind, mol, xc_obj, grid):
-    spin = None if kind == "rks" else mol.spin   # explicit spin => polarized
+    spin = None if kind == "rks" else mol.spin
     with jax.default_device(device):
-        # Pin exact Coulomb: the PySCF oracle uses exact ERIs, and DF is now
-        # the default backend (its RI error is validated in test_high_l_aux).
         res = scf(KS(mol, xc_obj, grid=grid, spin=spin, coulomb=exact()))
     return float(res.e_tot), bool(res.converged)
 
@@ -114,7 +109,6 @@ def gate() -> bool:
 
 
 def _nao(mol) -> int:
-    """Cartesian AO count (the default AO convention); cheap, no integrals."""
     from dftax.basis.loader import build_basis_data
 
     b = build_basis_data(mol.symbols, mol.atom_coords(), mol.basis)
@@ -122,7 +116,6 @@ def _nao(mol) -> int:
 
 
 def _water_cluster(n, sep=6.0):
-    """n well-separated waters along x (sto-3g ⇒ 7 nao each) for the OOM scan."""
     parts = []
     for i in range(n):
         x = i * sep
@@ -133,43 +126,32 @@ def _water_cluster(n, sep=6.0):
 def probe(max_waters: int) -> None:
     gpu = jax.devices("gpu")[0]
     with jax.default_device(gpu):
-        # --- compile vs cached (water/sto-3g, exact path) ---
-        # NB: water/cc-pVDZ exact path OOMs on GPU. The eri4c build forms a
-        # (chunk, max_t^8) intermediate (~88 GB at L=2, chunk=256). See the
-        # dedicated cc-pVDZ section below; the compile-time probe uses sto-3g.
         mol = Molecule.from_xyz(WATER, "sto-3g")
         t0 = time.time()
         e1 = scf(KS(mol, PBE(), grid=becke(75, 302), coulomb=exact())).e_tot
         t_compile = time.time() - t0
         t0 = time.time()
-        scf(KS(mol, PBE(), grid=becke(75, 302), coulomb=exact()))  # timed cached run
+        scf(KS(mol, PBE(), grid=becke(75, 302), coulomb=exact()))
         t_cached = time.time() - t0
         print("\n[probe] compile vs cached (water/sto-3g PBE, exact):")
         print(f"  nao={_nao(mol)}  E={float(e1):.8f}  1st(compile+run)={t_compile:.2f}s  2nd(cached)={t_cached:.2f}s")
 
-        # --- exact path with d-functions (cc-pVDZ): characterized, not re-run ---
-        # Confirmed FAIL on GPU and recorded in GPU_VALIDATION.md: the eri4c build
-        # forms a (chunk, max_t^8) fusion, ~88 GB at L=2/chunk=256 (autotuner OOM),
-        # and even chunk=8 (fits) compiles for ~9.6 min at nao=24. Not a chunk
-        # band-aid: it motivates Phase B (stream J/K via a custom_vjp).
         print("\n[probe] exact path with d-functions (cc-pVDZ): characterized separately")
         print("  88 GB fusion OOM @ chunk=256; 9.6 min compile @ chunk=8 (nao=24) -> Phase B streaming")
 
-        # --- f64 throughput (benzene/sto-3g exact SCF) ---
         benzene = (
             "C 0 1.396 0; C 1.209 0.698 0; C 1.209 -0.698 0; C 0 -1.396 0; "
             "C -1.209 -0.698 0; C -1.209 0.698 0; H 0 2.479 0; H 2.147 1.240 0; "
             "H 2.147 -1.240 0; H 0 -2.479 0; H -2.147 -1.240 0; H -2.147 1.240 0"
         )
         bz = Molecule.from_xyz(benzene, "sto-3g")
-        scf(KS(bz, PBE(), grid=becke(50, 110), coulomb=exact()))  # warm compile
+        scf(KS(bz, PBE(), grid=becke(50, 110), coulomb=exact()))
         t0 = time.time()
         res = scf(KS(bz, PBE(), grid=becke(50, 110), coulomb=exact()))
         t_bz = time.time() - t0
         print("\n[probe] f64 throughput (benzene/sto-3g PBE, exact, cached):")
         print(f"  nao={_nao(bz)}  E={res.e_tot:.6f}  iters={res.n_iter}  wall={t_bz:.2f}s")
 
-        # --- exact-ERI O(N^4) OOM frontier (well-separated water clusters) ---
         print("\n[probe] exact-path OOM scan (water clusters, LDA, max_iter=1):")
         ns = [n for n in (5, 10, 15, 20, 25, 30, 40, 50) if n <= max_waters]
         last_ok = None

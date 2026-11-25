@@ -1,10 +1,3 @@
-"""Multi-device execution: mesh-sharded XC must reproduce single-device numbers.
-
-The sharded quadrature is the same sum, split across devices and psum-reduced,
-so parity tolerances are tight. Multi-device tests self-skip on single-device
-runners (CI is CPU/1-device; GPU correctness is validated on the 4-A100 node).
-"""
-
 import jax
 import jax.numpy as jnp
 import pytest
@@ -27,8 +20,6 @@ multi = pytest.mark.skipif(
 
 @pytest.mark.float64
 def test_degenerate_mesh_is_single_device():
-    """mesh() over one device resolves to plain single-device terms (no
-    collective overhead for identical numbers)."""
     if len(jax.devices()) > 1:
         pytest.skip("single-device semantics tested on 1-device runners")
     mol = Molecule.from_xyz(WATER, "sto-3g")
@@ -41,24 +32,13 @@ def test_degenerate_mesh_is_single_device():
 @multi
 @pytest.mark.float64
 def test_sharded_xc_matches_unsharded():
-    """Sharded e_xc == single-device e_xc at a fixed density, for both the
-    materialized and the streamed inner term, closed and open shell."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     ks0 = KS(mol, PBE(), grid=GRID)
     P = scf(ks0).P
     ks_m = KS(mol, PBE(), grid=GRID, mesh=mesh())
     assert isinstance(ks_m.xc_term, ShardedGridXC)
     assert isinstance(ks_m.xc_term.inner, GridXC)
-    # 1e-10: the tau plumbing reorganized the quadrature's reduction tree, so
-    # sharded and unsharded partial sums round differently (was 1e-12 when the
-    # summation orders coincided); still fixed-density, no SCF amplification.
     assert float(ks_m.e_xc(P)) == pytest.approx(float(ks0.e_xc(P)), abs=1e-10)
-    # 5e-9 for the total, which is the floor this comparison can have. The
-    # whole difference is the Coulomb term (e_xc above agrees to 2e-15): the
-    # slabbed 3-center tensor differs from the single-device one by ~9e-16,
-    # one ulp, and the RI metric is a pseudo-inverse with a 1e-7 cutoff, so it
-    # amplifies that by ~1e6. Measured 5e-10 and 1.0e-9 on water/sto-3g at a
-    # fixed density, i.e. the same scale as the SCF-level bounds below.
     assert float(ks_m.total(P)) == pytest.approx(float(ks0.total(P)), abs=5e-9)
 
     ks_s = KS(mol, PBE(), grid=becke(35, 50, chunk=200), mesh=mesh())
@@ -75,8 +55,6 @@ def test_sharded_xc_matches_unsharded():
 @multi
 @pytest.mark.float64
 def test_sharded_df_matches_unsharded():
-    """Aux-sharded RI-J: per-device slabs hold naux/ndev of the 3-center
-    tensor, and the Coulomb energy / full SCF match the single-device DF."""
     AUX = "def2-universal-jkfit"
     mol = Molecule.from_xyz(WATER, "sto-3g")
     ks0 = KS(mol, PBE(), grid=GRID, coulomb=df(AUX))
@@ -84,8 +62,6 @@ def test_sharded_df_matches_unsharded():
     ksm = KS(mol, PBE(), grid=GRID, coulomb=df(AUX), mesh=mesh())
     assert isinstance(ksm.coulomb, ShardedDFCoulomb)
 
-    # The slab tensor is flat (nao², nauxp): a 2-D sharded operand is what
-    # jax 0.11 accepts for the exchange matmul (see ShardedDFCoulomb).
     nauxp = ksm.coulomb.int3c.shape[1]
     ndev = len(jax.devices())
     assert ksm.coulomb.int3c.shape[0] == ksm.coulomb.nao ** 2
@@ -95,32 +71,16 @@ def test_sharded_df_matches_unsharded():
     )
     e0 = float(ks0.coulomb.energy(P, ks0.S, ks0.nocc))
     em = float(ksm.coulomb.energy(P, ksm.S, ksm.nocc))
-    # rel: the per-slab contraction re-associates the fp sum (observed ~1e-12
-    # relative), which is the expected noise floor, not a physics difference.
     assert em == pytest.approx(e0, rel=1e-10)
 
     r0 = scf(ks0, e_tol=1e-10, d_tol=1e-8)
     r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8)
     assert r0.converged and r1.converged
-    # 5e-9, the same SCF-level bound as the solves further down, and for the
-    # same reason: two trajectories whose Fock matrices differ by
-    # fp-reassociation noise agree to the stopping tolerance amplified by the
-    # RI metric's pseudo-inverse, not to machine precision. 1e-9 was a bound
-    # this sits exactly on (measured 1.1e-9 on the hybrid case), so it passed
-    # or failed on which way the last digit fell.
     assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)
 
 
 @multi
 def test_sharded_df_guards():
-    """Unsupported mesh combinations fail loudly at build, not silently.
-
-    The streamed backend now shards RI-J, RI-K and the range-separated
-    exchange, so a hybrid with ``mesh=`` is supported rather than guarded (see
-    the parity tests below). What remains genuinely unsupported on a sharded
-    grid is VV10: its double-grid pair quadrature is nonlocal across shards,
-    so it cannot be evaluated shard-by-shard at all.
-    """
     from dftax.energy.xc import WB97XV
 
     AUX = "def2-universal-jkfit"
@@ -132,16 +92,6 @@ def test_sharded_df_guards():
 @multi
 @pytest.mark.float64
 def test_sharded_streamed_df_matches_unsharded():
-    """Aux-sharded *streamed* RI-J: each device streams its own slice of the
-    auxiliary range into its piece of γ, and the gathered result reproduces the
-    single-device streamed backend.
-
-    This is the combination protein scale needs and the materialized backend
-    cannot give: streaming keeps the (nao², naux) tensor from ever existing,
-    sharding divides what is left. Run screened as well as dense, because the
-    screened bra sum is the O(N) path that makes the streamed backend
-    affordable at scale and it has to survive being divided.
-    """
     AUX = "def2-universal-jkfit"
     mol = Molecule.from_xyz(WATER, "sto-3g")
     for screen in (None, 1e-10):
@@ -152,9 +102,6 @@ def test_sharded_streamed_df_matches_unsharded():
         assert isinstance(ksm.coulomb, ShardedStreamedDFCoulomb)
         assert (ks0.coulomb.pairs is None) == (screen is None)
         assert (ksm.coulomb.pairs is None) == (screen is None)
-        # The auxiliary range is split contiguously and padded to a multiple of
-        # the device count, so this exercises the padding whenever naux does
-        # not divide evenly (133 cartesian auxiliaries over 4 devices does not).
         P = scf(ks0).P
         e0 = float(ks0.coulomb.energy(P, ks0.S, ks0.nocc))
         em = float(ksm.coulomb.energy(P, ksm.S, ksm.nocc))
@@ -163,21 +110,13 @@ def test_sharded_streamed_df_matches_unsharded():
         r0 = scf(ks0, e_tol=1e-10, d_tol=1e-8)
         r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8)
         assert r0.converged and r1.converged
-        assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)   # see the RI-J case
+        assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)
 
 
 @multi
 @pytest.mark.float64
 @pytest.mark.parametrize("xc", [CAMB3LYP()], ids=["camb3lyp"])
 def test_sharded_streamed_hybrid_matches_unsharded(xc):
-    """Aux-sharded streamed *exchange*: RI-K sums over occupied orbitals, so
-    each device scans its own slice of them and the partials are psum-reduced.
-
-    Both halves of the RI-K ``custom_vjp`` shard the same way, so the analytic
-    exchange Fock it returns is the single-device one and the SCF closes on the
-    same fixed point. CAM-B3LYP carries the range-separated operator through
-    the same path on the attenuated metric.
-    """
     AUX = "def2-universal-jkfit"
     mol = Molecule.from_xyz(WATER, "sto-3g")
     ks0 = KS(mol, xc, grid=GRID, coulomb=df(AUX, chunk=16))
@@ -192,14 +131,12 @@ def test_sharded_streamed_hybrid_matches_unsharded(xc):
     r0 = scf(ks0, e_tol=1e-10, d_tol=1e-8, max_iter=80)
     r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8, max_iter=80)
     assert r0.converged and r1.converged
-    assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)   # see the RI-J case
+    assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)
 
 
 @multi
 @pytest.mark.float64
 def test_sharded_df_hybrid_matches_unsharded():
-    """Sharded RI-K (slab-wise W = int3c·L with all-to-all psum rounds): the
-    hybrid J+K energy and the full PBE0 SCF match the single-device DF."""
     AUX = "def2-universal-jkfit"
     mol = Molecule.from_xyz(WATER, "sto-3g")
     ks0 = KS(mol, PBE0(), grid=GRID, coulomb=df(AUX))
@@ -212,16 +149,12 @@ def test_sharded_df_hybrid_matches_unsharded():
     r0 = scf(ks0, e_tol=1e-10, d_tol=1e-8)
     r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8)
     assert r0.converged and r1.converged
-    assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)   # see the RI-J case
+    assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)
 
 
 @multi
 @pytest.mark.float64
 def test_sharded_rsh_matches_unsharded():
-    """Sharded range-separated exchange: the long-range RI-K runs the same
-    slab-wise all-to-all rounds on the attenuated tensor against the
-    attenuated metric. Fixed-density J+K+K_lr and the full CAM-B3LYP SCF
-    match the single-device materialized DF."""
     AUX = "def2-universal-jkfit"
     mol = Molecule.from_xyz(WATER, "sto-3g")
     ks0 = KS(mol, CAMB3LYP(), grid=GRID, coulomb=df(AUX))
@@ -235,23 +168,16 @@ def test_sharded_rsh_matches_unsharded():
     r0 = scf(ks0, e_tol=1e-10, d_tol=1e-8)
     r1 = scf(ksm, e_tol=1e-10, d_tol=1e-8)
     assert r0.converged and r1.converged
-    assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)   # see the RI-J case
+    assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)
 
 
 @multi
 @pytest.mark.float64
 def test_sharded_scf_and_minimize_match():
-    """Full solves through the sharded XC term: the autodiff Fock (grad of a
-    psum-reduced shard_map) and the DIIS loop must reproduce the single-device
-    solve; minimize proves the end-to-end-differentiable path."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     r0 = scf(KS(mol, PBE(), grid=GRID), e_tol=1e-10, d_tol=1e-8)
     r1 = scf(KS(mol, PBE(), grid=GRID, mesh=mesh()), e_tol=1e-10, d_tol=1e-8)
     assert r0.converged and r1.converged
-    # 5e-9 (SCF-level bound, same as the batch-axis test): the sharded XC
-    # quadrature and the per-slab DF contraction re-associate their sums
-    # relative to the single-device build, and those epsilon-level differences
-    # amplify through the solve; measured flapping at ~1.1e-10 around 1e-10.
     assert r1.e_tot == pytest.approx(r0.e_tot, abs=5e-9)
 
     m0 = minimize(KS(mol, LDA(), grid=GRID), max_steps=1500)
@@ -262,9 +188,6 @@ def test_sharded_scf_and_minimize_match():
 @multi
 @pytest.mark.float64
 def test_batch_axis_sharding_matches_unsharded():
-    """scf_batched(mesh=...) shards the batch (data parallel, independent
-    per-device convergence); energies match the single-device batch. Batch
-    size 3 on 4 devices also exercises the padding path."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     c0 = jnp.asarray(mol.atom_coords())
     batch = jnp.stack([c0, c0.at[1, 2].add(0.05), c0.at[2, 0].add(-0.04)])
@@ -272,6 +195,4 @@ def test_batch_axis_sharding_matches_unsharded():
     r1 = scf_batched(mol, batch, PBE(), grid=GRID, mesh=mesh())
     assert bool(jnp.all(r0.converged)) and bool(jnp.all(r1.converged))
     assert r1.e_tot.shape == r0.e_tot.shape == (3,)
-    # 5e-9: SCF amplifies the sharded-vs-unsharded reduction-order difference
-    # (see the fixed-density comment above); matches the suite-wide GPU bound.
     assert float(jnp.max(jnp.abs(r1.e_tot - r0.e_tot))) < 5e-9

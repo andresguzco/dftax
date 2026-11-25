@@ -83,8 +83,6 @@ def main():
         nao = int(b.cart2sph.shape[1])
         vs = variants(b)
 
-        # Warm every variant first, so compilation is out of the timed loop
-        # and every round sees the same allocator state.
         ref = {}
         for name, (fn, bb) in vs.items():
             out = fn(bb, gc)
@@ -93,7 +91,7 @@ def main():
 
         walls = {name: [] for name in vs}
         for _ in range(args.rounds):
-            for name, (fn, bb) in vs.items():     # interleaved, not blocked
+            for name, (fn, bb) in vs.items():
                 t0 = time.perf_counter()
                 jax.block_until_ready(fn(bb, gc))
                 walls[name].append(time.perf_counter() - t0)

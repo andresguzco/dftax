@@ -1,11 +1,3 @@
-"""A periodic system: atoms, lattice, pseudopotential and basis names.
-
-``Cell`` is to a crystal what :class:`~dftax.system.molecule.Molecule` is to
-a molecule, with two additions (the lattice vectors and the pseudopotential
-table) and one difference: the electrons counted, and the charges the ions
-carry, are the valence ones the pseudopotential leaves.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -45,7 +37,6 @@ class Cell:
             raise ValueError("symbols and coords length mismatch")
         if abs(np.linalg.det(self.a)) < 1e-12:
             raise ValueError("the lattice vectors are linearly dependent")
-        # one table lookup per element, shared by its atoms
         by_element = {s: load_potential(pseudo, s) for s in set(self.symbols)}
         self.potentials: list[GTHPotential] = [by_element[s] for s in self.symbols]
         nelec = self.nelectron

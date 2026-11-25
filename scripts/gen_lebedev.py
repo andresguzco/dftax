@@ -21,7 +21,6 @@ from pathlib import Path
 import numpy as np
 from pyscf.dft.gen_grid import MakeAngularGrid
 
-# The standard Lebedev-Laikov ladder up to the current 770-point cap.
 ORDERS = (6, 14, 26, 38, 50, 74, 86, 110, 146, 170, 194,
           230, 266, 302, 350, 434, 590, 770)
 
@@ -31,23 +30,19 @@ OUT = Path(__file__).resolve().parents[1] / "dftax" / "grid" / "data" / "lebedev
 def main() -> int:
     tables = {}
     for n in ORDERS:
-        g = np.asarray(MakeAngularGrid(n), dtype=np.float64)   # (n, 4): xyz + w
+        g = np.asarray(MakeAngularGrid(n), dtype=np.float64)
         if g.shape != (n, 4):
             raise RuntimeError(f"MakeAngularGrid({n}) returned shape {g.shape}")
-        w = g[:, 3] / g[:, 3].sum()                            # normalize sum(w)=1
+        w = g[:, 3] / g[:, 3].sum()
         r = np.linalg.norm(g[:, :3], axis=1)
         if not np.allclose(r, 1.0, atol=1e-12):
             raise RuntimeError(f"order {n}: points not on the unit sphere")
-        # Quadrature sanity: exact for low-order polynomials on the sphere
-        # (the 6-point grid has polynomial precision 3, so degree-4 monomials
-        # are only exact from n=14 up).
         x, y = g[:, 0], g[:, 1]
         assert abs(np.sum(w * x**2) - 1.0 / 3.0) < 1e-12
         if n >= 14:
             assert abs(np.sum(w * x**2 * y**2) - 1.0 / 15.0) < 1e-12
         tables[f"n{n}"] = np.column_stack([g[:, :3], w])
 
-    # The historical orders must reproduce the previously vendored tables.
     if OUT.exists():
         old = np.load(OUT)
         for k in old.files:

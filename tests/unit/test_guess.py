@@ -1,10 +1,3 @@
-"""Initial-guess tests: configuration table, cross overlap, guess densities,
-and solver integration (scf / minimize / scf_batched).
-
-The key invariant: a guess changes the iteration count, never the converged
-fixed point, so every guess must reproduce the core-guess SCF energy exactly.
-"""
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -33,10 +26,6 @@ def _water_ks(basis="sto-3g", **kw):
     return KS(Molecule.from_xyz(WATER, basis, **kw), PBE())
 
 
-# ---------------------------------------------------------------------------
-# Ground-state configuration table
-# ---------------------------------------------------------------------------
-
 def test_config_counts_sum_to_Z():
     for Z in range(1, 55):
         cfg = _ground_state_config(Z)
@@ -48,19 +37,15 @@ def test_config_aufbau_exceptions():
     def by_nl(Z):
         return {(n, l): c for n, l, c in _ground_state_config(Z)}
 
-    assert by_nl(24)[(4, 0)] == 1 and by_nl(24)[(3, 2)] == 5      # Cr
-    assert by_nl(29)[(4, 0)] == 1 and by_nl(29)[(3, 2)] == 10     # Cu
-    assert (5, 0) not in by_nl(46) and by_nl(46)[(4, 2)] == 10    # Pd
+    assert by_nl(24)[(4, 0)] == 1 and by_nl(24)[(3, 2)] == 5
+    assert by_nl(29)[(4, 0)] == 1 and by_nl(29)[(3, 2)] == 10
+    assert (5, 0) not in by_nl(46) and by_nl(46)[(4, 2)] == 10
 
 
 def test_config_rejects_out_of_range():
     with pytest.raises(ValueError, match="Z <= 54"):
         _ground_state_config(55)
 
-
-# ---------------------------------------------------------------------------
-# Cross-basis overlap
-# ---------------------------------------------------------------------------
 
 @pytest.mark.pyscf
 def test_cross_overlap_vs_pyscf():
@@ -76,13 +61,8 @@ def test_cross_overlap_vs_pyscf():
     m1 = gto.M(atom=atom, basis="sto-3g", unit="Bohr", cart=True)
     m2 = gto.M(atom=atom, basis="def2-svp", unit="Bohr")
     ref = gto.mole.intor_cross("int1e_ovlp", m1, m2)
-    # BSE and PySCF's internal tabulations differ in the last basis digits.
     assert np.abs(S - ref).max() < 5e-8
 
-
-# ---------------------------------------------------------------------------
-# Guess densities: symmetry, electron count, spin stacking
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("spec", [None, core(), minao(), sad(), sap()])
 def test_guess_density_closed_shell(spec):
@@ -121,8 +101,6 @@ def test_guess_array_shape_validated():
 
 
 def test_default_guess_is_minao():
-    """``guess=None`` resolves to minao, not the core Hamiltonian: same
-    density, and fewer iterations than core (the reason for the default)."""
     ks = _water_ks()
     X = canonical_orthonormalizer(ks.S)
     P_default = density_from_guess(ks, None, X)
@@ -131,14 +109,11 @@ def test_default_guess_is_minao():
 
     r_default, r_core = scf(ks), scf(ks, guess=core())
     assert r_default.converged and r_core.converged
-    assert abs(r_default.e_tot - r_core.e_tot) < 2e-8      # same fixed point
+    assert abs(r_default.e_tot - r_core.e_tot) < 2e-8
     assert r_default.n_iter < r_core.n_iter
 
 
 def test_default_guess_falls_back_to_core_off_the_minimal_basis():
-    """Elements the minimal basis does not reach fall back to the core
-    Hamiltonian with a warning, but only when the guess was defaulted: an
-    explicit minao() still surfaces the failure."""
     import basis_set_exchange as bse
 
     from dftax.ks.guess import CoreGuess, resolve_guess_or_default
@@ -159,8 +134,6 @@ def test_default_guess_falls_back_to_core_off_the_minimal_basis():
 
 
 def test_raw_system_defaults_to_core():
-    """A raw System has no element identities, so the default is the core
-    Hamiltonian rather than an error."""
     from dftax.grid import becke_grid
 
     mol = Molecule.from_xyz(WATER, "sto-3g")
@@ -194,10 +167,6 @@ def test_raw_system_rejects_element_guesses():
         scf(ks, guess=sad(), max_iter=1)
 
 
-# ---------------------------------------------------------------------------
-# SAD atomic solver and SAP fit tables
-# ---------------------------------------------------------------------------
-
 @pytest.mark.pyscf
 @pytest.mark.parametrize("sym", ["H", "C", "O"])
 def test_sad_atomic_hf_vs_pyscf(sym):
@@ -210,31 +179,21 @@ def test_sad_atomic_hf_vs_pyscf(sym):
     P, e = _atomic_hf_density(sym, sub)
     Z = symbol_to_Z(sym)
     S = np.asarray(overlap_matrix(sub))
-    assert abs(np.sum(P * S) - Z) < 1e-6                    # electron count
+    assert abs(np.sum(P * S) - Z) < 1e-6
 
     m = gto.M(atom=f"{sym} 0 0 0", basis="sto-3g", spin=None, cart=True,
               verbose=0)
     e_ref = get_atm_nrhf(m)[sym][0]
-    # The same occupation-averaged atomic HF (PySCF's atom_hf oracle).
     assert abs(e - e_ref) < 1e-6
 
 
 @pytest.mark.parametrize("sym", ["H", "C", "Fe"])
 def test_sap_fit_total_charge(sym):
     _, coefs = _sap_fit("sap_helfem_large", sym)
-    # The fit represents Z_eff(r) = -sum c_k exp(-a_k r^2): sum c_k = -Z.
     assert abs(coefs.sum() + symbol_to_Z(sym)) < 1e-6
 
 
-# ---------------------------------------------------------------------------
-# Solver integration: identical fixed point, warm restarts, batched
-# ---------------------------------------------------------------------------
-
 def test_scf_all_guesses_same_fixed_point():
-    # Reference is the core guess, explicitly: it is the weakest of the four,
-    # so "no element-aware guess is worse" is a claim about all of them. The
-    # default (minao) is not a valid reference for that comparison, since sad
-    # and sap need not beat it (measured on water/sto-3g: minao 7, sad 10).
     ks = _water_ks()
     ref = scf(ks, guess=core())
     assert ref.converged
@@ -242,7 +201,7 @@ def test_scf_all_guesses_same_fixed_point():
         res = scf(ks, guess=spec)
         assert res.converged
         assert abs(res.e_tot - ref.e_tot) < 2e-8
-        assert res.n_iter <= ref.n_iter                     # never worse
+        assert res.n_iter <= ref.n_iter
 
 
 def test_scf_open_shell_guesses_same_fixed_point():
@@ -255,8 +214,6 @@ def test_scf_open_shell_guesses_same_fixed_point():
 
 
 def test_scf_warm_restart():
-    # exact(): the restart bound compares two converged runs at 1e-9, below
-    # the DF stopping-tolerance flap through the RI metric.
     ks = KS(Molecule.from_xyz(WATER, "sto-3g"), PBE(), coulomb=exact())
     ref = scf(ks)
     res = scf(ks, guess=ref.P)

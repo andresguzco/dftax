@@ -1,5 +1,3 @@
-"""Tests for pure-JAX one-electron integral matrices against PySCF."""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -11,10 +9,6 @@ from dftax.integrals.overlap import overlap_matrix, kinetic_matrix
 from dftax.integrals.nuclear_attraction import nuclear_attraction_matrix
 from dftax.integrals.nuclear_repulsion import nuclear_repulsion
 
-
-# ---------------------------------------------------------------------------
-# Test molecules
-# ---------------------------------------------------------------------------
 
 def _make_h2():
     mol = gto.M(atom="H 0 0 0; H 0 0 1.4", basis="sto-3g", unit="bohr")
@@ -49,7 +43,6 @@ def _make_ch4():
 
 
 def _make_h2o_631g():
-    """H2O with 6-31G* basis (includes d functions)."""
     mol = gto.M(
         atom="O 0 0 0; H 0 0.757 0.587; H 0 -0.757 0.587",
         basis="6-31g*",
@@ -58,10 +51,6 @@ def _make_h2o_631g():
     mol.build()
     return mol
 
-
-# ---------------------------------------------------------------------------
-# Overlap matrix tests
-# ---------------------------------------------------------------------------
 
 class TestOverlapMatrix:
 
@@ -87,7 +76,6 @@ class TestOverlapMatrix:
         assert np.all(np.diag(S) > 0)
 
     def test_overlap_631g(self):
-        """Test with 6-31G* basis (includes d functions)."""
         mol = _make_h2o_631g()
         basis = extract_basis_data(mol)
         S_jax = np.array(overlap_matrix(basis))
@@ -95,10 +83,6 @@ class TestOverlapMatrix:
         np.testing.assert_allclose(S_jax, S_ref, atol=1e-10,
                                    err_msg="Overlap mismatch for 6-31G*")
 
-
-# ---------------------------------------------------------------------------
-# Kinetic matrix tests
-# ---------------------------------------------------------------------------
 
 class TestKineticMatrix:
 
@@ -132,10 +116,6 @@ class TestKineticMatrix:
         np.testing.assert_allclose(T_jax, T_ref, atol=1e-10)
 
 
-# ---------------------------------------------------------------------------
-# Nuclear attraction matrix tests
-# ---------------------------------------------------------------------------
-
 class TestNuclearAttractionMatrix:
 
     @pytest.mark.parametrize("mol_fn", [_make_h2o])
@@ -167,10 +147,6 @@ class TestNuclearAttractionMatrix:
         np.testing.assert_allclose(V_jax, V_ref, atol=1e-8)
 
 
-# ---------------------------------------------------------------------------
-# Nuclear repulsion tests
-# ---------------------------------------------------------------------------
-
 class TestNuclearRepulsion:
 
     @pytest.mark.parametrize("mol_fn", [_make_h2o])
@@ -183,14 +159,12 @@ class TestNuclearRepulsion:
         np.testing.assert_allclose(vnn_jax, vnn_ref, atol=1e-10)
 
     def test_nuclear_repulsion_gradient(self):
-        """Nuclear gradient of V_nn matches finite differences."""
         mol = _make_h2()
         coords = jnp.array(mol.atom_coords())
         charges = jnp.array(mol.atom_charges(), dtype=jnp.float64)
         grad_fn = jax.grad(nuclear_repulsion)
         grad = np.array(grad_fn(coords, charges))
 
-        # Finite difference
         eps = 1e-5
         grad_fd = np.zeros_like(grad)
         for i in range(coords.shape[0]):
@@ -204,14 +178,9 @@ class TestNuclearRepulsion:
         np.testing.assert_allclose(grad, grad_fd, atol=1e-6)
 
 
-# ---------------------------------------------------------------------------
-# Gradient tests
-# ---------------------------------------------------------------------------
-
 class TestIntegralGradients:
 
     def test_overlap_gradient_wrt_centers_finite(self):
-        """Gradient of overlap trace w.r.t. centers is finite."""
         mol = _make_h2()
         basis = extract_basis_data(mol)
 
@@ -224,7 +193,6 @@ class TestIntegralGradients:
         assert jnp.all(jnp.isfinite(grad))
 
     def test_kinetic_gradient_wrt_centers_finite(self):
-        """Gradient of kinetic trace w.r.t. centers is finite."""
         mol = _make_h2()
         basis = extract_basis_data(mol)
 

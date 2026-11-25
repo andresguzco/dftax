@@ -77,7 +77,7 @@ def scaling():
         e1 = scf(KS(mol, PBE(), grid=grid)).e_tot
         t_compile = time.time() - t0
         t0 = time.time()
-        scf(KS(mol, PBE(), grid=grid))  # timed cached run
+        scf(KS(mol, PBE(), grid=grid))
         t_cached = time.time() - t0
         print(f"| {n} | {nao} | {e1:.6f} | {abs(e1 - e_ref):.1e} | {t_compile:.1f} | {t_cached:.2f} | {tp:.1f} |")
     print()

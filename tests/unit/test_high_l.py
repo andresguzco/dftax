@@ -1,11 +1,3 @@
-"""High angular momentum one-electron integrals (f and g shells).
-
-Guards the S/T/V one-electron path at high angular momentum: f (l=3, cc-pVTZ) and
-g (l=4, cc-pVQZ). g needs the overlap recursion table to reach l+2 = 6 because
-kinetic reads S(a, b+2); the recursion cap (_MAX_L) was raised to cover it. Uses a
-tiny single-atom system with an explicit high-l shell so it stays fast (no ERI).
-"""
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -18,10 +10,8 @@ from dftax.integrals import overlap_matrix, kinetic_matrix, nuclear_attraction_m
 
 @pytest.mark.pyscf
 @pytest.mark.float64
-# f (cc-pVTZ), g (cc-pVQZ), h (cc-pV5Z), i (cc-pV6Z)
 @pytest.mark.parametrize("l", [3, 4, 5, 6])
 def test_one_electron_high_l(l):
-    # One s shell + one shell of angular momentum l on a single atom.
     mol = gto.M(
         atom="He 0 0 0",
         basis={"He": [[0, [1.2, 1.0]], [l, [0.8, 1.0]]]},
@@ -46,11 +36,8 @@ def test_one_electron_high_l(l):
 
 @pytest.mark.pyscf
 @pytest.mark.float64
-@pytest.mark.parametrize("l", [6])  # i shell (cc-pV6Z)
+@pytest.mark.parametrize("l", [6])
 def test_eri3c_high_l_orbital_vs_pyscf(l):
-    """(μν|P) with an h/i ORBITAL shell matches PySCF int3c2e (the aux-side
-    h/i coverage lives in test_high_l_aux; this pins the orbital side, which
-    the 5Z/6Z bases need)."""
     from pyscf import df as pyscf_df
 
     from dftax.integrals import eri3c_matrix
@@ -71,14 +58,6 @@ def test_eri3c_high_l_orbital_vs_pyscf(l):
 @pytest.mark.float64
 @pytest.mark.parametrize("l", [6])
 def test_grid_ao_values_high_l_vs_pyscf(l):
-    """Spherical AO values on grid points match PySCF eval_gto at h/i.
-
-    Guards the XC-path evaluation, which no matrix-level oracle covers: the
-    angular factor's integer-power unroll (safe_int_pow) silently returned
-    x^4 above its old g cap, poisoning only the grid AO values. The
-    symptom was a spurious 85 mHa SCF minimum at cc-pV5Z with density
-    poured into h shells, while every S/T/V/eri oracle stayed 1e-10-exact.
-    """
     from dftax.energy.gto import eval_gto
 
     mol = gto.M(atom="He 0 0 0; He 0 0.4 1.1",
@@ -92,10 +71,6 @@ def test_grid_ao_values_high_l_vs_pyscf(l):
 
 
 def test_orbital_above_i_cap_raises_cleanly():
-    """The engine ceiling is i (l=6); a basis claiming more must fail loudly
-    at every eagerly-guarded entry, not deep in a traced build. l=7 has no
-    Cartesian component table, so the probe is a hand-built BasisData whose
-    static max_l field says 7."""
     from dftax.energy.gto import BasisData
     from dftax.integrals.eri3c_bucketed import _check_orbital_l
 

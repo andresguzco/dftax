@@ -28,7 +28,6 @@ from dftax.energy.boys import boys
 
 
 def _hermite_table_rolled(rho, RPC, mt, omega=None):
-    """(mt, mt, mt) Hermite table; m-ladder rolled into a lax.fori_loop."""
     T = rho * jnp.sum(RPC ** 2)
     neg2rho = -2.0 * rho
     if omega is None:
@@ -38,12 +37,12 @@ def _hermite_table_rolled(rho, RPC, mt, omega=None):
         base = jnp.stack([s ** (m + 0.5) * boys(m, s * T) for m in range(mt)])
     idx = jnp.arange(mt - 1)
     zrow = jnp.zeros((1,))
-    powers = jnp.stack([neg2rho ** m for m in range(mt)])  # static-length stack
+    powers = jnp.stack([neg2rho ** m for m in range(mt)])
 
     Rp0 = jnp.zeros((mt, mt, mt)).at[0, 0, 0].set(powers[mt - 1] * base[mt - 1])
 
     def body(k, Rp):
-        m = mt - 2 - k                       # descending m = mt-2 .. 0
+        m = mt - 2 - k
         R = jnp.zeros((mt, mt, mt)).at[0, 0, 0].set(powers[m] * base[m])
         row = Rp[:, 0, 0]
         shifted = jnp.concatenate([zrow, row[:-2]])
@@ -60,7 +59,6 @@ def _hermite_table_rolled(rho, RPC, mt, omega=None):
 
 
 def _E_table_rolled(la, lb, alpha, beta, XAB, mt):
-    """(la+1, lb+1, mt) two-center E table; la/lb loops rolled with lax."""
     gamma = alpha + beta
     safe = jnp.where(gamma == 0.0, 1.0, gamma)
     i2g = 0.5 / safe
@@ -80,7 +78,6 @@ def _E_table_rolled(la, lb, alpha, beta, XAB, mt):
 
 
 def _Ec_table_rolled(lc, gamma, mt):
-    """(lc+1, mt) single-center E table; lc loop rolled with lax."""
     safe = jnp.where(gamma == 0.0, 1.0, gamma)
     i2g = 0.5 / safe
     rows = jnp.zeros((lc + 1, mt)).at[0].set(jnp.zeros(mt).at[0].set(1.0))
@@ -114,17 +111,14 @@ def build_time(label):
     return np.asarray(M), first
 
 
-# Baseline (current unrolled hermite)
 print(f"[{basis_name}] eri3c classes={len(p3[2])}")
 M_base, t_base = build_time("unrolled (base)")
 
-# Rolled hermite only
 oh, oe, oec = eb._hermite_table, eb._E_table, eb._Ec_table
 eb._hermite_table = _hermite_table_rolled
 eb._compiled_class_kernel.cache_clear()
 M_h, t_h = build_time("+rolled hermite")
 
-# Rolled hermite + E + Ec (all recursion tables)
 eb._E_table = _E_table_rolled
 eb._Ec_table = _Ec_table_rolled
 eb._compiled_class_kernel.cache_clear()

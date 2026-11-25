@@ -1,7 +1,3 @@
-"""The Gaussian engine at k-points against PySCF's ``pbc`` (KRKS): Bloch
-matrices and AO values at a general k-point of a triclinic cell, then the
-energy terms and the SCF energy of silicon on a k-mesh."""
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -12,8 +8,8 @@ from dftax.pbc.bloch import (
     ao_on_grid_k, cross_overlap_k, overlap_kinetic_k, plan_pairs, plan_values,
 )
 
-A = np.array([[9.0, 0.0, 0.0], [2.0, 8.5, 0.0], [1.0, -1.5, 10.0]])   # Bohr
-ATOMS = "Si 0.5 0.4 0.3; O 3.4 1.1 0.9; O 1.0 4.2 5.6"                # Bohr
+A = np.array([[9.0, 0.0, 0.0], [2.0, 8.5, 0.0], [1.0, -1.5, 10.0]])
+ATOMS = "Si 0.5 0.4 0.3; O 3.4 1.1 0.9; O 1.0 4.2 5.6"
 MESH = (9, 10, 12)
 KFRAC = np.array([[0.25, -0.5, 0.125], [0.0, 0.0, 0.0]])
 
@@ -77,10 +73,6 @@ def test_bloch_ao_values_match_pyscf(cell, basis, pcell):
 
 
 def _pyscf_hcore_k(pc, coords, kpts):
-    """PySCF's core Hamiltonian per k in the engine's formulation (the local
-    part by quadrature on the uniform grid, the nonlocal part analytic), and
-    its kinetic + nonlocal part (the k-point engine keeps the local part in
-    its grid energy)."""
     from pyscf.pbc import tools
     from pyscf.pbc.dft import numint
     from pyscf.pbc.gto import pseudo as ppseudo
@@ -100,8 +92,6 @@ def _pyscf_hcore_k(pc, coords, kpts):
 
 
 def test_si2_kmesh_energy_matches_pyscf():
-    """Silicon on a 2x2x2 k-mesh: the core Hamiltonian of every k, every
-    energy term at PySCF's converged density, and the SCF energy."""
     from pyscf.pbc import dft as pdft, gto
 
     from dftax.energy.xc import LDA
@@ -142,9 +132,6 @@ def test_si2_kmesh_energy_matches_pyscf():
 
 
 def test_kpoint_forces_and_stress_match_finite_differences():
-    """Rattled silicon on a 2x2x2 k-mesh with Fermi smearing (fractional
-    occupations, the free energy): forces and stress against finite
-    differences of converged free energies, through the common verbs."""
     from dftax import fermi, forces, scf
     from dftax.energy.xc import LDA
     from dftax.pbc import kmesh, kpoint_ks, stress, uniform

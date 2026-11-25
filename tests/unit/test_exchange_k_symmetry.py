@@ -1,11 +1,3 @@
-"""The streamed exact-exchange build against the materialized reference.
-
-``exchange_k_4c`` evaluates only the lower triangle of each ``(ν, σ)`` block
-and mirrors it, on the strength of ``(μλ|νσ) = (μλ|σν)``. The reference is
-``K`` contracted out of the full materialized ERI tensor, which reaches the
-integrals through a different engine.
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -16,7 +8,6 @@ from dftax.integrals.eri4c import eri4c_matrix, exchange_k_4c
 
 
 def _random_density(nao, nocc, seed=0):
-    """A PSD density of the right rank, not an arbitrary symmetric matrix."""
     key = jax.random.PRNGKey(seed)
     C = jax.random.normal(key, (nao, nocc))
     return 2.0 * C @ C.T
@@ -42,8 +33,6 @@ def test_streamed_K_matches_the_materialized_tensor(basis_name, spherical):
 
 
 def test_K_is_symmetric():
-    """K_μν = Σ (μλ|νσ) P_λσ is symmetric for symmetric P; the mirrored block
-    must not break that."""
     syms = ["O", "H", "H"]
     coords = np.array([[0.0, 0.0, 0.0],
                        [1.43, 0.0, 0.95],
@@ -55,8 +44,6 @@ def test_K_is_symmetric():
 
 
 def test_K_is_linear_in_the_density():
-    """The contraction is linear in P, which a mishandled diagonal in the
-    mirror (double-counting ν == σ) would break."""
     syms = ["O", "H", "H"]
     coords = np.array([[0.0, 0.0, 0.0],
                        [1.43, 0.0, 0.95],

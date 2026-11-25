@@ -1,9 +1,3 @@
-"""Batched (vmap-over-geometries) interface: batched == serial, energies + forces.
-
-Small grids: the batched-vs-serial check is grid-independent (both paths use the
-same grid), and convergence to a few µHa suffices for the equality assertions.
-"""
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -14,10 +8,6 @@ from dftax import KS, becke, exact, scf, forces, scf_batched, BatchedResult
 
 NR, LEB = 35, 50
 GRID = becke(NR, LEB)
-# The matches-serial tests pin coulomb=exact(): the property under test is
-# batched == serial, and the exact path keeps the two bit-comparable at 1e-9.
-# The vmapped DF force build also materializes a batch-wide Hermite
-# intermediate (tens of GiB at batch=16), a known follow-up.
 COUL = exact()
 
 
@@ -29,10 +19,9 @@ class TestBatched:
         batch = jnp.stack([c0, c0.at[1, 2].add(0.05), c0.at[2, 0].add(-0.04)])
         rb = scf_batched(mol, batch, PBE(), grid=GRID, coulomb=COUL)
         assert isinstance(rb, BatchedResult)
-        # orbital-sized fields are opt-in (O(B*nspin*nao^2) memory)
         assert rb.P is None and rb.mo_coeff is None and rb.mo_energy is None
         with pytest.raises(TypeError):
-            forces(mol, PBE(), rb, grid=GRID)           # batched result rejected
+            forces(mol, PBE(), rb, grid=GRID)
         assert bool(jnp.all(rb.converged))
         for b in range(batch.shape[0]):
             m = Molecule(mol.symbols, np.asarray(batch[b]), mol.basis)
@@ -81,13 +70,11 @@ class TestBatched:
         assert float(jnp.max(jnp.abs(ub.forces[0] - Fser))) < 1e-9
 
     def test_scf_batched_spin_dispatch(self):
-        # Closed shell + inferred spin -> a single restricted channel.
         mol = Molecule.from_xyz("O 0 0 0; H 0.76 0 0.50; H 0.76 0 -0.50", "sto-3g")
         c0 = jnp.asarray(mol.atom_coords())
         rb = scf_batched(mol, jnp.stack([c0]), PBE(), grid=GRID, return_orbitals=True)
         assert len(rb.nocc) == 1
-        assert rb.P.shape[:2] == (1, 1)                 # (batch, nspin, ...)
-        # Open shell: inferred spin == explicit spin=, identical computation.
+        assert rb.P.shape[:2] == (1, 1)
         rad = Molecule.from_xyz("Li 0 0 0", "sto-3g", spin=1)
         cl = jnp.asarray(rad.atom_coords())
         r_auto = scf_batched(rad, jnp.stack([cl]), PBE(), grid=GRID)

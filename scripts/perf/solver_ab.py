@@ -26,7 +26,6 @@ sys.path.insert(0, HERE)
 from profile_terms import git_sha, read_xyz  # noqa: E402
 
 HARD = {
-    # name: (atoms, basis, spin)
     "n2_2.0": ("N 0 0 0; N 0 0 2.0", "def2-svp", 0),
     "n2_2.5": ("N 0 0 0; N 0 0 2.5", "def2-svp", 0),
     "ch3": ("C 0 0 0; H 1.08 0 0; H -0.54 0.935 0; H -0.54 -0.935 0",

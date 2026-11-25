@@ -1,5 +1,3 @@
-"""Tests for exchange-correlation functionals."""
-
 import jax
 import jax.numpy as jnp
 import pytest
@@ -15,7 +13,6 @@ class TestLDAExchange:
 
     def test_scales_with_density(self):
         lda = LDAExchange()
-        # eps_x ~ rho^(1/3), so higher density -> more negative
         assert float(lda(10.0)) < float(lda(1.0))
 
 
@@ -79,11 +76,6 @@ class TestPBE:
         assert jnp.isfinite(result)
 
 
-# =========================================================================
-#  New functionals for B3LYP: B88, VWN_RPA, VWN5, LYP, B3LYP composite
-# =========================================================================
-
-
 import numpy as np
 from pyscf.dft import libxc as pyscf_libxc
 
@@ -113,8 +105,6 @@ class TestB88Exchange:
         b88 = B88Exchange()
         lda = LDAExchange()
         rho = 0.5
-        # B88 at zero gradient reduces to spin-separated LDA at ρ/2, which
-        # equals unpolarized LDA at ρ.
         eps_b88 = float(b88(rho, jnp.zeros(3)))
         eps_lda = float(lda(rho))
         assert abs(eps_b88 - eps_lda) < 1e-10
@@ -150,8 +140,6 @@ class TestLYPCorrelation:
 
 class TestB3LYPComposite:
     def test_density_local_part_matches_libxc(self):
-        """Our B3LYP returns 0.08 LDA_X + 0.72 B88_X + 0.19 VWN_RPA + 0.81 LYP
-        (all density-local parts). libxc's ``b3lyp`` returns the same."""
         rho, grad = _random_rho_grad(20)
         rho_packed = np.vstack([rho, grad.T])
         ref, *_ = pyscf_libxc.eval_xc("b3lyp", rho_packed, spin=0, deriv=0)

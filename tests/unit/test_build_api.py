@@ -1,11 +1,3 @@
-"""The unified KS build API: KS(system, xc, grid=..., coulomb=..., spin=...).
-
-Checks that the builder is consistent across equivalent spellings (a becke()
-spec vs the same explicit grid), that the spec factories reject inert knob
-combinations, and that the spin-inference rule (None → from system; explicit →
-polarized) holds.
-"""
-
 import jax
 import jax.numpy as jnp
 import pytest
@@ -36,8 +28,6 @@ def _solve(ks):
 
 @pytest.mark.float64
 def test_builder_grid_spec_matches_explicit_grid():
-    """KS(mol, xc, grid=becke(...)) == KS with the same explicit (coords, weights),
-    field by field."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     grid = becke(n_radial=35, lebedev=50)
     ks_spec = KS(mol, LDA(), grid=grid, coulomb=exact())
@@ -54,69 +44,52 @@ def test_builder_grid_spec_matches_explicit_grid():
 
 @pytest.mark.float64
 def test_builder_scf_energy_matches_across_grid_spellings():
-    """A full SCF through the becke() spec equals the explicit-grid build."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     e_spec, conv_spec = _solve(KS(mol, LDA(), grid=becke(35, 50)))
     gc, gw = becke_grid(mol.symbols, mol.atom_coords(), 35, 50)
     e_expl, conv_expl = _solve(KS(mol, LDA(), grid=(gc, gw)))
     assert conv_spec and conv_expl
-    # 5e-9: the two spellings hand XLA distinct (bitwise-identical) buffers,
-    # and GPU reductions are not bit-reproducible across programs; the SCF
-    # amplifies that to a few 1e-10.
     assert e_spec == pytest.approx(e_expl, abs=5e-9)
 
 
 @pytest.mark.float64
 def test_spin_inference():
-    """spin=None infers from the system; explicit spin forces polarization."""
     water = Molecule.from_xyz(WATER, "sto-3g")
-    assert KS(water, LDA(), grid=becke(35, 50)).nocc == (5,)          # closed shell
-    assert KS(water, LDA(), grid=becke(35, 50), spin=0).nocc == (5, 5)  # forced polarized
+    assert KS(water, LDA(), grid=becke(35, 50)).nocc == (5,)
+    assert KS(water, LDA(), grid=becke(35, 50), spin=0).nocc == (5, 5)
     oh = Molecule.from_xyz("O 0 0 0; H 0.9697 0 0", "sto-3g", spin=1)
-    assert KS(oh, LDA(), grid=becke(35, 50)).nocc == (5, 4)           # from system
+    assert KS(oh, LDA(), grid=becke(35, 50)).nocc == (5, 4)
 
 
 @pytest.mark.float64
 def test_df_backend_and_explicit_grid():
-    """df() by name resolves the aux basis; an explicit (coords, weights) grid
-    and a points() spec with a chunk select the right XC term."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     gc, gw = becke_grid(mol.symbols, mol.atom_coords(), 35, 50)
     ks = KS(mol, PBE(), grid=(gc, gw), coulomb=df(AUX))
-    assert isinstance(ks.coulomb, WhitenedDFCoulomb)  # concrete: whitened
+    assert isinstance(ks.coulomb, WhitenedDFCoulomb)
     assert isinstance(KS(mol, PBE(), grid=(gc, gw),
                          coulomb=df(AUX, whiten=False)).coulomb, DFCoulomb)
     ks_str = KS(mol, PBE(), grid=points(gc, gw, chunk=2000))
     assert isinstance(ks_str.xc_term, StreamedGridXC)
     P = jnp.zeros((1, ks.S.shape[0], ks.S.shape[0]))
-    # streamed and materialized XC agree at a (trivial) density
     assert float(ks.e_xc(P)) == pytest.approx(float(ks_str.e_xc(P)))
 
 
 def test_molecule_spherical_field():
-    """Molecule(spherical=True) flows into the basis (nao differs for l>=2).
-
-    Checked at the basis-resolution level (no integrals — an eri4c build on a
-    d-function basis is the most expensive compile in the codebase and buys
-    nothing here).
-    """
     from dftax.ks.energy import _resolve_system
 
     cart = Molecule.from_xyz("Ne 0 0 0", "cc-pvdz")
     sph = Molecule.from_xyz("Ne 0 0 0", "cc-pvdz", spherical=True)
     basis_cart = _resolve_system(cart)[0]
     basis_sph = _resolve_system(sph)[0]
-    assert basis_cart.cart2sph is None                     # 6d cartesian
-    assert basis_sph.cart2sph is not None                  # 5d spherical
-    assert basis_sph.cart2sph.shape == (15, 14)            # nao 15 -> 14
+    assert basis_cart.cart2sph is None
+    assert basis_sph.cart2sph is not None
+    assert basis_sph.cart2sph.shape == (15, 14)
 
 
 def test_spec_factories_reject_inert_combinations():
     with pytest.raises(ValueError):
         exact(screen=1e-10, stream=True)
-    # df(screen=...) without a chunk is now the materialized shell-pair
-    # compact gather (valid); the remaining inert df combination is a
-    # spherical span on the streamed backend.
     with pytest.raises(ValueError):
         df(AUX, chunk=50, spherical=True)
     with pytest.raises(TypeError):
@@ -124,7 +97,6 @@ def test_spec_factories_reject_inert_combinations():
 
 
 def test_ks_warns_without_x64():
-    """Building in float32 mode must warn: the energies are not chemistry."""
     mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.74", "sto-3g")
     jax.config.update("jax_enable_x64", False)
     try:
@@ -132,27 +104,21 @@ def test_ks_warns_without_x64():
             try:
                 KS(mol, LDA(), grid=becke(20, 50))
             except Exception:
-                # the warning is the contract; a float32 build is not
-                # supported past it (kernels built earlier in the session
-                # hold float64 constants)
                 pass
     finally:
         jax.config.update("jax_enable_x64", True)
 
 
 def test_molecule_rejects_inconsistent_spin():
-    """Spin/electron-count mismatches fail at construction, not at the KS build."""
     with pytest.raises(ValueError, match="nelec.spin"):
         Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043",
-                          "sto-3g", spin=1)               # 10 electrons, odd 2S
+                          "sto-3g", spin=1)
     with pytest.raises(ValueError, match="too large"):
         Molecule.from_xyz("H 0 0 0; H 0 0 0.74", "sto-3g", spin=4)
 
 
 @pytest.mark.float64
 def test_default_coulomb_is_df():
-    """coulomb=None resolves to density fitting (def2-universal-jkfit),
-    whitened at a concrete geometry."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     ks = KS(mol, LDA(), grid=becke(35, 50))
     assert isinstance(ks.coulomb, WhitenedDFCoulomb)
@@ -160,20 +126,13 @@ def test_default_coulomb_is_df():
 
 @pytest.mark.float64
 def test_df_auto_chunk_switches_to_streamed(monkeypatch):
-    """df(chunk="auto") streams past the memory budget; same energy."""
     import dftax.ks.energy as energy_mod
     from dftax.ks.scf import scf
 
     mol = Molecule.from_xyz(WATER, "sto-3g")
     grid = becke(35, 50)
-    # spherical=False: the streamed side below is cartesian; the 1e-9
-    # energy comparison needs both runs in the same fit space, and
-    # whiten=False the same metric-inverse contraction (whitening reorders it,
-    # which moves energies by the ~1e-9 density-fitting floor).
     e_mat = scf(KS(mol, LDA(), grid=grid,
                    coulomb=df(spherical=False, whiten=False))).e_tot
-    # Force the streamed branch: patch the resolved budget (device-aware on a
-    # GPU) down to a tiny value so the water tensor exceeds it.
     monkeypatch.setattr(energy_mod, "_df_materialize_budget", lambda: 16)
     ks_s = KS(mol, LDA(), grid=grid)
     assert isinstance(ks_s.coulomb, StreamedDFCoulomb)
@@ -182,7 +141,6 @@ def test_df_auto_chunk_switches_to_streamed(monkeypatch):
 
 @pytest.mark.float64
 def test_raw_system_defaults_to_exact():
-    """A raw System has no symbols to resolve an aux basis: exact fallback."""
     from dftax import System
     from dftax.basis.loader import build_basis_data
     from dftax.grid import becke_grid
@@ -200,13 +158,11 @@ def test_raw_system_defaults_to_exact():
 
 
 def test_functional_registry_resolves_names_and_aliases():
-    """functional(name) ignores case and punctuation and returns a ready
-    instance; unknown names raise listing what exists."""
     from dftax import functional
     from dftax.energy.xc import CAMB3LYP, LDA as LDACls, WB97XV
 
     assert isinstance(functional("lda"), LDACls)
-    assert isinstance(functional("SVWN"), LDACls)          # alias
+    assert isinstance(functional("SVWN"), LDACls)
     assert isinstance(functional("cam-b3lyp"), CAMB3LYP)
     assert isinstance(functional("wB97X_V"), WB97XV)
     assert functional("r2scan").name == "r2SCAN"

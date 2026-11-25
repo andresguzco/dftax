@@ -1,17 +1,3 @@
-"""Lattice geometry: reciprocal vectors, plane-wave vectors, uniform grids,
-image translations.
-
-Lattice vectors are the rows of ``a`` (Bohr). Whatever is an integer pattern
-(the FFT index grid, the list of image translations) is built eagerly with
-numpy from concrete inputs; what is geometry (``G = n·b``, ``r = f·a``,
-``T = n·a``) is jax and stays a differentiable function of ``a``, which is
-what the stress needs.
-
-Conventions are PySCF's, so arrays compare element for element: ``b = 2π
-(a⁻¹)ᵀ``, grid points ``(i/n1) a1 + (j/n2) a2 + (k/n3) a3`` in C order, G
-vectors in FFT order (``numpy.fft.fftfreq``) in C order.
-"""
-
 from __future__ import annotations
 
 import itertools
@@ -31,7 +17,6 @@ def volume(a):
 
 
 def fft_indices(mesh) -> np.ndarray:
-    """Integer plane-wave indices of a mesh in FFT order, ``(N, 3)``."""
     axes = [np.fft.fftfreq(int(n), 1.0 / int(n)) for n in mesh]
     return np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
 
@@ -66,7 +51,6 @@ def lattice_images(a, rcut: float) -> np.ndarray:
 
 
 def _fft_friendly(n: int) -> int:
-    """Smallest integer ``>= n`` whose only prime factors are 2, 3, 5, 7."""
     while True:
         m = n
         for p in (2, 3, 5, 7):

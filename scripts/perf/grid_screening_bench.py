@@ -26,7 +26,6 @@ PEP = ("/home/mila/g/guzmanca/dftax-splatting/experiments/"
 
 
 def read_xyz(path):
-    """Standard xyz or the headerless 'symbol x y z' the peptides use."""
     with open(path) as fh:
         lines = [ln for ln in fh.read().splitlines() if ln.strip()]
     try:

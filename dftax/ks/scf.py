@@ -1,23 +1,3 @@
-"""Kohn-Sham SCF: autodiff Fock + canonical orthonormalization + DIIS.
-
-The Fock matrices are obtained by automatic differentiation of the electronic
-energy, ``F_σ = sym(∂E/∂P_σ)``, exact for any XC functional and free of a
-hand-coded XC potential matrix. Convergence is accelerated with Pulay DIIS on
-the orthonormal-basis commutator ``Xᵀ(FPS − SPF)X``.
-
-One solver serves both shell structures: the density is spin-stacked
-``(nspin, nao, nao)`` with per-channel occupations from ``ks.nocc`` (a doubly
-occupied single channel for a closed shell, unit-occupation α/β channels for a
-spin-polarized system), and DIIS runs on the channel-stacked Fock/error
-super-matrices, so the restricted solve is literally the ``nspin=1`` case of
-the unrestricted one. The whole self-consistency loop runs on device in a
-single ``lax.while_loop`` (DIIS history kept in a fixed-size circular buffer),
-so there are no per-iter host round-trips and the entire solve compiles once.
-
-:func:`scf` wraps the solver and packs the stacked outputs into a
-:class:`KSResult`.
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -35,13 +15,11 @@ from dftax.ks.guess import GuessSpec, density_from_guess
 
 @eqx.filter_jit
 def _total_energy(ks: KS, P: Float[Array, "nspin nao nao"]) -> Array:
-    """Total KS energy E(P) (filter-jit so ks arrays are traced, not baked)."""
     return ks.total(P)
 
 
 @eqx.filter_jit
 def _fock_stacked(ks: KS, P: Float[Array, "nspin nao nao"]) -> Array:
-    """Per-channel KS Fock matrices ``F_σ = sym(∂E/∂P_σ)`` by autodiff."""
     g = jax.grad(lambda Q: ks.electronic(Q))(P)
     return 0.5 * (g + g.transpose(0, 2, 1))
 
@@ -64,21 +42,12 @@ class KSResult:
     mo_energy: Float[Array, "nspin nmo"]
     mo_coeff: Float[Array, "nspin nao nmo"]
     P: Float[Array, "nspin nao nao"]
-    ts: float = 0.0     # Mermin entropy term sigma·S (>=0); 0 without smearing.
-    # Under smearing e_tot is the free energy A = E_ks - ts, so the KS energy
-    # is e_tot + ts and the sigma->0 estimate is e_tot + 0.5·ts.
+    ts: float = 0.0
 
 
 def canonical_orthonormalizer(
     S: Float[Array, "nao nao"], thresh: float = 1e-7
 ) -> Float[Array, "nao nmo"]:
-    """Canonical orthonormalizer ``X = U s^{-1/2}`` with ``Xᵀ S X = I``.
-
-    Eigenvectors whose overlap eigenvalue falls below ``thresh`` are dropped to
-    keep the transformed problem well conditioned for (near-)linearly-dependent
-    bases. Run eagerly (outside the jitted loop) so the kept-column count, and
-    hence X's shape, is concrete.
-    """
     s, U = jnp.linalg.eigh(S)
     keep = s > thresh
     s_keep = s[keep]
@@ -87,16 +56,12 @@ def canonical_orthonormalizer(
 
 
 def _occupations(nocc: tuple[int, ...], nmo: int) -> Float[Array, "nspin nmo"]:
-    """Static per-channel occupation numbers: 2 for the closed-shell channel,
-    1 per spin channel (aufbau fill of the lowest ``nocc[σ]`` orbitals)."""
     w = 2.0 if len(nocc) == 1 else 1.0
     return jnp.stack([w * (jnp.arange(nmo) < n) for n in nocc])
 
 
 @dataclass(frozen=True)
 class FermiSpec:
-    """Fermi-Dirac fractional occupations (see :func:`fermi`)."""
-
     sigma: float = 0.01
 
 
@@ -132,8 +97,6 @@ def fermi(*, sigma: float = 0.01) -> FermiSpec:
 
 
 def _fermi_occupations(eps, nocc, w, sigma, bisect_iters=64):
-    """(nspin, nmo) smeared occupations: per channel, f = w·fd((eps−mu)/sigma)
-    with mu bisected so sum(f) = w·nocc (monotone in mu; fixed iterations)."""
     def channel(eps_s, n_s):
         lo = jnp.min(eps_s) - 30.0 * sigma
         hi = jnp.max(eps_s) + 30.0 * sigma
@@ -155,28 +118,15 @@ def _fermi_occupations(eps, nocc, w, sigma, bisect_iters=64):
 
 
 def _fermi_entropy(eps, nocc, w, sigma):
-    """Mermin entropy term ``sigma·S >= 0`` from the smeared occupations.
-
-    ``S = -Σ_i w[p ln p + (1-p) ln(1-p)]`` with ``p = f/w`` the per-state
-    Fermi-Dirac occupation probability. Subtracting ``sigma·S`` from the KS
-    energy at the smeared density gives the Mermin free energy, the quantity
-    the finite-temperature SCF makes stationary (and whose gradient is the
-    force); ``sigma -> 0`` sends it to the ordinary aufbau energy.
-    """
-    fs = _fermi_occupations(eps, nocc, w, sigma)          # (nspin, nmo)
+    fs = _fermi_occupations(eps, nocc, w, sigma)
     p = jnp.clip(fs / w, 1e-300, 1.0)
     q = jnp.clip(1.0 - fs / w, 1e-300, 1.0)
-    # x ln x -> 0 as x -> 0, so the clipped logs on the empty/full tails
-    # contribute nothing; kept finite for the autodiff transpose.
-    s = -(p * jnp.log(p) + q * jnp.log(q))                # per state, >= 0
+    s = -(p * jnp.log(p) + q * jnp.log(q))
     return sigma * w * jnp.sum(s)
 
 
 @dataclass(frozen=True)
 class ADIISSpec:
-    """SCF acceleration: ADIIS far from convergence, Pulay DIIS near it
-    (see :func:`adiis`)."""
-
     space: int = 8
     switch: float = 1e-1
 
@@ -207,8 +157,6 @@ def adiis(*, space: int = 8, switch: float = 1e-1) -> ADIISSpec:
 
 
 def _project_simplex(u):
-    """Euclidean projection onto the probability simplex (Duchi et al.);
-    fixed-shape, entries pushed to -1e30 project to exactly zero."""
     m = u.shape[0]
     s = jnp.sort(u)[::-1]
     css = jnp.cumsum(s)
@@ -220,15 +168,6 @@ def _project_simplex(u):
 
 
 def _adiis_extrapolate(dF, dD, slot, count, m, steps=64):
-    """ADIIS (Hu-Yang) Fock extrapolation over the same circular buffers.
-
-    Minimizes the energy model ``E(c) = 2 c.g + c.H c`` with
-    ``g_i = <D_i - D_cur, F_cur>`` and ``H_ij = <D_i - D_cur, F_j - F_cur>``
-    over the probability simplex (projected gradient, fixed step 1/L, a
-    fixed number of steps so the whole solve stays inside the while_loop).
-    Far from convergence this cannot oscillate the way Pulay DIIS can; the
-    caller blends back to Pulay as the commutator norm drops.
-    """
     F_cur = dF[slot]
     D_cur = dD[slot]
     dDf = (dD - D_cur[None]).reshape(m, -1)
@@ -250,20 +189,12 @@ def _adiis_extrapolate(dF, dD, slot, count, m, steps=64):
 
 
 def _diis_extrapolate(dF, dErr, count, m):
-    """Pulay DIIS over a fixed-size circular buffer.
-
-    ``dF``/``dErr`` are (m, nspin·nao, nao) / (m, nspin·nmo, nmo) channel-stacked
-    super-matrices; only the first ``count`` slots are filled (``count`` traced).
-    Unfilled slots are masked to the identity so they drop out of the augmented
-    system; a tiny ridge on the filled block keeps it solvable as the errors
-    vanish near convergence.
-    """
     errs = dErr.reshape(m, -1)
-    B = errs @ errs.T                                  # (m, m)
+    B = errs @ errs.T
     valid = jnp.arange(m) < count
     vv = valid[:, None] & valid[None, :]
     B = jnp.where(vv, B, jnp.eye(m))
-    B = B + 1e-10 * jnp.diag(valid.astype(B.dtype))    # ridge filled slots
+    B = B + 1e-10 * jnp.diag(valid.astype(B.dtype))
 
     A = jnp.zeros((m + 1, m + 1), dtype=B.dtype)
     A = A.at[:m, :m].set(B)
@@ -272,71 +203,39 @@ def _diis_extrapolate(dF, dErr, count, m):
     A = A.at[m, :m].set(border)
     rhs = jnp.zeros(m + 1, dtype=B.dtype).at[m].set(-1.0)
 
-    c = jnp.linalg.solve(A, rhs)[:m]                   # (m,)
+    c = jnp.linalg.solve(A, rhs)[:m]
     return jnp.einsum("i,iab->ab", c, dF)
 
 
 @eqx.filter_jit
 def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
                adiis_switch=None, smear_sigma=None):
-    """On-device SCF: autodiff Fock + DIIS in a single while_loop (spin-stacked).
-
-    ``P0`` is the initial spin-stacked density (see :mod:`dftax.ks.guess`);
-    the loop body starts by building the Fock from it.
-
-    ``level_shift`` (Saunders-Hillier) adds ``b·(S − S C_occ C_occᵀ S)`` per channel
-    to the Fock before diagonalization, raising the virtual orbital energies by
-    ``b`` while leaving the occupied block untouched, widening the HOMO-LUMO gap to
-    damp oscillation for near-degenerate cases. The occupied subspace is unchanged
-    at the fixed point, so the converged density (and energy) is identical to
-    ``level_shift=0``.
-
-    Returns channel-stacked ``(e, P, C, eps, converged, n_iter)``.
-    """
     S = ks.S
     nao = S.shape[0]
     nmo = X.shape[1]
     nspin = len(ks.nocc)
-    # Statically slice the occupied block: nocc is static, and contracting the
-    # full nmo set against a mostly-zero occupation vector costs nmo/nocc times
-    # the flops for the same result (XLA does not eliminate constant-zero
-    # columns from a dense dot).
     nmax = max(ks.nocc)
-    f = _occupations(ks.nocc, nmax)         # (nspin, nmax) occupation numbers
-    # Occupied projector scale for the level shift: P_σ = (1/inv_w) C_occ C_occᵀ.
+    f = _occupations(ks.nocc, nmax)
     inv_w = 0.5 if nspin == 1 else 1.0
 
-    def make_density(F):                     # F: (nspin, nao, nao)
-        eps, Cp = jnp.linalg.eigh(X.T @ F @ X)          # batched over channels
-        C = X @ Cp                                       # (nspin, nao, nmo)
+    def make_density(F):
+        eps, Cp = jnp.linalg.eigh(X.T @ F @ X)
+        C = X @ Cp
         if smear_sigma is not None:
-            # fractional occupations are dynamic in eps: no occupied slice
             fs = _fermi_occupations(eps, ks.nocc, 2.0 if nspin == 1 else 1.0,
                                     smear_sigma)
             P = jnp.einsum("smi,si,sni->smn", C, fs, C)
         else:
-            Co = C[:, :, :nmax]                          # static occupied slice
-            P = jnp.einsum("smi,si,sni->smn", Co, f, Co)  # aufbau fill
+            Co = C[:, :, :nmax]
+            P = jnp.einsum("smi,si,sni->smn", Co, f, Co)
         return P, C, eps
 
-    # Infinity, not E(P0): the loop evaluates the energy at the density that
-    # produces the Fock, so an actual E(P0) would make `de` zero on iteration 0
-    # and hand convergence to any guess with a small commutator.
     e0 = jnp.array(jnp.inf, dtype=P0.dtype)
-    # C/eps placeholders: the body always runs at least one iteration
-    # (``converged`` starts False), which overwrites them.
     C0 = jnp.zeros((nspin, nao, nmo))
     eps0 = jnp.zeros((nspin, nmo))
-    # Channel-stacked DIIS buffers. The Fock is nao×nao per channel, but the
-    # commutator error err = Xᵀ(FPS−SPF)X is nmo×nmo, and nmo = X.shape[1] < nao
-    # whenever the canonical orthonormalizer drops linearly-dependent columns, so
-    # the two buffers have distinct shapes.
     dF0 = jnp.zeros((m, nspin * nao, nao))
     dErr0 = jnp.zeros((m, nspin * nmo, nmo))
-    # Density history only when ADIIS is on (static branch: the plain-Pulay
-    # graph is unchanged).
     dD0 = jnp.zeros((m, nspin * nao, nao)) if adiis_switch is not None else None
-    # state: (it, P, C, eps, e_prev, derr, converged, dF, dErr[, dD])
     state0 = (0, P0, C0, eps0, e0, jnp.inf, jnp.array(False), dF0, dErr0) + (
         (dD0,) if adiis_switch is not None else ())
 
@@ -345,10 +244,8 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
 
     def body(st):
         it, P, C, eps, e_prev, _, _, dF, dErr = st[:9]
-        # One call, not `grad(electronic)` beside `total`: on the streaming
-        # backends those walk the quadrature twice (see KS.energy_and_fock).
         e_here, F = ks.energy_and_fock(P, idempotent=smear_sigma is None)
-        err = X.T @ (F @ P @ S - S @ P @ F) @ X          # (nspin, nmo, nmo)
+        err = X.T @ (F @ P @ S - S @ P @ F) @ X
         derr = jnp.linalg.norm(err)
 
         slot = it % m
@@ -360,20 +257,11 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
             dD = st[9].at[slot].set(P.reshape(nspin * nao, nao))
             F_adiis = _adiis_extrapolate(dF, dD, slot, count, m).reshape(
                 nspin, nao, nao)
-            # Energy-model extrapolation while the commutator is large,
-            # Pulay once it drops below the switch. Instantaneous and
-            # re-entrant on purpose: a latched handoff commits to Pulay on a
-            # transient early dip (lost a Cr case), and a smooth blend
-            # contaminates delicate Pulay convergence with residual ADIIS
-            # weight (drove stretched N2 to a wrong fixed point); both
-            # alternatives were measured worse on the hard-case set.
             F_ext = jnp.where(derr > adiis_switch, F_adiis, F_ext)
 
         de = e_here - e_prev
-        # Both halves describe the same density: `derr` is the commutator at
-        # P, `de` the step in E(P) since the previous iteration's density.
         converged = (jnp.abs(de) < e_tol) & (derr < d_tol)
-        F_ls = F_ext + level_shift * (S - inv_w * (S @ P @ S))   # raise virtuals
+        F_ls = F_ext + level_shift * (S - inv_w * (S @ P @ S))
         P, C, eps = make_density(F_ls)
         e = e_here
         if verbose:
@@ -386,20 +274,12 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
 
     final = lax.while_loop(cond, body, state0)
     it, P, C, eps, _e_at_prev, _, converged = final[:7]
-    # The loop's energy belongs to the density that produced the last Fock,
-    # while `P` is the one built from it, so report the energy at `P`. A
-    # hybrid takes the fast path: ks.total's exchange is the dense
-    # density-route contraction, while energy_and_fock routes it through the
-    # occupied orbitals (static branch on the term's exchange fractions).
     coulomb = ks.coulomb
     if (getattr(coulomb, "hf_coeff", 0.0) != 0.0
             or getattr(coulomb, "hf_coeff_lr", 0.0) != 0.0):
         e_prev, _ = ks.energy_and_fock(P, idempotent=smear_sigma is None)
     else:
         e_prev = ks.total(P)
-    # Mermin free energy under smearing: subtract the electronic entropy term
-    # from the converged KS energy so the reported energy is the variational
-    # (force-consistent) quantity. ts = 0 without smearing.
     if smear_sigma is not None:
         ts = _fermi_entropy(eps, ks.nocc, 2.0 if nspin == 1 else 1.0,
                             smear_sigma)
@@ -409,14 +289,6 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
 
 
 def _reject_smeared_frozen_exchange(ks, smearing):
-    """Refuse fractional occupations on a backend whose exchange assumes none.
-
-    The streamed RI-K recovers occupied orbitals from ``P`` and treats the top
-    ``nocc`` as fully occupied (see
-    :func:`~dftax.ks.terms._streamed_df_rik`), which is exact at an idempotent
-    density and silently wrong at a smeared one. Use ``df(chunk=None)``
-    (materialized) for smeared hybrids, as ``dftax.ks.forces`` also requires.
-    """
     if smearing is None:
         return
     from dftax.ks.terms import ShardedStreamedDFCoulomb, StreamedDFCoulomb
@@ -426,7 +298,7 @@ def _reject_smeared_frozen_exchange(ks, smearing):
         return
     if float(getattr(c, "hf_coeff", 0.0)) == 0.0 and \
        float(getattr(c, "hf_coeff_lr", 0.0)) == 0.0:
-        return                              # pure DFT: no frozen exchange
+        return
     raise NotImplementedError(
         "smearing with a hybrid on the streamed density-fitting backend: the "
         "streamed RI-K freezes the occupied orbitals it recovers from P and "
@@ -525,10 +397,6 @@ def scf(
     _reject_smeared_frozen_exchange(ks, smearing)
     X = canonical_orthonormalizer(ks.S, lindep_thresh)
     P0 = density_from_guess(ks, guess, X)
-    # Tolerances ride along as traced arrays: under filter_jit a Python scalar
-    # is a static argument, so retrying with level_shift or a tighter e_tol
-    # would otherwise recompile the whole solve. diis_space (buffer shape) and
-    # verbose (Python branch) must stay static.
     if accel is not None:
         diis_space = accel.space
     e_tot, P, C, eps, converged, n_iter, ts = _scf_solve(

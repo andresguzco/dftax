@@ -1,41 +1,3 @@
-"""Geometric direct minimization: the KS energy minimized over orbital rotations.
-
-The SCF loop looks for a fixed point of the Fock map; this minimizes the energy
-itself. The occupied orbitals of each spin channel are parametrized by one
-occupied-virtual rotation ``kappa_sigma`` away from a fixed reference set,
-
-    C_o(kappa) = C_o cos(sqrt(kappa kappa^T)) - C_v kappa^T sinc(sqrt(kappa kappa^T)),
-
-the occupied block of ``[C_o C_v] exp([[0, kappa], [-kappa^T, 0]])`` in closed
-form. The two matrix functions are power series in ``kappa kappa^T``
-(``nocc x nocc``): entire functions, so the derivative is well defined at
-``kappa = 0``, where an eigendecomposition of ``kappa kappa^T`` would be fully
-degenerate. Every iterate is an orthonormal determinant, so every reported
-energy is a variational upper bound, and nothing about it depends on the
-solver having converged.
-
-The gradient needs no hand derivation. ``KS.energy_and_fock`` returns the
-energy and ``F = sym(dE/dP)`` from one traversal of the grid; with
-``P = w C_o C_o^T`` the derivative with respect to the orbitals is
-``2 w F C_o``, and one VJP through the rotation (small matrices only) turns it
-into the exact derivative with respect to ``kappa``.
-
-The step is L-BFGS in ``kappa`` (the reference stays fixed between resets, so
-this is ordinary L-BFGS on a smooth function, as in the exponential
-transformation direct minimization of Levi, Ivanov and Jonsson), seeded with
-the diagonal orbital-Hessian model ``2 w (e_a - e_i)``, the orbital energies
-read off the current Fock in the reference orbitals. A backtracking line
-search with an energy-noise allowance keeps the descent monotone: the energy
-has a floating-point floor of ~1e-10 |E| (see :func:`~dftax.ks.scf.scf`), and
-a strict decrease test under that floor stalls, which is what collapses the
-Newton trust region on ROKS CH3. When ``kappa`` grows large the reference
-moves to the current orbitals, made pseudo-canonical in the current Fock.
-
-One ``energy_and_fock`` per loop iteration and no other: the guess
-evaluation, the first point and every line-search trial go through the same
-call, so the expensive part of the graph is traced and compiled once.
-"""
-
 from __future__ import annotations
 
 import math
@@ -50,8 +12,6 @@ from dftax.ks.energy import KS
 from dftax.ks.guess import GuessSpec, density_from_guess
 from dftax.ks.scf import KSResult, canonical_orthonormalizer
 
-# Terms of the rotation series (_series). ||kappa kappa^T|| stays below
-# KAPPA_RESET**2 = 4 between resets, where 16 terms leave 4**16/32! ~ 2e-26.
 N_SERIES = 16
 KAPPA_RESET = 2.0
 
@@ -59,10 +19,6 @@ _GUESS, _FRESH, _TRIAL, _RESET = 0, 1, 2, 3
 
 
 def _series(X, n=N_SERIES):
-    """``cos(sqrt(X))``, ``sinc(sqrt(X))`` and ``(1 - cos(sqrt(X))) / X`` for
-    symmetric PSD ``X``, by Horner on their power series in ``-X``. All three
-    are entire, so all three differentiate at ``X = 0``."""
-    # 1/(2k)! as python floats: the factorials overflow int64 past k = 10
     eye = jnp.eye(X.shape[0], dtype=X.dtype)
     inv = [1.0 / math.factorial(j) for j in range(2 * n + 3)]
     c = eye * inv[2 * n]
@@ -76,20 +32,11 @@ def _series(X, n=N_SERIES):
 
 
 def _occupied(Co, Cv, kappa):
-    """Occupied orbitals rotated by ``kappa`` (``nocc x nvir``)."""
     c, s, _ = _series(kappa @ kappa.T)
     return Co @ c - Cv @ (kappa.T @ s)
 
 
 def rotate_full(Co, Cv, kappa):
-    """Both blocks of ``[Co Cv] exp([[0, kappa], [-kappa^T, 0]])``.
-
-    The virtual block is ``Co sinc(X) kappa + Cv (I - kappa^T g(X) kappa)``
-    with ``X = kappa kappa^T`` and ``g(X) = (1 - cos sqrt X) / X``: the
-    push-through identities turn every function of the ``nvir x nvir``
-    ``kappa^T kappa`` into one of the ``nocc x nocc`` ``X``, so the whole
-    rotation costs ``O(nao nocc nvir)`` instead of the ``O(nmo^3)`` of
-    ``expm``."""
     c, s, g = _series(kappa @ kappa.T)
     Co_new = Co @ c - Cv @ (kappa.T @ s)
     Cv_new = Cv + Co @ (s @ kappa) - (Cv @ kappa.T) @ (g @ kappa)
@@ -101,30 +48,22 @@ def _tdot(a, b):
 
 
 def _reference(F, Co, S, X):
-    """Pseudo-canonical reference ``(Co, Cv, e_o, e_v)`` for occupied
-    orbitals ``Co`` in Fock ``F``: the occupied block diagonalized as is, the
-    virtual space the orthonormal complement of ``Co`` in the span of the
-    orthonormalizer ``X``, diagonalized in turn. Forward only."""
     no = Co.shape[1]
-    c = X.T @ (S @ Co)                                  # (nmo, no), orthonormal
+    c = X.T @ (S @ Co)
     e_o, Uo = jnp.linalg.eigh(Co.T @ F @ Co)
     _, V = jnp.linalg.eigh(jnp.eye(c.shape[0], dtype=c.dtype) - c @ c.T)
-    Cv0 = X @ V[:, no:]                                 # eigenvalue-1 vectors
+    Cv0 = X @ V[:, no:]
     e_v, Uv = jnp.linalg.eigh(Cv0.T @ F @ Cv0)
     return Co @ Uo, Cv0 @ Uv, e_o, e_v
 
 
 def _canonical(F, X, no):
-    """Aufbau reference from a Fock: its own eigenvectors."""
     eps, Cp = jnp.linalg.eigh(X.T @ F @ X)
     C = X @ Cp
     return C[:, :no], C[:, no:], eps[:no], eps[no:]
 
 
 def _lbfgs_direction(g, H0, Sh, Yh, rho, count, head, m):
-    """Two-loop recursion; ``g``, ``H0`` and the history entries are tuples
-    over spin channels, the history a circular buffer of depth ``m``."""
-
     def newest_first(k, carry):
         q, alphas = carry
         j = (head - 1 - k) % m
@@ -154,7 +93,7 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
     S = ks.S
     nocc = ks.nocc
     nspin = len(nocc)
-    occ = ks.occupations()          # per-orbital weights, one vector a channel
+    occ = ks.occupations()
     nmo = X.shape[1]
     dt = P0.dtype
 
@@ -165,8 +104,6 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
         return tuple(_occupied(a, b, k) for a, b, k in zip(Co, Cv, kappa))
 
     def full_eval(args):
-        """Energy, d E / d kappa, d E / d C_o and the Fock, through the
-        density matrix. The guess and the reference resets need the Fock."""
         P, Co, Cv, kappa = args
         e, F = ks.energy_and_fock(P)
         Cos, vjp = jax.vjp(lambda k: rotate(Co, Cv, k), kappa)
@@ -175,8 +112,6 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
         return e, g, dC, F
 
     def orbital_eval(args):
-        """The same through the orbitals, which never forms the XC potential
-        (KS.energy_and_grad_orbitals); the Fock is not built."""
         P, Co, Cv, kappa = args
         Cos, vjp = jax.vjp(lambda k: rotate(Co, Cv, k), kappa)
         e, dC = ks.energy_and_grad_orbitals(Cos)
@@ -184,8 +119,6 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
         return e, g, dC, jnp.zeros_like(P)
 
     def precond(eo, ev):
-        # 1 / (2 w_i (e_a - e_i)); an empty slot (w_i = 0) has no curvature
-        # and no gradient, so it gets no step
         return tuple(jnp.where(
             f[:, None] > 0.0,
             1.0 / (2.0 * jnp.maximum(f[:, None], 1e-30)
@@ -193,9 +126,6 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
             0.0) for o, v, f in zip(eo, ev, occ))
 
     def commutator(dC, Cos):
-        # ||X^T (F P S - S P F) X|| from dE/dC_o = 2 w F C_o alone:
-        # (1/sqrt 2) ||X^T (G - S C_o (C_o^T G))|| per channel, the Fock
-        # never formed (see the identity in tests/unit/test_gdm.py)
         sq = 0.0
         for G, C in zip(dC, Cos):
             r = X.T @ (G - S @ (C @ (C.T @ G)))
@@ -203,8 +133,6 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
         return jnp.sqrt(sq)
 
     def new_reference(F, Cos, canonical):
-        """(Co, Cv, e_o, e_v) per channel from a Fock: its aufbau eigenvectors
-        at the guess, the pseudo-canonical frame of Cos at a reset."""
         out = [(_canonical(F[s], X, nocc[s]) if canonical
                 else _reference(F[s], Cos[s], S, X)) for s in range(nspin)]
         return tuple(tuple(o[i] for o in out) for i in range(4))
@@ -237,14 +165,13 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
         Cos_t = rotate(st["Co"], st["Cv"], kappa_t)
         P_t = jnp.where(mode == _GUESS, st["P"], density(Cos_t))
         args = (P_t, st["Co"], st["Cv"], kappa_t)
-        if orbital_xc:          # one call site each; the Fock only when needed
+        if orbital_xc:
             e_t, g_t, dC_t, F_t = lax.cond(
                 (mode == _GUESS) | (mode == _RESET), full_eval, orbital_eval,
                 args)
         else:
             e_t, g_t, dC_t, F_t = full_eval(args)
 
-        # --- the guess evaluation only builds the first reference ----------
         def from_guess(st):
             Co, Cv, eo, ev = new_reference(F_t, Cos_t, canonical=True)
             return dict(st, Co=Co, Cv=Cv, eo=eo, ev=ev, kappa=zeros_k,
@@ -252,7 +179,6 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
                         mode=jnp.asarray(_FRESH))
 
         def accept_point(st, fresh, stalled, kappa_t, g_t, dC_t, Cos_t):
-            """Take the evaluated point as the new base and step from it."""
             s_k = tuple(a - b for a, b in zip(kappa_t, st["kappa"]))
             y_k = tuple(a - b for a, b in zip(g_t, st["g"]))
             sy = _tdot(s_k, y_k)
@@ -270,11 +196,8 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
             head = jnp.where(good, (head + 1) % m, head)
             H0 = precond(st["eo"], st["ev"])
             d = _lbfgs_direction(g_t, H0, Sh, Yh, rho, count, head, m)
-            # keep the step a rotation of bounded size
             big = jnp.max(jnp.asarray([jnp.max(jnp.abs(x)) for x in d]))
             d = tuple(x * jnp.minimum(1.0, max_step / big) for x in d)
-            # a non-descent direction (stale curvature): fall back to the
-            # preconditioned gradient and drop the history
             bad = _tdot(d, g_t) >= 0.0
             d = tuple(jnp.where(bad, -h * gi, di)
                       for h, gi, di in zip(H0, g_t, d))
@@ -282,9 +205,6 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
             de = jnp.where(fresh, st["de"], e_t - st["E"])
             derr = commutator(dC_t, Cos_t)
             noise = 1e-10 * jnp.abs(e_t) + 1e-12
-            # the energy test cannot be tighter than the energy's own floor
-            # (it grows with the molecule: 3.5e-8 Ha on coronene, above the
-            # default e_tol); the commutator carries the rest
             conv = ((~fresh) & (jnp.abs(de) < jnp.maximum(e_tol, noise))
                     & (derr < d_tol))
             return dict(st, kappa=kappa_t, E=e_t, g=g_t, P=density(Cos_t),
@@ -292,19 +212,16 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
                         rho=rho, count=count, head=head, de=de, derr=derr,
                         converged=conv, mode=jnp.asarray(_TRIAL))
 
-        # --- a point is evaluated: accept it, or shrink the step ----------
         def line_search(st):
             slope = _tdot(st["g"], st["d"])
             noise = 1e-10 * jnp.abs(st["E"]) + 1e-12
             fresh = mode == _FRESH
             accept = fresh | (e_t <= st["E"] + 1e-4 * st["alpha"] * slope
                               + noise)
-            stalled = ~accept & (st["alpha"] < 1e-4)     # give up shrinking
+            stalled = ~accept & (st["alpha"] < 1e-4)
             accept = accept | stalled
 
             def shrink(st):
-                # minimizer of the quadratic through E(0), E'(0), E(alpha),
-                # kept inside [0.1, 0.5] alpha
                 a = st["alpha"]
                 curv = e_t - st["E"] - slope * a
                 a_q = jnp.where(curv > 0, -slope * a * a / (2.0 * curv),
@@ -317,8 +234,6 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
                 lambda st: accept_point(st, fresh, stalled, kappa_t, g_t,
                                         dC_t, Cos_t),
                 shrink, st)
-            # move the reference once kappa is large: the next evaluation, at
-            # the same point, builds the Fock for the new frame
             knorm = jnp.sqrt(_tdot(st["kappa"], st["kappa"]))
             do_reset = accept & (knorm > KAPPA_RESET) & ~st["converged"]
             return lax.cond(
@@ -327,10 +242,6 @@ def _gdm_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
                                 mode=jnp.asarray(_RESET)),
                 lambda st: st, st)
 
-        # --- a reset: the current orbitals, made pseudo-canonical, become
-        # the reference at kappa = 0; the same evaluation gives the gradient
-        # there (first order: d C_o = -C_v dk^T), so it is taken as a fresh
-        # point without a second evaluation
         def reset(st):
             Co, Cv, eo, ev = new_reference(F_t, Cos_t, canonical=False)
             dC0 = tuple(2.0 * (F_t[s] @ Co[s]) * occ[s] for s in range(nspin))
@@ -406,10 +317,6 @@ def gdm(
         jnp.asarray(d_tol), jnp.asarray(max_step), jnp.asarray(gap_floor),
         history, verbose, orbital_xc,
     )
-    # canonical orbitals of the converged density, for parity with scf
-    # (forward only; P is the authoritative result). energy_and_fock, not
-    # _fock_stacked: the latter is reverse mode through KS.electronic, whose
-    # hybrid exchange is the dense density-route contraction
     _, F = _energy_and_fock(ks, P)
     eps, Cp = jnp.linalg.eigh(X.T @ F @ X)
     C = X @ Cp

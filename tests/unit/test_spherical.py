@@ -1,10 +1,3 @@
-"""Spherical-harmonic basis (cart2sph) for the PySCF-free loader.
-
-Validates that ``build_basis_data(spherical=True)`` reproduces a spherical PySCF
-reference for an l>=2 basis. Uses core-Hamiltonian generalized eigenvalues
-(physical, AO-ordering invariant) so it stays cheap, with no two-electron integrals.
-"""
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -24,7 +17,6 @@ def test_spherical_cc_pvdz_core_hamiltonian():
     mol = gto.M(atom=H2O, basis="cc-pvdz").build()
     b = build_basis_data(["O", "H", "H"], mol.atom_coords(), "cc-pvdz", spherical=True)
 
-    # cc-pVDZ water: 24 spherical AOs (the d shell is 5, not 6 Cartesian).
     assert b.cart2sph is not None
     assert b.cart2sph.shape[1] == mol.nao == 24
 

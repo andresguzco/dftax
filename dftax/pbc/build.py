@@ -1,16 +1,3 @@
-"""Building the Kohn-Sham functional of a periodic cell (Gaussian engine,
-Gamma point).
-
-The formulation is the one PySCF calls FFT density fitting and CP2K the
-Gaussian and plane-wave method: a Gaussian basis of lattice-summed atomic
-orbitals, GTH pseudopotentials, and the density put on a uniform grid, where
-the Hartree energy is one FFT away and the XC energy is the usual
-quadrature. Every piece fills a field :class:`~dftax.ks.energy.KS` already
-has (the overlap, the core Hamiltonian, a Coulomb term, an XC term, the
-ion-ion energy), and at the Gamma point all of them are real symmetric, so
-the solvers run on a cell unchanged.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -94,10 +81,7 @@ class FFTCoulomb(CoulombTerm):
     inv: Int[Array, "ng"]
     mesh: tuple[int, int, int] = eqx.field(static=True)
     hf_coeff: float = eqx.field(static=True, default=0.0)
-    # valence charge of each atom's pseudopotential (the valence guess)
     ion_charges: tuple[int, ...] = eqx.field(static=True, default=())
-    # read by the solvers' guess policy (the molecular default projects
-    # all-electron atomic densities)
     periodic: ClassVar[bool] = True
 
     def energy(self, P, S, nocc):
@@ -107,9 +91,6 @@ class FFTCoulomb(CoulombTerm):
 
 
 class _GridCoulomb(CoulombTerm):
-    """Coulomb slot of a streamed cell: its Hartree energy is taken with the
-    XC energy, on the same pass over the grid (:class:`StreamedCellXC`)."""
-
     hf_coeff: float = eqx.field(static=True, default=0.0)
     ion_charges: tuple[int, ...] = eqx.field(static=True, default=())
     periodic: ClassVar[bool] = True
@@ -119,18 +100,6 @@ class _GridCoulomb(CoulombTerm):
 
 
 class StreamedCellXC(XCTerm):
-    """Everything a cell's density does on the grid, with the AO values
-    recomputed per chunk of points: the Hartree, local-pseudopotential and
-    XC energies.
-
-    One pass over the grid gives the density (and its gradient), a few
-    blocks of points at a time (:class:`~dftax.pbc.bloch.ValuePlan`), in
-    O(chunk x nao) memory; the three energies are then functions of
-    grid-sized arrays. The pass is checkpointed, so the derivative with
-    respect to ``P`` recomputes each block instead of storing it. Grid
-    arrays are in block order; ``inv`` restores mesh order for the FFT.
-    """
-
     basis: BasisData
     plan: ValuePlan
     grid_coords: Float[Array, "ng 3"]
@@ -139,7 +108,7 @@ class StreamedCellXC(XCTerm):
     inv: Int[Array, "ng"]
     a: Float[Array, "3 3"]
     mesh: tuple[int, int, int] = eqx.field(static=True)
-    chunk: int = eqx.field(static=True)           # blocks in flight
+    chunk: int = eqx.field(static=True)
     xc: XCFunctional = eqx.field(static=True)
 
     def energy(self, P):
@@ -152,7 +121,7 @@ class StreamedCellXC(XCTerm):
 
         def block(f, t, m, r):
             ao, dao = block_values(self.basis, shifts, f, t, m, r)
-            pao = jnp.einsum("smn,bn->sbm", P, ao)           # (nspin, B, nao)
+            pao = jnp.einsum("smn,bn->sbm", P, ao)
             rho = jnp.einsum("sbm,bm->sb", pao, ao)
             grad = 2.0 * jnp.einsum("sbm,bmx->sbx", pao, dao)
             tau = (0.5 * jnp.einsum("bmx,smn,bnx->sb", dao, P, dao) if mgga
@@ -162,14 +131,12 @@ class StreamedCellXC(XCTerm):
         rho, grad, tau = chunked_vmap(
             block, in_axes=(0, 0, 0, 0), chunk_size=self.chunk,
             checkpoint=True)(plan.fun, plan.img, plan.mask, pts)
-        # (nblk, nspin, B, ...) -> (nspin, ng, ...), padding dropped
         rho = jnp.moveaxis(rho, 1, 0).reshape(ns, -1)[:, :ng]
         grad = jnp.moveaxis(grad, 1, 0).reshape(ns, -1, 3)[:, :ng]
         tau = jnp.moveaxis(tau, 1, 0).reshape(ns, -1)[:, :ng]
         total = jnp.sum(rho, axis=0)
         e = (hartree_energy(total[self.inv], self.a, self.mesh)
              + jnp.sum(total * self.v_loc))
-        # the XC energy of grid densities, as the held-values term takes it
         gx = GridXC(ao=None, dao=None, weights=self.weights, xc=self.xc,
                     coords=self.grid_coords)
         chans = [(rho[s], grad[s], tau[s] if mgga else None)
@@ -181,29 +148,21 @@ class StreamedCellXC(XCTerm):
 
 @dataclass(frozen=True, eq=False)
 class CellPlan:
-    """What a cell's build fixes from its concrete geometry: the basis
-    layout, the screening plans, the grid order and the Ewald terms.
-
-    The energy terms are then functions of the atomic coordinates and the
-    lattice (:func:`cell_fields`), which may be traced: the forces and the
-    stress differentiate them with the plan frozen at this geometry.
-    """
-
     basis: BasisData
-    atom_idx: Array                  # (ncart,) atom of each cartesian row
+    atom_idx: Array
     pairs: PairPlan
-    projectors: tuple | None         # (BasisData, atom per row, H, PairPlan)
+    projectors: tuple | None
     values: ValuePlan
-    frac: Array                      # (npos, 3) grid positions, fractional
-    order: np.ndarray                # position -> mesh index
-    valid: Array                     # (npos,) 1 on mesh points, 0 on repeats
-    inv: Array                       # mesh index -> position
+    frac: Array
+    order: np.ndarray
+    valid: Array
+    inv: Array
     mesh: tuple[int, int, int]
-    held: bool                       # AO values held (True) or streamed
-    blocks: int                      # blocks in flight when streamed
+    held: bool
+    blocks: int
     ewald: EwaldPlan
-    charges: Array                   # valence charges
-    local: tuple                     # (zion, rloc, cloc)
+    charges: Array
+    local: tuple
     ion_charges: tuple[int, ...]
     nelec: int
     nocc: tuple[int, ...]
@@ -211,9 +170,6 @@ class CellPlan:
 
 
 class CellAt(NamedTuple):
-    """A planned cell at (possibly traced) coordinates and lattice: what
-    :class:`~dftax.ks.energy.KS` is given when the derivatives rebuild it."""
-
     plan: CellPlan
     coords: Array
     a: Array
@@ -221,7 +177,6 @@ class CellAt(NamedTuple):
 
 
 def plan_cell(cell, xc, grid, spin) -> CellPlan:
-    """Plan a periodic cell's build at its concrete geometry."""
     from dftax.ks.energy import _resolve_chunk, _spin_counts
 
     if (float(getattr(xc, "hf_coeff", 0.0)) != 0.0
@@ -260,8 +215,6 @@ def plan_cell(cell, xc, grid, spin) -> CellPlan:
         cell.symbols, coords, cell.basis, spherical=cell.spherical,
         return_atom_index=True)
 
-    # the grid in compact blocks (boxes of the mesh, edge boxes filled with
-    # zero-weight repeats); inv restores mesh order
     mesh = tuple(int(n) for n in mesh)
     order, valid, block = box_layout(mesh)
     inv = np.empty(int(np.prod(mesh)), dtype=np.int64)
@@ -271,11 +224,7 @@ def plan_cell(cell, xc, grid, spin) -> CellPlan:
     values = plan_values(basis, cell.a, frac @ np.asarray(cell.a), block=block)
     nao = int(basis.cart2sph.shape[1] if basis.cart2sph is not None
               else basis.centers.shape[0])
-    # the same budget rule as a molecule's AO grid: hold the values when
-    # they fit, recompute them per chunk when they do not
     chunk = _resolve_chunk(grid.chunk, int(frac.shape[0]), nao)
-    # blocks in flight when streamed: the screened evaluation's own budget,
-    # unless the caller fixed the chunk
     blocks = (value_chunk(values, basis) if not isinstance(chunk, int)
               or grid.chunk == "auto" else max(1, chunk // values.block))
 
@@ -304,14 +253,6 @@ def plan_cell(cell, xc, grid, spin) -> CellPlan:
 
 
 def cell_fields(plan: CellPlan, xc, coords, a, held: bool | None = None) -> dict:
-    """The fields of a :class:`~dftax.ks.energy.KS` for a planned cell at
-    ``coords`` (atoms, Bohr) and lattice ``a``, both possibly traced.
-
-    The basis centers and pseudopotential projectors follow the atoms, and
-    the grid points follow the lattice (fixed fractional coordinates, weight
-    volume / N). ``held`` overrides the plan's choice between held and
-    streamed AO values (the derivatives stream).
-    """
     held = plan.held if held is None else held
     basis = eqx.tree_at(lambda b: b.centers, plan.basis, coords[plan.atom_idx])
     S, T = overlap_kinetic(basis, a, plan.pairs)
@@ -319,7 +260,6 @@ def cell_fields(plan: CellPlan, xc, coords, a, held: bool | None = None) -> dict
     weights = plan.valid * (volume(a) / plan.inv.shape[0])
     mesh = plan.mesh
 
-    # local pseudopotential: its grid values carry the quadrature weight
     v_loc = local_potential(coords, a, mesh, *plan.local)[plan.order] * plan.valid
     if held:
         ao, dao = ao_on_grid(basis, a, grid_coords, plan.values)
@@ -352,7 +292,6 @@ def cell_fields(plan: CellPlan, xc, coords, a, held: bool | None = None) -> dict
 
 
 def build_cell(cell, xc, grid, spin) -> dict:
-    """The fields of a :class:`~dftax.ks.energy.KS` for a periodic cell."""
     plan = plan_cell(cell, xc, grid, spin)
     return cell_fields(plan, xc, jnp.asarray(cell.atom_coords()),
                        jnp.asarray(cell.a))

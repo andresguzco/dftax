@@ -1,5 +1,3 @@
-"""Grid-based exchange-correlation energy integration."""
-
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Scalar
 
@@ -16,18 +14,6 @@ def xc_energy(
     tau: Float[Array, "n"] | None = None,         # type: ignore
     rho_thresh: float = 1e-10,
 ) -> Scalar:
-    """Exchange-correlation energy ``∫ ε_xc(ρ, ∇ρ, τ) ρ dr`` on a quadrature grid.
-
-    ``rho``/``grad_rho``/``tau`` are the density (and, for GGA+, its gradient;
-    for meta-GGA, the kinetic-energy density) sampled at the grid points;
-    ``weights`` are the quadrature weights.
-
-    Grid points with ``ρ < rho_thresh`` are masked out with a nan-safe
-    double-``where``: the functional is evaluated on a clamped density and the
-    contribution (and its gradient) is forced to zero. This keeps the GGA
-    reduced-gradient terms, whose derivatives diverge as ρ→0, from producing
-    NaNs on the far, vanishing-density tail of an unpruned grid.
-    """
     mask = rho > rho_thresh
     safe_rho = jnp.where(mask, rho, 1.0)
     if xc.xc_type == "MGGA":

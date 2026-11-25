@@ -1,28 +1,3 @@
-"""Multi-node execution: the process-group bootstrap.
-
-JAX is multi-controller: one process per node (or per GPU) runs the *same*
-program, the device mesh spans every process's GPUs, and every array is a
-global object whose shards live wherever the mesh says. dftax needs nothing
-else from the user; once :func:`distributed` has run,
-:func:`~dftax.ks.shard.mesh` sees the global device set and the auxiliary
-axis of the 3-center tensor shards across nodes exactly as it shards across
-the GPUs of one node:
-
-```python
-from dftax import KS, Molecule, df, distributed, mesh, scf
-from dftax.energy.xc import PBE0
-
-distributed()                                   # no-op outside a multi-task job
-ks = KS(mol, PBE0(), coulomb=df("def2-universal-jkfit"), mesh=mesh())
-r = scf(ks)                                     # same numbers in every process
-```
-
-The one rule the caller must respect is SPMD: every process runs the same
-sequence of collectives, so a branch on the process index must never change
-what gets built or solved. Use :func:`is_coordinator` for output only
-(printing, writing files), never to skip a build.
-"""
-
 from __future__ import annotations
 
 import os
@@ -61,10 +36,6 @@ def distributed(**kwargs: object) -> tuple[int, int]:
     ntasks = int(os.environ.get("SLURM_NTASKS", "1"))
     if not kwargs and ntasks <= 1:
         return 0, 1
-    # JAX's SLURM detection assumes one process per GPU: it takes the local
-    # process id as the local device id, so a task that owns several GPUs
-    # claims exactly one of them and the rest of the node sits idle. When the
-    # job puts one task on a node, hand it every visible device instead.
     if "local_device_ids" not in kwargs:
         per_node = int(os.environ.get("SLURM_NTASKS_PER_NODE", "1"))
         visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")

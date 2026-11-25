@@ -1,15 +1,3 @@
-"""Stratmann-Scuseria-Frisch's partition (``partition="stratmann"``).
-
-PySCF is the oracle: its ``Grids`` with ``becke_scheme=gen_grid.stratmann``
-applies the radii adjustment to μ and then SSF's polynomial, and with the
-same atom grids the two grids are the same points and weights to rounding.
-Each point's weight takes its owner's cell and only the cells whose factor in
-it is strictly between 0 and 1; a chunk of points takes the union of its
-points' cells in one of a few sizes, or every cell. Every size gives the same
-weights and gradients, and the factors of a point over all its possible
-owners sum to one. The default partition (Becke's) is unchanged.
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -47,7 +35,7 @@ def _pyscf_ssf_grid(symbols, coords):
     mol = gto.M(atom=[(s, x) for s, x in zip(symbols, coords)], unit="Bohr",
                 basis="sto-3g")
     g = gen_grid.Grids(mol)
-    g.alignment = 0                                  # no zero-weight padding
+    g.alignment = 0
     g.prune = gen_grid.nwchem_prune
     g.becke_scheme = gen_grid.stratmann
     g.build(sort_grids=False)
@@ -56,8 +44,6 @@ def _pyscf_ssf_grid(symbols, coords):
 
 @pytest.mark.pyscf
 def test_ssf_grid_matches_pyscf():
-    """Methanol (C, O, H: Treutler's radii adjustment on every pair) on PySCF's
-    level-3 atom grids: point sets equal, each point's weight to 1e-12."""
     from scipy.spatial import cKDTree
 
     syms, X = _molecule("methanol")
@@ -68,7 +54,7 @@ def test_ssf_grid_matches_pyscf():
     dist, idx = cKDTree(pc).query(rc)
     assert np.unique(idx).size == idx.size and dist.max() < 1e-12
     assert np.all(np.abs(pw[idx] - rw) <= 1e-12 * np.maximum(1.0, np.abs(rw)))
-    assert (pw == 0.0).sum() > 0                                                # SSF's exact zeros
+    assert (pw == 0.0).sum() > 0
 
 
 def test_default_partition_is_becke_unchanged():
@@ -78,14 +64,10 @@ def test_default_partition_is_becke_unchanged():
     for x, y in zip(a, b):
         np.testing.assert_array_equal(np.asarray(x), np.asarray(y))
     s = becke_grid(syms, X, **COARSE, partition="stratmann")
-    np.testing.assert_array_equal(np.asarray(s[0]), np.asarray(a[0]))          # the same points
+    np.testing.assert_array_equal(np.asarray(s[0]), np.asarray(a[0]))
     assert becke_grid_size(syms, **COARSE, partition="stratmann") == a[0].shape[0]
 
 
-# (cells, deciders, budget) of the SSF pass: the default (methanol's six atoms
-# all decide); every cell, no deciders; and small chunks (8 to 128 points of
-# methanol's grid) whose candidates fill each cell size, the larger ones in
-# blocks of points, with none, some or all atoms deciding.
 PASSES = [(SSF_CELLS, SSF_DECIDERS, _PARTITION_BUDGET), ((), 0, _PARTITION_BUDGET),
           (SSF_CELLS, 0, 2**10), ((0, 2, 4), 2, 2**10), (SSF_CELLS, 1, 2**9),
           ((0, 1, 2, 3, 4, 5), 6, 2**9)]
@@ -93,9 +75,6 @@ PASSES = [(SSF_CELLS, SSF_DECIDERS, _PARTITION_BUDGET), ((), 0, _PARTITION_BUDGE
 
 @pytest.mark.parametrize("cells, deciders, budget", PASSES)
 def test_ssf_factors_are_a_partition_of_unity(cells, deciders, budget):
-    """Each point's weight factor as owned by every atom in turn sums to one:
-    the normalization holds every nonzero cell, whichever cells a chunk
-    takes."""
     syms, X = _molecule("methanol")
     pts = becke_grid(syms, X, **COARSE)[0]
     Zs = [symbol_to_Z(s) for s in syms]
@@ -105,8 +84,6 @@ def test_ssf_factors_are_a_partition_of_unity(cells, deciders, budget):
 
 
 def test_every_cell_pass_is_the_candidate_pass():
-    """Whichever cells a chunk takes, the weights and their coordinate
-    gradient are the pass over every cell's."""
     syms, X = _molecule("methanol")
     pts = becke_grid(syms, X, **COARSE)[0]
     own = _owners(syms, **COARSE)
@@ -124,8 +101,6 @@ def test_every_cell_pass_is_the_candidate_pass():
 
 
 def test_ssf_grid_integrates_a_density():
-    """A sum of unit Gaussians on the atoms integrates to its norm within the
-    quadrature's error, as on Becke's partition."""
     syms, X = _molecule("methanol")
     exact = len(syms) * np.pi ** 1.5
     for partition in ("stratmann", "becke"):
@@ -135,9 +110,6 @@ def test_ssf_grid_integrates_a_density():
 
 
 def test_ssf_grid_gradient_matches_finite_difference():
-    """d/dR of a grid-integrated quantity through the moving points and the
-    SSF partition (C³ at |ν| = a, so central differences hold): the overlap of
-    two Gaussians riding on O and H."""
     syms, X0 = _molecule("water")
 
     def integral(X):

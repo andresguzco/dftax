@@ -1,13 +1,3 @@
-"""The whitened density-fitting term, ``B = Lᵀ T`` with ``L Lᵀ = V⁺``.
-
-:class:`~dftax.ks.terms.WhitenedDFCoulomb` is :class:`DFCoulomb` with the
-metric folded into the tensor, so the two are the same functional: machine
-precision apart with a well-conditioned auxiliary metric, and within the
-documented density-fitting floor with the overcomplete jkfit set (whose kept
-band amplifies the reordered rounding). Whitening is the default only where
-the build is concrete; traced builds keep the differentiable metric inverse.
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -32,7 +22,6 @@ def _pair(geom, basis, xc, aux="def2-universal-jkfit", spin=None):
 
 
 def _orbitals(ks, seed=0):
-    """S-orthonormal occupied orbitals, one block per spin channel."""
     rng = np.random.default_rng(seed)
     nao = ks.S.shape[0]
     s, U = jnp.linalg.eigh(ks.S)
@@ -47,7 +36,7 @@ def _orbitals(ks, seed=0):
 def test_factor_and_in_place_whitening():
     rng = np.random.default_rng(0)
     A = rng.normal(size=(9, 6))
-    V = jnp.asarray(A @ A.T)                       # rank 6: three dropped
+    V = jnp.asarray(A @ A.T)
     L = _metric_factor(V)
     np.testing.assert_allclose(L @ L.T, _metric_pinv(V), atol=1e-12)
     T = jnp.asarray(rng.normal(size=(6, 6, 9)))
@@ -58,12 +47,11 @@ def test_factor_and_in_place_whitening():
 @pytest.mark.float64
 @pytest.mark.parametrize("aux", ["def2-svp"])
 def test_matches_plain_df_to_machine_precision(aux):
-    """A well-conditioned metric: no floor between the contraction orders."""
     plain, white = _pair(WATER, "sto-3g", PBE0(), aux=aux)
     assert isinstance(white.coulomb, WhitenedDFCoulomb)
     assert isinstance(plain.coulomb, DFCoulomb)
     _, P = _orbitals(plain)
-    assert abs(float(plain.total(P) - white.total(P))) < 1e-11  # 2e-13 relative
+    assert abs(float(plain.total(P) - white.total(P))) < 1e-11
 
 
 @pytest.mark.float64
@@ -71,8 +59,6 @@ def test_matches_plain_df_to_machine_precision(aux):
     (CAMB3LYP, WATER, None), (PBE0, OH, 1),
 ])
 def test_same_functional_through_every_entry_point(xc, geom, spin):
-    """Energy, Fock and orbital gradient against DFCoulomb at the jkfit floor,
-    and the closed-form orbital gradient against autodiff of the energy."""
     plain, white = _pair(geom, "sto-3g", xc(), spin=spin)
     Cs, P = _orbitals(plain)
     assert abs(float(plain.total(P) - white.total(P))) < 1e-8
@@ -93,8 +79,6 @@ def test_same_functional_through_every_entry_point(xc, geom, spin):
 
 @pytest.mark.float64
 def test_policy():
-    """Whitened by default when concrete; DFCoulomb under a trace; explicit
-    requests that cannot apply raise."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     assert isinstance(KS(mol, PBE()).coulomb, WhitenedDFCoulomb)
     assert isinstance(KS(mol, PBE(), coulomb=df(whiten=False)).coulomb,
@@ -113,7 +97,7 @@ def test_policy():
     aux_t, aidx = build_basis_data(sym, x0, "def2-universal-jkfit",
                                    return_atom_index=True)
 
-    def term_type(coords):              # the forces rebuild, in miniature
+    def term_type(coords):
         basis = eqx.tree_at(lambda b: b.centers, basis_t, coords[idx])
         aux = eqx.tree_at(lambda b: b.centers, aux_t, coords[aidx])
         gc, gw = becke_grid(sym, coords, 20, 26)
@@ -131,15 +115,13 @@ def test_policy():
 @pytest.mark.float64
 @pytest.mark.slow
 def test_solvers_and_forces_on_the_whitened_term():
-    """scf, gdm and batched gdm on the whitened term converge to the plain
-    term's energy; forces (a traced, un-whitened rebuild) agree too."""
     plain, white = _pair(WATER, "6-31g", PBE0())
     r0, r1 = scf(plain), scf(white)
     assert r0.converged and r1.converged
     assert abs(r0.e_tot - r1.e_tot) < 1e-8
     g = gdm(white)
     assert g.converged and abs(g.e_tot - r0.e_tot) < 1e-8
-    res = gdm_batched([white, plain])     # grouped by term type
+    res = gdm_batched([white, plain])
     assert bool(np.all(res.converged))
     np.testing.assert_allclose(res.e_tot, r0.e_tot, atol=1e-8)
     mol = Molecule.from_xyz(WATER, "6-31g")
@@ -154,9 +136,6 @@ def test_solvers_and_forces_on_the_whitened_term():
     (CAMB3LYP, WATER, None), (PBE0, OH, 1),
 ])
 def test_packed_is_the_square_whitened_term(xc, geom, spin):
-    """Packing changes the storage, not the contractions: energy, Fock and
-    orbital gradient agree with the square whitened term to rounding, the
-    Fock is exactly symmetric, and the closed-form gradient is autodiff's."""
     mol = Molecule.from_xyz(geom, "sto-3g", spin=spin or 0)
     kw = dict(grid=becke(35, 50), spin=spin)
     sq = KS(mol, xc(), coulomb=df(chunk=None), **kw)
@@ -199,8 +178,6 @@ def test_solvers_on_the_packed_term():
 
 
 def test_df_screen_auto_is_size_gated():
-    """df()'s default pair screen is off below the grid's 50-atom gate and
-    1e-10 relative from it up; explicit values pass through."""
     from dftax.ks.terms import (
         DF_SCREEN_AUTO_CUTOFF, DF_SCREEN_AUTO_MIN_ATOMS, resolve_df_screen,
     )
@@ -215,8 +192,6 @@ def test_df_screen_auto_is_size_gated():
 
 @pytest.mark.float64
 def test_packing_is_size_and_budget_gated(monkeypatch):
-    """packed="auto": square below the screening gate; packed when only the
-    packed tensor fits the budget (or screening is on)."""
     import dftax.ks.energy as energy_mod
 
     mol = Molecule.from_xyz(WATER, "sto-3g")
@@ -225,6 +200,6 @@ def test_packing_is_size_and_budget_gated(monkeypatch):
     assert isinstance(KS(mol, PBE(), coulomb=df(screen=1e-12)).coulomb,
                       PackedDFCoulomb)
     nao, naux = sq.B.shape[0], sq.B.shape[2]
-    budget = (nao * (nao + 1) // 2) * naux + 1      # packed fits, square not
+    budget = (nao * (nao + 1) // 2) * naux + 1
     monkeypatch.setattr(energy_mod, "_df_materialize_budget", lambda: budget)
     assert isinstance(KS(mol, PBE()).coulomb, PackedDFCoulomb)

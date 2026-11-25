@@ -1,6 +1,3 @@
-"""The Gaussian periodic engine at the Gamma point against PySCF's ``pbc``
-module, on a triclinic two-element cell with d functions (``gth-dzvp``)."""
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -9,8 +6,8 @@ from dftax.basis.loader import build_basis_data
 from dftax.pbc import Cell, uniform_grid
 from dftax.pbc.bloch import ao_on_grid, overlap_kinetic, plan_pairs, plan_values
 
-A = np.array([[9.0, 0.0, 0.0], [2.0, 8.5, 0.0], [1.0, -1.5, 10.0]])   # Bohr
-ATOMS = "Si 0.5 0.4 0.3; O 3.4 1.1 0.9; O 1.0 4.2 5.6"                # Bohr
+A = np.array([[9.0, 0.0, 0.0], [2.0, 8.5, 0.0], [1.0, -1.5, 10.0]])
+ATOMS = "Si 0.5 0.4 0.3; O 3.4 1.1 0.9; O 1.0 4.2 5.6"
 MESH = (9, 10, 12)
 
 
@@ -33,7 +30,7 @@ def pcell():
     c.atom, c.a, c.unit = ATOMS, A, "B"
     c.basis, c.pseudo = "gth-dzvp", "gth-pade"
     c.mesh = list(MESH)
-    c.precision = 1e-12          # PySCF's lattice sums converge to this
+    c.precision = 1e-12
     c.verbose = 0
     c.build()
     return c
@@ -52,17 +49,13 @@ def test_ao_values_match_pyscf(cell, basis, pcell):
     a = jnp.asarray(cell.a)
     coords, _ = uniform_grid(a, MESH)
     ao, dao = ao_on_grid(basis, a, coords, plan_values(basis, cell.a, coords))
-    ref = numint.eval_ao(pcell, np.asarray(coords), deriv=1)     # (4, ng, nao)
+    ref = numint.eval_ao(pcell, np.asarray(coords), deriv=1)
     np.testing.assert_allclose(ao, ref[0], atol=1e-9)
     np.testing.assert_allclose(np.moveaxis(np.asarray(dao), -1, 0), ref[1:],
                                atol=1e-9)
 
 
 def _pyscf_local_and_nonlocal(pcell, coords):
-    """PySCF's pseudopotential matrices in the engine's formulation: the
-    local part by quadrature on the uniform grid, the nonlocal part by
-    analytic projector integrals (PySCF's FFT class takes the nonlocal part
-    in reciprocal space on the mesh instead, which a coarse mesh truncates)."""
     from pyscf.pbc import tools
     from pyscf.pbc.dft import numint
     from pyscf.pbc.gto import pseudo as ppseudo
@@ -98,8 +91,6 @@ def test_pseudopotential_matrices_match_pyscf(cell, basis, pcell):
 
 
 def test_si2_energy_matches_pyscf():
-    """Diamond silicon, primitive cell: every energy term at PySCF's
-    converged density, then the SCF energy itself."""
     from pyscf.pbc import dft as pdft, gto
 
     from dftax import KS, scf
@@ -148,8 +139,6 @@ def test_si2_energy_matches_pyscf():
 
 
 def test_streamed_grid_matches_held_values(cell):
-    """The chunked pass over the grid gives the energy and the Fock matrix
-    of the held-values build (PBE, so the density gradient is exercised)."""
     from dftax import KS
     from dftax.energy.xc import PBE
     from dftax.pbc import uniform
@@ -166,9 +155,6 @@ def test_streamed_grid_matches_held_values(cell):
 
 
 def test_spin_polarized_energy_matches_pyscf():
-    """Two spin channels through the periodic terms: the energy of a triplet
-    density of the silicon cell, at PySCF's own density matrices (a fixed
-    density, so neither code's SCF path enters)."""
     from pyscf.pbc import dft as pdft, gto
 
     from dftax import KS
@@ -198,6 +184,6 @@ def test_spin_polarized_energy_matches_pyscf():
     mf.get_hcore = lambda *args, **kwargs: h_ref
     mf.max_cycle = 8
     mf.kernel()
-    dm = np.asarray(mf.make_rdm1()).real                   # (2, nao, nao)
+    dm = np.asarray(mf.make_rdm1()).real
     np.testing.assert_allclose(ks.total(jnp.asarray(dm)), mf.energy_tot(dm=dm),
                                atol=1e-8)

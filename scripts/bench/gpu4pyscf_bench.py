@@ -34,7 +34,7 @@ import subprocess
 import sys
 import time
 
-MOLS = {          # geomeTRIC data files, atom counts for the table
+MOLS = {
     "cubane": 16,
     "bicyclo222octane": 22,
     "coronene": 36,
@@ -43,7 +43,6 @@ MOLS = {          # geomeTRIC data files, atom counts for the table
 
 
 def _geom_dir() -> str:
-    """geomeTRIC's data directory, from whichever environment has it."""
     env = os.environ.get("DFTAX_GEOM_DIR")
     if env:
         return env
@@ -56,7 +55,6 @@ def _geom_dir() -> str:
 
 
 def read_xyz(name: str) -> str:
-    """A PySCF-style atom string from an xyz file (Angstrom)."""
     with open(os.path.join(_geom_dir(), f"{name}.xyz")) as fh:
         lines = fh.read().splitlines()
     n = int(lines[0].split()[0])
@@ -67,19 +65,6 @@ def read_xyz(name: str) -> str:
     return "; ".join(atoms)
 
 
-# Energy convergence threshold given to *both* engines. The gradient threshold
-# is derived from it as sqrt(CONV_TOL), which is PySCF's own rule
-# (scf/hf.py: `conv_tol_grad = numpy.sqrt(conv_tol)` when unset), applied here
-# to dftax's `d_tol` so the two codes stop on the same test.
-#
-# 1e-8 rather than 1e-9 because dftax's RI Coulomb energy carries a ~3e-8 Ha
-# evaluation noise floor at this size (the metric pseudo-inverse retains
-# directions down to 1e-7 of the largest eigenvalue by design, and the explicit
-# inverse is contracted rather than solved), so an energy threshold below that
-# is not a convergence test, it is a lottery. Measured on coronene: asking
-# 1e-9/1e-7 costs 102 iterations, 1e-9/3.16e-5 costs 44, and 1e-8/1e-4 costs
-# 10, with the 102-iteration answer only 8.4e-9 Ha from the 10-iteration one.
-# Both engines are far inside the 9.3e-6 Ha they disagree by regardless.
 CONV_TOL = 1e-8
 
 
@@ -93,20 +78,6 @@ def run_dftax(atom, basis, aux, xc, level, repeat, ndev, screen="auto",
     from dftax.grid import becke
 
     mol = Molecule.from_xyz(atom, basis, spherical=True)
-    # prune=None on both sides (see run_gpu4pyscf), which is the closest the
-    # two grids come: unpruned, dftax emits 93.3% of PySCF's points, the
-    # difference being becke()'s r_max=45 Bohr tail truncation; pruned, it
-    # emits 85.5%, so the two prune rules do not agree as closely as
-    # test_nwchem_prune_matches_pyscf_rule suggests. Taking dftax's default
-    # (which *is* pruned) against an unpruned PySCF, as this harness did
-    # before, gave dftax a grid 1.7x smaller than the one it was measured
-    # against.
-    # Grid block screening follows dftax's own default, "auto": on from
-    # SCREEN_AUTO_MIN_ATOMS up, where it is measured to win, and off below,
-    # where it is measured to lose (0.89x at 23 atoms). Forcing it on for
-    # every molecule, as this harness used to, understated the small rows.
-    # GPU4PySCF always screens, but its screen is free at those sizes and
-    # ours is not. Pass --screen 0 for the dense term or a float to force it.
     if screen != "auto":
         screen = float(screen) if float(screen) > 0 else None
     grid = becke(*level, prune=None, screen=screen)
@@ -114,20 +85,13 @@ def run_dftax(atom, basis, aux, xc, level, repeat, ndev, screen="auto",
     walls = []
     ks = res = None
     for _ in range(repeat):
-        # drop the previous build before the next one: the KS object holds the
-        # 3-center tensor, and keeping it alive across a rebuild doubled the
-        # sampled peak on the repeat runs
         ks = res = None
         t0 = time.perf_counter()
         ks = KS(mol, functional, grid=grid, coulomb=df(aux),
                 mesh=mesh() if ndev > 1 else None)
-        # minao, because that is what PySCF starts from; dftax's own default
-        # is the core Hamiltonian, which costs an order of magnitude more
-        # iterations here and would measure the guess, not the engine.
-        # gdm stops on the same pair of criteria, measured the same way
         solve = scf if solver == "scf" else gdm
         res = solve(ks, guess=minao(), e_tol=CONV_TOL,
-                    d_tol=CONV_TOL ** 0.5)        # PySCF's rule, see CONV_TOL
+                    d_tol=CONV_TOL ** 0.5)
         e = float(res.e_tot)
         walls.append(time.perf_counter() - t0)
     peak = max(int((d.memory_stats() or {}).get("peak_bytes_in_use", 0))
@@ -148,27 +112,17 @@ def run_gpu4pyscf(atom, basis, aux, xc, level, repeat, _ndev):
         t0 = time.perf_counter()
         mf = rks.RKS(mol, xc={"PBE": "pbe", "PBE0": "pbe0"}[xc]).density_fit(
             auxbasis=aux)
-        # Both codes prune by the same NWChem rule by default; both have it
-        # switched off here, which is where their point counts come closest
-        # (see run_dftax), so the comparison is not a grid-size difference
-        # wearing a speed costume.
         mf.grids.atom_grid = tuple(level)
         mf.grids.prune = None
-        # conv_tol_grad is left unset on purpose: PySCF derives sqrt(conv_tol)
-        # from this, which is the rule the dftax side mirrors explicitly.
         mf.conv_tol = CONV_TOL
         e = float(mf.kernel())
         walls.append(time.perf_counter() - t0)
-    # CuPy's pool exposes its size, not a peak-in-use watermark; for a code
-    # with no large build transient the two nearly coincide, which is not true
-    # on the dftax side (hence the two memory columns, see drive()).
     peak = int(cupy.get_default_memory_pool().total_bytes())
     return dict(e_tot=e, walls=walls, n_iter=int(mf.cycles),
                 converged=bool(mf.converged), peak_bytes=peak, ndev=1)
 
 
 def _gpu_used_mib(gpus):
-    """Device memory in use right now, summed over the visible GPUs."""
     out = subprocess.run(
         ["nvidia-smi", "--query-gpu=index,memory.used",
          "--format=csv,noheader,nounits"], capture_output=True, text=True)
@@ -181,13 +135,6 @@ def _gpu_used_mib(gpus):
 
 
 def _run_sampled(cmd, env, gpus):
-    """Run a benchmark process while sampling device memory externally.
-
-    Both engines pool device memory in their own way (an XLA pool, a CuPy
-    mempool), and neither pool's own accounting is comparable to the other's;
-    polling nvidia-smi measures the same thing for both. Sampling can miss a
-    spike shorter than the interval, so this is a floor on the true peak.
-    """
     base = _gpu_used_mib(gpus)
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)
@@ -200,7 +147,6 @@ def _run_sampled(cmd, env, gpus):
 
 
 def drive(args):
-    """Spawn both engines per molecule and print a Markdown comparison."""
     gpus = list(range(args.ndev))
     rows = []
     for name in args.mols:
@@ -214,12 +160,7 @@ def drive(args):
                    "--ndev", str(args.ndev), "--screen", str(args.screen),
                    "--solver", args.solver]
             env = dict(os.environ)
-            # Both engines see exactly the same GPUs: GPU4PySCF 1.8 spreads
-            # over every visible device on its own, so pinning the set is the
-            # only way to compare 1-vs-1 and 4-vs-4 rather than 1-vs-whatever.
             env["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in gpus)
-            # JAX would otherwise grab 75% of each GPU up front, which the
-            # external sampler cannot tell apart from memory actually in use.
             env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
             out, err, peak_mib = _run_sampled(cmd, env, gpus)
             line = [ln for ln in out.splitlines() if ln.startswith("RESULT ")]
@@ -229,13 +170,6 @@ def drive(args):
                 rec[engine] = None
                 continue
             rec[engine] = json.loads(line[0][len("RESULT "):])
-            # Two different quantities, both worth having: `pool_bytes` is what
-            # the process took from the driver (each engine's allocator grows
-            # its pool and does not hand it back, so this is a high-water mark
-            # of the pool, not of live data), `peak_bytes` is the allocator's
-            # own peak-in-use. They differ by ~3x on the dftax side, so
-            # reporting only the first reads as a memory gap that is really an
-            # allocation-policy difference.
             rec[engine]["pool_bytes"] = peak_mib * 2**20
         rows.append(rec)
         print(json.dumps(rec), file=sys.stderr)

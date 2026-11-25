@@ -1,5 +1,3 @@
-"""Vectorization helpers with chunked evaluation and Equinox support."""
-
 import jax
 import equinox as eqx
 
@@ -46,7 +44,7 @@ def _transpose_vmap_output(y, oax):
         return jnp.moveaxis(y, 0, oax)
 
 
-def _transpose_vmap_outputs(outputs, axes):  # What a mess this is
+def _transpose_vmap_outputs(outputs, axes):
 
     if len(axes) == 1:
         axes, outputs = (axes,), (outputs,)
@@ -77,72 +75,6 @@ def vmap(
     *args,
     **kwargs
 ) -> Callable:
-    """Vectorize a function over a batch dimension with optional memory-efficient chunking.
-
-    This function wraps `jax.vmap` to add support for processing large batches in chunks
-    using `lax.map`, reducing memory usage while maintaining batched computation semantics.
-    When `chunk_size` is None, it delegates directly to `jax.vmap`.
-
-    Parameters
-    ----------
-    fun : Callable
-        The function to vectorize. Will be called with batched versions of arguments
-        specified by `in_axes`.
-    in_axes : int | Shape, optional
-        Specifies which axes of input arguments are batched. Can be:
-        - A single int: same batch axis for all arguments (default 0)
-        - A tuple of ints or None: per-argument batch axes, None means not batched
-        By default 0.
-    out_axes : int | Shape, optional
-        Specifies where to place the batch axis in outputs. Same convention as `in_axes`.
-        By default 0.
-    chunk_size : int | None, optional
-        If provided, process the batch in chunks of this size using `lax.map`.
-        Reduces peak memory usage at the cost of sequential processing within chunks.
-        If None, use standard `jax.vmap`. By default None.
-    *args
-        Additional positional arguments passed to `jax.vmap`.
-    **kwargs
-        Additional keyword arguments passed to `jax.vmap`.
-
-    Returns
-    -------
-    Callable
-        A vectorized function that takes the same inputs as `fun` but accepts
-        batched arrays along the specified axes.
-
-    Examples
-    --------
-    >>> import jax
-    >>> import jax.numpy as jnp
-    >>> from dftax.vmap import vmap
-
-    Basic vectorization over the first axis (default):
-
-    >>> def square(x):
-    ...     return x ** 2
-    >>> vmap_square = vmap(square)
-    >>> x = jnp.array([1.0, 2.0, 3.0])
-    >>> vmap_square(x)  # doctest: +SKIP
-    Array([1., 4., 9.], dtype=float64)
-
-    Vectorizing functions with multiple arguments and selective batch axes:
-
-    >>> def add(x, y):
-    ...     return x + y
-    >>> vmap_add = vmap(add, in_axes=(0, None))  # x is batched, y is broadcast
-    >>> x = jnp.array([1.0, 2.0, 3.0])
-    >>> y = jnp.array(10.0)
-    >>> vmap_add(x, y)  # doctest: +SKIP
-    Array([11., 12., 13.], dtype=float64)
-
-    Memory-efficient processing of large batches with chunking:
-
-    >>> vmap_chunked = vmap(square, chunk_size=32)
-    >>> large_x = jnp.arange(1000.0)
-    >>> result = vmap_chunked(large_x)  # Processes in chunks of 32 elements
-    """
-
     if chunk_size is None:
         return jax.vmap(fun, in_axes, out_axes, *args, **kwargs)
 
@@ -210,66 +142,4 @@ def filter_vmap(
     chunk_size: int | None = None,
     is_leaf: Callable[[Any], bool] = eqx.is_inexact_array,
 ) -> Callable:
-    """Vectorize a function while preserving Equinox module structure via filtering.
-
-    This function wraps `vmap` but handles Equinox pytree modules correctly by
-    separating inexact arrays (which are vmapped) from other pytree nodes (which
-    are not vmapped). This allows vmapping functions that take or return Equinox
-    modules while only batching over array parameters, not module structure.
-
-    Parameters
-    ----------
-    fun : Callable
-        The function to vectorize. Typically a method or function that operates on
-        or returns Equinox modules. Will be called with arrays vmapped and other
-        pytree nodes preserved.
-    in_axes : int | Shape, optional
-        Specifies which axes of array inputs are batched. Can be:
-        - A single int: same batch axis for all arguments (default 0)
-        - A tuple of ints or None: per-argument batch axes, None means not batched
-        Non-array arguments are never vmapped. By default 0.
-    out_axes : int | Shape, optional
-        Specifies where to place the batch axis in array outputs. Same convention
-        as `in_axes`. By default 0.
-    chunk_size : int | None, optional
-        If provided, process the batch in chunks of this size. Reduces peak memory
-        usage at the cost of sequential processing. If None, use standard `jax.vmap`.
-        By default None.
-    is_leaf : Callable[[Any], bool], optional
-        A function that determines which pytree nodes are considered "leaves"
-        (i.e., not vmapped). By default, `equinox.is_inexact_array`, which treats
-        inexact arrays (floats, complex) as vmapped and everything else (ints,
-        booleans, modules, containers) as static.
-
-    Returns
-    -------
-    Callable
-        A vectorized function wrapper that vectorizes over arrays and PyTrees.
-
-    Examples
-    --------
-    Vectorizing a function over a batch of Equinox module parameters:
-
-    >>> class SimpleModel(eqx.Module):
-    ...     weight: jnp.ndarray
-    ...     def __call__(self, x):
-    ...         return self.weight * x
-
-    >>> def forward_pass(model, x):
-    ...     return model(x)
-
-    >>> vmap_forward = filter_vmap(forward_pass, in_axes=(0, 0))
-    >>> # Batch of models (weight dimension batched)
-    >>> weights = jnp.array([[1.0], [2.0], [3.0]])
-    >>> models = jax.tree.map(lambda w: SimpleModel(weight=w), weights)
-    >>> x_batch = jnp.array([[1.0], [1.0], [1.0]])
-    >>> # result will have shape (3, 1) with values [1., 2., 3.]
-    >>> result = vmap_forward(models, x_batch)  # doctest: +SKIP
-
-    Efficient batched inference with memory constraints:
-
-    >>> vmap_forward_chunked = filter_vmap(forward_pass, in_axes=(0, 0), chunk_size=16)
-    >>> # Process a large batch of models in chunks to save memory
-    >>> large_result = vmap_forward_chunked(large_model_batch, large_x_batch)  # doctest: +SKIP
-    """
     return _VmapWrapper(fun, in_axes, out_axes, chunk_size, is_leaf)

@@ -18,9 +18,8 @@ from dftax.pbc import Cell, kmesh, kpoint_ks, planewaves, scf_pw, stress, unifor
 
 HARTREE_EV, AU_GPA = 27.211386, 29421.0158
 
-alat = 5.431                                             # Angstrom
+alat = 5.431
 a = 0.5 * alat * np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
-# the second atom slightly displaced, so the forces are not zero
 cell = Cell.from_xyz(f"Si 0 0 0; Si {alat / 4 + 0.03} {alat / 4} {alat / 4}",
                      a, basis="gth-dzvp", pseudo="gth-pade")
 xc, grid = LDA(), uniform(mesh=(21, 21, 21))
@@ -38,17 +37,13 @@ def report(name, res, **grid_kw):
           f"Ha/Bohr   pressure {p:+.2f} GPa")
 
 
-# Gaussian basis, Gamma point (the two-atom cell is far too small for
-# Gamma alone; a supercell would be the Gamma-point use)
 res = scf(KS(cell, xc, grid=grid))
 report("Gaussian, Gamma", res, grid=grid)
 
-# Gaussian basis, 4x4x4 k-mesh
 res = scf(kpoint_ks(cell, xc, grid=grid, kpts=kmesh(4, 4, 4)))
 report("Gaussian, k 4x4x4", res, grid=grid)
 print(f"{'':22s} band gap on the mesh {gap(res.eps, res.occ):.3f} eV")
 
-# plane waves, 15 Ha cutoff, same k-mesh, a little Fermi smearing
 res = scf_pw(cell, xc, planewaves(15.0), kpts=kmesh(4, 4, 4),
              smearing=fermi(sigma=0.001))
 report("plane waves, k 4x4x4", res)

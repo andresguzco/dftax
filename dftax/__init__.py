@@ -57,33 +57,25 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 try:
     __version__ = _pkg_version("dftax")
-except PackageNotFoundError:  # running from a source tree without an install
+except PackageNotFoundError:
     __version__ = "0.0.0+local"
 del _pkg_version, PackageNotFoundError
 
 __all__ = [
     "__version__",
-    # build: system + choices-as-values
     "KS", "System", "Molecule", "exact", "df", "becke", "points", "mesh",
     "distributed", "is_coordinator", "barrier",
-    # initial guesses (the guess= argument of the solvers)
     "core", "sad", "minao", "sap",
-    # XC functionals by name
     "functional",
-    # dispersion (the dispersion= argument of KS)
     "d3bj",
     "d4",
-    # run: solver verbs + result
     "scf", "adiis", "fermi", "newton", "roks", "minimize", "gdm", "forces",
     "scf_batched",
     "KSResult",
     "BatchedResult",
-    # response properties
     "dipole", "polarizability", "hessian", "vibrations", "ir_spectrum",
     "raman_spectrum", "alchemical_deriv",
-    # implicit-differentiation SCF response
     "implicit_density",
-    # low-level building blocks
     "BasisData", "extract_basis_data", "eval_gto",
     "overlap_matrix", "kinetic_matrix", "nuclear_attraction_matrix",
     "nuclear_repulsion", "eri2c_matrix", "eri3c_matrix",

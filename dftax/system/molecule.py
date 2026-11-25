@@ -1,31 +1,16 @@
-"""A minimal, PySCF-free molecular system specification.
-
-``Molecule`` holds element symbols, nuclear coordinates (atomic units / Bohr),
-total charge and spin, plus the basis-set name. It exposes the small surface the
-dftax KS driver needs (``atom_coords``, ``atom_charges``, ``nelectron``) so the
-engine can run with no PySCF object anywhere in the pipeline.
-"""
-
 from __future__ import annotations
 
 import numpy as np
 import periodictable
 
-# CODATA 2018 Bohr radius: 1 Bohr = 0.529177210903 Angstrom.
 ANGSTROM_TO_BOHR = 1.0 / 0.529177210903
 
 
 def symbol_to_Z(symbol: str) -> int:
-    """Atomic number for an element symbol (e.g. ``"O"`` -> 8)."""
     return periodictable.elements.symbol(symbol.strip().capitalize()).number
 
 
 def _parse_atom_string(atom: str) -> tuple[list[str], np.ndarray]:
-    """Parse a PySCF-style atom string into symbols and coordinates.
-
-    Accepts atoms separated by ``;`` or newlines, e.g.
-    ``"O 0 0 0; H 0.757 0 0.587; H -0.757 0 0.587"``.
-    """
     symbols: list[str] = []
     coords: list[list[float]] = []
     for token in atom.replace("\n", ";").split(";"):
@@ -56,14 +41,10 @@ class Molecule:
         self.coords = np.asarray(coords_bohr, dtype=np.float64).reshape(-1, 3)
         self.basis = basis
         self.charge = int(charge)
-        self.spin = int(spin)  # 2S (number of unpaired electrons)
-        # Spherical-harmonic AOs ((2l+1) per shell) vs Cartesian; spherical is
-        # the standard convention for cc-pVXZ/def2 and required to match a
-        # spherical reference for l >= 2 bases.
+        self.spin = int(spin)
         self.spherical = bool(spherical)
         if len(self.symbols) != self.coords.shape[0]:
             raise ValueError("symbols and coords length mismatch")
-        # Fail at construction, not at the KS build: nα/nβ must be integers.
         nelec = self.nelectron
         if (nelec + self.spin) % 2 != 0:
             raise ValueError(

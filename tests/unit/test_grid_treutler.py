@@ -1,12 +1,3 @@
-"""Treutler-Ahlrichs grids against PySCF's ``Grids``, where they are the default.
-
-With the spec set to PySCF's (Treutler M4 radial mapping, Treutler cell
-sizes, level-3 counts per element), dftax's grid is PySCF's: the same points
-and weights to rounding, pruned or not. PySCF is the oracle only; the
-molecules are built from dftax's Bohr coordinates so the two unit conversions
-cannot differ.
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -27,7 +18,6 @@ MOLECULES = {
     "h2s": "S 0 0 0.1; H 0.96 0 -0.85; H -0.96 0 -0.85",
 }
 
-# PySCF's default Grids (level 3), as a dftax spec.
 PYSCF_DEFAULT = dict(n_radial="pyscf", lebedev="pyscf", radial="treutler",
                      radii_adjust="treutler")
 
@@ -39,7 +29,7 @@ def _pyscf_grid(symbols, coords, prune, atom_grid=None):
     mol = gto.M(atom=[(s, x) for s, x in zip(symbols, coords)], unit="Bohr",
                 basis="sto-3g")
     g = gen_grid.Grids(mol)
-    g.alignment = 0                                  # no zero-weight padding
+    g.alignment = 0
     g.prune = gen_grid.nwchem_prune if prune == "nwchem" else None
     if atom_grid is not None:
         g.atom_grid = atom_grid
@@ -48,21 +38,16 @@ def _pyscf_grid(symbols, coords, prune, atom_grid=None):
 
 
 def _assert_same_grid(ours, ref):
-    """Point sets equal as sets, and each point's weight equal, to ~1e-12."""
     from scipy.spatial import cKDTree
 
     (pc, pw), (rc, rw) = ours, ref
     pc, pw = np.asarray(pc), np.asarray(pw)
     assert pc.shape == rc.shape
     dist, idx = cKDTree(pc).query(rc)
-    assert np.unique(idx).size == idx.size           # one-to-one
+    assert np.unique(idx).size == idx.size
     assert dist.max() < 1e-12
     assert np.all(np.abs(pw[idx] - rw) <= 1e-12 * np.maximum(1.0, np.abs(rw)))
 
-
-# ---------------------------------------------------------------------------
-# Constants: xi table, radial quadrature, level-3 counts
-# ---------------------------------------------------------------------------
 
 @pytest.mark.pyscf
 def test_treutler_xi_matches_pyscf():
@@ -93,7 +78,7 @@ def test_pyscf_counts_are_level3():
         assert _element_counts(Z, "pyscf", "pyscf") == (
             gen_grid._default_rad(Z, 3), gen_grid._default_ang(Z, 3)
         )
-    assert _element_counts(8, 60, 194) == (60, 194)  # ints pass through
+    assert _element_counts(8, 60, 194) == (60, 194)
 
 
 @pytest.mark.parametrize("kw, match", [
@@ -114,10 +99,6 @@ def test_unknown_radii_adjust_raises():
         becke_grid(mol.symbols, mol.atom_coords(), 20, 50, radii_adjust="sqrt")
 
 
-# ---------------------------------------------------------------------------
-# Whole molecular grids
-# ---------------------------------------------------------------------------
-
 @pytest.mark.pyscf
 @pytest.mark.parametrize("prune", [None, "nwchem"])
 @pytest.mark.parametrize("name", ["h2s"])
@@ -126,7 +107,6 @@ def test_grid_matches_pyscf_default(name, prune):
     syms, X = mol.symbols, np.asarray(mol.atom_coords())
     ours = becke_grid(syms, X, prune=prune, r_max=None, **PYSCF_DEFAULT)
     _assert_same_grid(ours, _pyscf_grid(syms, X, prune))
-    # The default 45 Bohr tail cut never bites: M4 ends well inside it.
     spec = {k: PYSCF_DEFAULT[k] for k in ("n_radial", "lebedev", "radial")}
     assert becke_grid_size(syms, prune=prune, **spec) == ours[0].shape[0]
 
@@ -134,8 +114,6 @@ def test_grid_matches_pyscf_default(name, prune):
 @pytest.mark.pyscf
 @pytest.mark.parametrize("name", ["water"])
 def test_default_grid_is_pyscf_default(name):
-    """Through Ne, PySCF's level-3 angular order is the default 302, so the
-    default spec is PySCF's default grid."""
     mol = Molecule.from_xyz(MOLECULES[name], "sto-3g")
     syms, X = mol.symbols, np.asarray(mol.atom_coords())
     _assert_same_grid(becke_grid(syms, X), _pyscf_grid(syms, X, "nwchem"))
@@ -144,7 +122,6 @@ def test_default_grid_is_pyscf_default(name):
 @pytest.mark.pyscf
 @pytest.mark.parametrize("prune", [None, "nwchem"])
 def test_grid_matches_pyscf_uniform_counts(prune):
-    """An explicit ``(75, 302)`` for every element (PySCF's ``atom_grid``)."""
     mol = Molecule.from_xyz(MOLECULES["h2s"], "sto-3g")
     syms, X = mol.symbols, np.asarray(mol.atom_coords())
     ours = becke_grid(syms, X, 75, 302, prune, None, "treutler", "treutler")
@@ -152,9 +129,6 @@ def test_grid_matches_pyscf_uniform_counts(prune):
 
 
 def test_treutler_grid_gradient_matches_finite_difference():
-    """d/dR of a grid-integrated quantity through the moving points and the
-    Treutler-sized partition: the overlap of two Gaussians riding on O and H
-    (the quadrature of it, so FD and AD differentiate the same function)."""
     mol = Molecule.from_xyz(MOLECULES["water"], "sto-3g")
     syms, X0 = mol.symbols, jnp.asarray(mol.atom_coords())
 
@@ -174,19 +148,12 @@ def test_treutler_grid_gradient_matches_finite_difference():
             e = jnp.zeros_like(X0).at[a, k].set(h)
             fd[a, k] = (float(integral(X0 + e)) - float(integral(X0 - e))) / (2 * h)
     assert np.abs(grad - fd).max() < 1e-7
-    assert np.abs(grad).max() > 1e-2                     # not trivially zero
+    assert np.abs(grad).max() > 1e-2
 
-
-# ---------------------------------------------------------------------------
-# Energies (slow tier: SCF)
-# ---------------------------------------------------------------------------
 
 @pytest.mark.slow
 @pytest.mark.pyscf
 def test_scf_on_native_grid_matches_pyscf_grid():
-    """The same SCF on the native grid and on PySCF's own reproduces the
-    energy and the electron count to rounding, and PySCF's energy to the
-    basis-precision floor (sto-3g ships 8 significant figures there)."""
     from pyscf import dft, gto
 
     mol = Molecule.from_xyz(MOLECULES["water"], "sto-3g")
@@ -214,7 +181,6 @@ def test_scf_on_native_grid_matches_pyscf_grid():
     assert abs(n["native"] - n["pyscf"]) < 1e-10
     assert abs(e["native"] - e_pyscf) < 1e-6
 
-    # Through the spec (eager cutoff and all), the same energy.
     e_spec = scf(KS(mol, PBE(), grid=becke(**PYSCF_DEFAULT), coulomb=exact()),
                  e_tol=1e-11).e_tot
     assert abs(e_spec - e["native"]) < 1e-9

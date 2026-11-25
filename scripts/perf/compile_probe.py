@@ -44,8 +44,6 @@ MISS = "/jax/compilation_cache/cache_misses"
 
 
 class Recorder:
-    """Accumulates JAX's compile events, per program name and in total."""
-
     def __init__(self):
         self.secs = collections.defaultdict(float)
         self.count = collections.Counter()

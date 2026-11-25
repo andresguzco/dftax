@@ -41,15 +41,6 @@ MOLS = {"water": WATER, "ethanol": ETHANOL}
 
 
 def spawn_local_world(n: int, per_proc: int, argv: list[str]) -> int:
-    """Launch ``n`` processes of this script on this node, ``per_proc`` GPUs each.
-
-    Each child gets its slice of the node's GPUs through
-    ``CUDA_VISIBLE_DEVICES`` and its rank through the environment, which is
-    the shape SLURM hands us on a multi-node job, so the code path under test
-    is the same one. ``--gpus-per-proc`` matters because one task per node
-    owning several GPUs (the usual multi-node layout) exercises a process
-    building more than one auxiliary slab, which one GPU per process does not.
-    """
     procs = []
     for rank in range(n):
         env = dict(os.environ)
@@ -128,7 +119,7 @@ def main() -> int:
     say(f"difference: {abs(e_dist - e_loc):.3e} Ha")
     ok = bool(r_dist.converged) and abs(e_dist - e_loc) < 5e-9
     say("PASS" if ok else "FAIL")
-    barrier("validate-exit")   # nobody tears down the group mid-conversation
+    barrier("validate-exit")
     return 0 if ok else 1
 
 

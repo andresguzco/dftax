@@ -1,28 +1,3 @@
-"""Assemble an atom-centered Becke molecular integration grid.
-
-Written in JAX and differentiable w.r.t. the nuclear coordinates: the radial
-shells and Lebedev angular points are constants, but the grid-point positions
-follow their home atom and the fuzzy-Voronoi weights depend on all atoms, so
-``becke_grid`` can be differentiated through for analytic forces.
-
-The grid is pruned by default (NWChem scheme): each radial shell carries an
-angular order chosen from its region of ``r / R_bragg``, so the deep core and
-far tail use coarse Lebedev grids and only the bonding region carries the full
-order (~3x fewer points at unchanged chemical accuracy). Pruning is
-*structural*: the shell layout depends only on the element and the spec
-constants, never on the coordinates, so grid shapes are static under
-``jit``/``vmap`` (the batched solver and the forces rebuild the grid with
-traced coordinates).
-
-The radial mapping (Becke or Treutler-Ahlrichs M4), the cell-size adjustment
-and the cell function of the partition (Becke's or Stratmann-Scuseria-
-Frisch's), and the per-element shell counts are spec choices. The default is
-PySCF's scheme: Treutler's mapping and cell sizes at PySCF's level-3 radial
-counts, Becke's cells; with ``lebedev="pyscf"`` as well, the grid is PySCF's
-default ``Grids``, and with ``partition="stratmann"`` its ``Grids`` with
-``becke_scheme=gen_grid.stratmann``.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -40,16 +15,12 @@ from dftax.grid.becke import (
 )
 
 
-# Atom count from which screen="auto" switches per-block screening on. Below
-# the crossover the gather overhead outweighs the saving.
 SCREEN_AUTO_MIN_ATOMS = 50
 SCREEN_AUTO_CUTOFF = 1e-10
 
 
 @dataclass(frozen=True)
 class Becke:
-    """Native Becke grid spec (see :func:`becke`)."""
-
     n_radial: int | str = "pyscf"
     lebedev: int | str = 302
     radial: str = "treutler"
@@ -66,8 +37,6 @@ class Becke:
 
 @dataclass(frozen=True)
 class Points:
-    """Explicit quadrature spec: user-supplied points + weights (see :func:`points`)."""
-
     coords: object
     weights: object
     chunk: int | str | None = "auto"
@@ -161,17 +130,9 @@ def points(coords, weights, *, chunk: int | str | None = "auto") -> Points:
     return Points(coords=coords, weights=weights, chunk=chunk)
 
 
-# ---------------------------------------------------------------------------
-# NWChem angular pruning (structural: element + spec constants only)
-# ---------------------------------------------------------------------------
-
-# The standard Lebedev-Laikov ladder (matches the vendored tables). The prune
-# rule indexes the sub-ladder from 38 up, as in PySCF's ``LEBEDEV_NGRID[4:]``.
 _LEBEDEV_LADDER = (6, 14, 26, 38, 50, 74, 86, 110, 146, 170, 194,
                    230, 266, 302, 350, 434, 590, 770)
 
-# NWChem region boundaries on r / R_bragg; rows: H-He, Li-Ne, Na and up
-# (identical to PySCF ``gen_grid.nwchem_prune``).
 _NWCHEM_ALPHAS = np.array((
     (0.25,   0.5, 1.0, 4.5),
     (0.1667, 0.5, 0.9, 3.5),
@@ -180,15 +141,9 @@ _NWCHEM_ALPHAS = np.array((
 
 
 def _nwchem_orders(Z: int, rads: np.ndarray, n_ang: int) -> np.ndarray:
-    """Angular order per radial shell (the NWChem prune rule).
-
-    Five regions of ``r / R_bragg`` with orders ``[50, 86, prev, n_ang, prev]``
-    (``prev`` = one ladder step below ``n_ang``); grids below 50 points are
-    not pruned. Ported one-to-one from PySCF ``gen_grid.nwchem_prune``.
-    """
     if n_ang < 50:
         return np.full(rads.shape[0], n_ang, dtype=np.int64)
-    ladder = np.asarray(_LEBEDEV_LADDER[3:])            # from 38 up
+    ladder = np.asarray(_LEBEDEV_LADDER[3:])
     if n_ang == 50:
         leb_l = np.array([1, 2, 2, 2, 1])
     else:
@@ -201,24 +156,16 @@ def _nwchem_orders(Z: int, rads: np.ndarray, n_ang: int) -> np.ndarray:
         idx = int(hit[0])
         leb_l = np.array([1, 3, idx - 1, idx, idx - 1])
     row = 0 if Z <= 2 else (1 if Z <= 10 else 2)
-    # Note: for odd n_radial the Becke-mapped Chebyshev node at x = 0 sits
-    # *exactly* on a region boundary (r = scale, i.e. r/R = 1 for H, 0.5
-    # otherwise) and float rounding decides its region. Either side is a
-    # valid quadrature (the two orders bracket the same accuracy); the
-    # comparison below is kept verbatim-PySCF rather than special-cased.
     place = (rads[:, None] / bragg_radius(Z) > _NWCHEM_ALPHAS[row]).sum(axis=1)
     return ladder[leb_l[place]]
 
 
-# PySCF's level-3 grid per period (``gen_grid.RAD_GRIDS[3]`` and
-# ``ANG_ORDER[3]``): H-He, Li-Ne, Na-Ar, K-Kr, Rb-Xe.
 _PYSCF_PERIOD_ENDS = np.array((2, 10, 18, 36))
 _PYSCF_N_RADIAL = (50, 75, 80, 90, 95)
 _PYSCF_LEBEDEV = (302, 302, 434, 434, 434)
 
 
 def _element_counts(Z: int, n_radial: int | str, n_ang: int | str) -> tuple[int, int]:
-    """Resolve the spec's ``(n_radial, lebedev)`` for element ``Z``."""
     period = int((Z > _PYSCF_PERIOD_ENDS).sum())
     if n_radial == "pyscf":
         n_radial = _PYSCF_N_RADIAL[period]
@@ -236,17 +183,8 @@ def _atom_shell_blocks(
     Z: int, n_radial: int | str, n_ang: int | str, prune: str | None,
     r_max: float | None, radial: str,
 ) -> tuple[tuple[np.ndarray, np.ndarray, int], ...]:
-    """Per-element radial structure: ``(radii, radial_weights, order)`` blocks.
-
-    Pure numpy constants (geometry-independent, cached per element/spec):
-    radial nodes from :func:`becke_radial` or :func:`treutler_radial`, tail
-    shells beyond ``r_max`` dropped, an angular order per shell from the
-    prune rule, and consecutive shells of equal order grouped into blocks so
-    the assembly stays a few dense outer products per atom.
-    """
     n_radial, n_ang = _element_counts(Z, n_radial, n_ang)
     if radial == "becke":
-        # Becke uses half the Bragg radius as the radial scale (H excepted).
         scale = bragg_radius(Z) if Z == 1 else 0.5 * bragg_radius(Z)
         r, wr = becke_radial(n_radial, scale)
     elif radial == "treutler":
@@ -339,35 +277,26 @@ def becke_grid(
     Zs = [symbol_to_Z(s) for s in symbols]
     r_max = None if r_max is None else float(r_max)
 
-    # Each element's points relative to its nucleus (one constant per element)
-    # and their quadrature weights, built once per element in numpy.
     rel, wq = {}, {}
     for Z in dict.fromkeys(Zs):
         pts, wts = [], []
         for r, wr, order in _atom_shell_blocks(
             Z, n_radial, lebedev, prune, r_max, radial
         ):
-            ang_pts, ang_w = lebedev_grid(order)         # numpy constants
+            ang_pts, ang_w = lebedev_grid(order)
             pts.append((r[:, None, None] * ang_pts[None, :, :]).reshape(-1, 3))
             wts.append((wr[:, None] * (4.0 * np.pi * ang_w)[None, :]).reshape(-1))
         rel[Z], wq[Z] = jnp.asarray(np.concatenate(pts)), np.concatenate(wts)
 
     points = jnp.concatenate(
         [coords[A][None, :] + rel[Z] for A, Z in enumerate(Zs)], axis=0
-    )                                                    # (ng, 3), depends on coords
-    # Each point's owner and raw weight, looked up from its index in per-atom
-    # tables: from constants (jnp.repeat, the templates concatenated) XLA
-    # folded them into grid-sized constants at compile time (9.6 s at 784
-    # atoms), and as numpy they were grid-sized captured constants.
+    )
     sizes = np.array([wq[Z].shape[0] for Z in Zs])
     ends = np.cumsum(sizes)
     first = dict(zip(wq, np.cumsum([0] + [w.shape[0] for w in wq.values()])))
-    shift = np.array([first[Z] for Z in Zs]) - (ends - sizes)   # point -> template index
+    shift = np.array([first[Z] for Z in Zs]) - (ends - sizes)
     i = jnp.arange(int(ends[-1]))
     owners = jnp.searchsorted(jnp.asarray(ends), i, side="right")
     raw_w = jnp.asarray(np.concatenate(list(wq.values())))[i + jnp.asarray(shift)[owners]]
-    # Fuzzy-Voronoi weights of every atom's points in one chunked pass
-    # (becke_weights): one loop in the compiled program, the pair quantities
-    # formed once, and only the owner's normalized cell kept per point.
     weights = raw_w * becke_weights(points, owners, coords, Zs, radii_adjust, partition)
     return points, weights

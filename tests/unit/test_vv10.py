@@ -1,12 +1,3 @@
-"""VV10 nonlocal correlation and the wB97X-V functional.
-
-PySCF is the oracle throughout: ``_vv10nlc`` for the pair kernel (matched to
-machine precision on identical inputs), libxc for the semilocal wB97X-V
-energy density (series coefficients recovered by exact linear fit, residual
-~1e-9), and a full RKS solve (dftax with exact() matched PySCF wb97x-v to
-2e-13 at port time; the DF default differs by the usual sub-mHa RI error).
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -39,8 +30,6 @@ def _water_grid_rho(basis="def2-svp", level=1):
 @pytest.mark.float64
 @pytest.mark.parametrize("b,c", [(5.9, 0.0093)])
 def test_vv10_kernel_vs_pyscf(b, c):
-    """The chunked JAX pair quadrature reproduces _vv10nlc bit-for-bit on
-    identical (rho, grad, grid) inputs."""
     _, mf, rho = _water_grid_rho()
     grids = mf.grids
     exc, _ = _vv10nlc(rho, grids.coords, rho, grids.weights, grids.coords,
@@ -54,8 +43,6 @@ def test_vv10_kernel_vs_pyscf(b, c):
 @pytest.mark.pyscf
 @pytest.mark.float64
 def test_vv10_forces_match_finite_difference():
-    """The pair quadrature is differentiable in the grid coordinates (the
-    channel nuclear forces flow through with the moving Becke grid)."""
     rng = np.random.default_rng(3)
     ng = 64
     coords = rng.normal(size=(ng, 3))
@@ -92,9 +79,6 @@ def test_wb97xv_pointwise_vs_libxc():
 @pytest.mark.pyscf
 @pytest.mark.float64
 def test_wb97xv_scf_matches_pyscf():
-    """Full wB97X-V solve (RSH exchange + VV10) vs PySCF on matched grids
-    and the exact Coulomb backend (isolates the functional; the DF default
-    adds only the usual RI error)."""
     mol = gto.M(atom=H2O, basis="sto-3g").build()
     mf = dft.RKS(mol)
     mf.xc = "wb97x-v"

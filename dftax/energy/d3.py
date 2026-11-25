@@ -1,30 +1,3 @@
-"""JAX-native D3(BJ) dispersion correction (Grimme et al., two-body).
-
-The classic DFT-D3 model with Becke-Johnson damping:
-
-    E_disp = -½ Σ_{A≠B} [ s6·C6_AB/(R⁶ + R0⁶) + s8·C8_AB/(R⁸ + R0⁸) ],
-    R0 = a1·sqrt(C8/C6) + a2,
-
-with geometry-dependent C6 coefficients interpolated over Grimme's reference
-systems by Gaussian weights in the coordination numbers (k3 = 4), CN from the
-smooth counting function ``1/(1 + exp(-k1(rcov/R - 1)))`` (k1 = 16). All
-smooth, pure JAX: forces and Hessians come from autodiff, and the energy is
-evaluated with traced coordinates inside :class:`~dftax.ks.energy.KS`, so the
-rebuilt energies in ``forces``/``scf_batched`` carry the dispersion gradient
-automatically.
-
-Tables are vendored in ``data/d3bj.npz`` (extracted from tad-dftd3,
-Apache-2.0; see ``scripts/gen_d3_data.py``). The Axilrod-Teller-Muto
-three-body term is available opt-in (``d3bj(atm=True)``; off by default,
-matching the common two-body D3(BJ) convention).
-
-Usage (choices-as-values)::
-
-    KS(mol, PBE(), dispersion=d3bj())          # parameters from the functional
-    KS(mol, PBE(), dispersion=d3bj("b3lyp"))   # or explicit
-    KS(mol, PBE(), dispersion=d3bj(atm=True))  # with the three-body term
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -40,8 +13,6 @@ _K3 = 4.0
 
 @dataclass(frozen=True)
 class D3BJSpec:
-    """D3(BJ) dispersion spec (see :func:`d3bj`)."""
-
     method: str | None = None
     atm: bool = False
 
@@ -71,12 +42,10 @@ def _tables():
 
 
 def available_d3_methods() -> list[str]:
-    """Damping-parameter sets available in the vendored tables."""
     return [str(m) for m in _tables()["methods"]]
 
 
 def _d3_params(method: str) -> tuple[float, float, float, float]:
-    """``(s6, a1, s8, a2)`` for a method name (case-insensitive)."""
     t = _tables()
     methods = [str(m) for m in t["methods"]]
     key = method.lower()
@@ -90,33 +59,24 @@ def _d3_params(method: str) -> tuple[float, float, float, float]:
 
 
 def _c6_matrix(coords, z, t):
-    """CN-interpolated pairwise C6 and the squared-distance matrix.
-
-    Shared by the two-body and ATM terms. Returns ``(c6, r2, off)`` with the
-    diagonal of ``r2`` guarded to 1 and ``off`` the off-diagonal mask.
-    """
-    rcov = jnp.asarray(t["rcov"])[z]                      # (nat,)
-    cn_ref = jnp.asarray(t["cn_ref"])[z]                  # (nat, 7)
-    c6_ref = jnp.asarray(t["c6"])[z[:, None], z[None, :]]  # (nat, nat, 7, 7)
+    rcov = jnp.asarray(t["rcov"])[z]
+    cn_ref = jnp.asarray(t["cn_ref"])[z]
+    c6_ref = jnp.asarray(t["c6"])[z[:, None], z[None, :]]
 
     nat = coords.shape[0]
     dvec = coords[:, None, :] - coords[None, :, :]
-    r2 = jnp.sum(dvec * dvec, axis=-1) + jnp.eye(nat)     # guard the diagonal
+    r2 = jnp.sum(dvec * dvec, axis=-1) + jnp.eye(nat)
     r = jnp.sqrt(r2)
     off = 1.0 - jnp.eye(nat)
 
-    # Coordination numbers (k1-exponential counting function).
     rco = rcov[:, None] + rcov[None, :]
     cn = jnp.sum(off / (1.0 + jnp.exp(-_K1 * (rco / r - 1.0))), axis=1)
 
-    # Gaussian-weight C6 interpolation over the reference systems. Unused
-    # reference slots carry cn_ref < 0; the max-shift keeps the exponentials
-    # from underflowing all at once for CN beyond the reference range.
-    dcn = cn[:, None] - cn_ref                            # (nat, 7)
+    dcn = cn[:, None] - cn_ref
     d2 = jnp.where(cn_ref >= 0.0, -_K3 * dcn * dcn, -jnp.inf)
-    d2max = jnp.max(d2, axis=1, keepdims=True)            # (nat, 1)
-    w = jnp.exp(d2 - d2max)                               # (nat, 7), max = 1
-    wij = w[:, None, :, None] * w[None, :, None, :]       # (nat, nat, 7, 7)
+    d2max = jnp.max(d2, axis=1, keepdims=True)
+    w = jnp.exp(d2 - d2max)
+    wij = w[:, None, :, None] * w[None, :, None, :]
     norm = jnp.clip(jnp.sum(wij, axis=(2, 3)), 1e-30)
     mask = (cn_ref >= 0.0)[:, None, :, None] & (cn_ref >= 0.0)[None, :, None, :]
     c6 = jnp.sum(jnp.where(mask, c6_ref, 0.0) * wij, axis=(2, 3)) / norm
@@ -128,14 +88,9 @@ def d3bj_energy(
     numbers,
     params: tuple[float, float, float, float],
 ):
-    """Two-body D3(BJ) dispersion energy (Ha) for traced ``coords`` (Bohr).
-
-    ``numbers`` are the atomic numbers (any integer array; used as static
-    gather indices into the vendored tables), ``params = (s6, a1, s8, a2)``.
-    """
     t = _tables()
     z = jnp.asarray(np.asarray(numbers, dtype=np.int64))
-    rr = jnp.asarray(t["r4r2"])[z]                        # (nat,) sqrt-scaled
+    rr = jnp.asarray(t["r4r2"])[z]
     s6, a1, s8, a2 = params
 
     coords = jnp.asarray(coords).reshape(-1, 3)
@@ -154,14 +109,6 @@ _ALP = 14.0
 
 
 def d3_atm_energy(coords, numbers, s9: float = 1.0):
-    """Axilrod-Teller-Muto three-body dispersion energy (Ha, repulsive).
-
-    The D3 triple-dipole term with ``C9 = s9·sqrt(C6_AB·C6_AC·C6_BC)`` (the
-    same CN-interpolated C6 as the two-body term), the Heron-form angular
-    factor, and zero-damping on the geometric means of the pairwise
-    van-der-Waals radii (``rs9 = 4/3``, ``alpha = 14``), matching
-    tad-dftd3's ``dispersion_atm``. Independent of the BJ parameters.
-    """
     t = _tables()
     z = jnp.asarray(np.asarray(numbers, dtype=np.int64))
     coords = jnp.asarray(coords).reshape(-1, 3)
@@ -188,14 +135,6 @@ def d3_atm_energy(coords, numbers, s9: float = 1.0):
 
 
 def _resolve_dispersion(spec, xc, charges, nelec=None):
-    """Resolve a dispersion spec against the functional and atomic numbers.
-
-    Returns a zero-argument-of-P energy closure of the (traced) coordinates,
-    or ``None``. Atomic numbers come from the nuclear charges, so the raw
-    :class:`~dftax.ks.energy.System` path works too. ``nelec`` supplies the
-    electron count for D4's total molecular charge (EEQ); ``None`` means
-    neutral.
-    """
     from dftax.energy.d4 import D4Spec, _d4_params, d4_energy
 
     if spec is None:

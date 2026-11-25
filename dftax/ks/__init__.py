@@ -1,17 +1,3 @@
-"""Kohn-Sham DFT drivers built on the dftax integral/XC engine.
-
-``dftax.ks`` assembles the pieces in ``dftax.integrals`` and ``dftax.energy``
-into runnable calculations: the differentiable total-energy functional
-:class:`~dftax.ks.energy.KS` (built with choices-as-values: grid specs from
-:mod:`dftax.grid`, Coulomb backends from :func:`~dftax.ks.terms.exact` /
-:func:`~dftax.ks.terms.df`), the solver verbs :func:`~dftax.ks.scf.scf`
-(autodiff-Fock DIIS) and :func:`~dftax.ks.minimize.minimize` (direct
-variational descent with any optax optimizer), analytic
-:func:`~dftax.ks.forces.forces`, the batched :func:`~dftax.ks.batched.scf_batched`,
-and the response-property layer. Restricted and spin-polarized systems run
-through the same spin-stacked code path.
-"""
-
 from dftax.ks.energy import KS, System
 from dftax.ks.guess import core, sad, minao, sap
 from dftax.ks.distributed import barrier, distributed, is_coordinator

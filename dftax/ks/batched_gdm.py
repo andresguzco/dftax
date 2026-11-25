@@ -1,43 +1,3 @@
-"""Direct minimization over a batch of different molecules in one program.
-
-:func:`~dftax.ks.batched.scf_batched` batches geometries of one molecule, so
-every array already has one shape. Different molecules do not: they differ in
-basis size, auxiliary size, grid size and electron count. This pads each to
-common sizes so that one compiled minimization serves the whole batch, which
-is how a GPU stays busy on small molecules that one at a time leave it idle.
-
-The padding is inert by construction:
-
-* padded basis functions get an identity overlap block and nothing else (no
-  grid values, no 3-center integrals), so no energy term sees them; their
-  one-electron diagonal is ``+PAD``, and a guess-only shift per spin channel
-  lowers the first few, so the aufbau guess parks that channel's padded
-  occupied slots (occupation 0) there and leaves the rest empty;
-* padded occupied slots have occupation zero
-  (:meth:`~dftax.ks.energy.KS.occupations`), so they carry no density, no
-  gradient and get no step in :func:`~dftax.ks.gdm.gdm`'s preconditioner;
-* padded auxiliary functions have zero integrals and a zero metric block;
-  padded grid points have zero weight.
-
-The real occupied orbitals therefore keep every rotation into the real
-virtual space, and the energy, its gradient and the converged density on the
-real block are those of the unpadded molecule.
-
-``vmap`` runs every branch of a ``lax.cond`` for every molecule, so the
-batched loop keeps heavy work out of branches: the guess Fock is built once
-before the loop, the loop evaluates only through the orbitals
-(:meth:`~dftax.ks.energy.KS.energy_and_grad_orbitals`), and a reference reset
-re-anchors with the closed-form rotation (:func:`~dftax.ks.gdm.rotate_full`),
-which needs neither a Fock nor an eigendecomposition.
-
-Scope: closed and open shells (mixed lists are solved as one batch per spin
-type and functional), pure and hybrid functionals (range-separated ones included), on the
-materialized density-fitting and AO-grid backends (what ``KS`` picks for
-small and mid-size molecules). The exchange takes the orbitals with their
-occupations, so empty padded slots carry none. VV10 would need its grid
-coordinates padded too.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -61,19 +21,10 @@ from dftax.ks.terms import (
     DFCoulomb, GridXC, PackedDFCoulomb, WhitenedDFCoulomb,
 )
 
-PAD = 1.0e3          # Ha; the padded one-electron diagonal, far from any level
+PAD = 1.0e3
 
 
 class PaddedKS(eqx.Module):
-    """A ``KS`` padded to common sizes (see the module doc).
-
-    Exposes what the minimizer reads, ``S``, ``nocc``, ``occupations``,
-    ``energy_and_fock`` and ``energy_and_grad_orbitals``, through ``KS``'s own
-    implementations, so a padded molecule is the same energy function.
-    ``guess_shift`` moves each channel's empty padded slots below every real
-    level, for the guess reference only (see :func:`pad_ks`).
-    """
-
     S: Float[Array, "nao nao"]
     hcore: Float[Array, "nao nao"]
     e_nn: Scalar
@@ -93,13 +44,11 @@ class PaddedKS(eqx.Module):
 
 @dataclass(frozen=True)
 class Bucket:
-    """Common sizes a batch is padded to (``nocc`` one per spin channel)."""
-
     nao: int
     naux: int
     ng: int
     nocc: tuple[int, ...]
-    npair: int = 0             # packed DF only: the packed pair count
+    npair: int = 0
 
 
 def _check_supported(ks: KS) -> None:
@@ -115,11 +64,8 @@ def _check_supported(ks: KS) -> None:
 
 
 def _tensors(c):
-    """``(3-center, metric inverse, long-range 3-center, its inverse)`` of a
-    materialized DF term; a whitened term has the metric folded in (``None``
-    inverses) and is padded the same way, zero aux columns being inert."""
     if isinstance(c, PackedDFCoulomb):
-        return None, None, None, None          # padded by _pad_packed
+        return None, None, None, None
     if isinstance(c, WhitenedDFCoulomb):
         return c.B, None, c.B_lr, None
     return c.int3c, c.int2c_inv, c.int3c_lr, c.int2c_inv_lr
@@ -133,9 +79,6 @@ def _naux(c):
 
 @partial(jax.jit, static_argnames=("nao", "naux", "npair"))
 def _pad_packed(B, pos, rows, cols, weight, B_lr, *, nao, naux, npair):
-    """A packed term's arrays at the bucket sizes. Padded aux rows and pair
-    columns are zero; padded AOs, like the molecule's own screened pairs,
-    read a zero column through ``pos``; padded packed entries weigh 0."""
     n = pos.shape[0]
     pos_p = jnp.full((nao, nao), npair, pos.dtype).at[:n, :n].set(pos)
     lr = None if B_lr is None else _block(B_lr, (naux, npair))
@@ -144,9 +87,6 @@ def _pad_packed(B, pos, rows, cols, weight, B_lr, *, nao, naux, npair):
 
 
 def bucket_for(kss) -> Bucket:
-    """The smallest common sizes, with room in the padded basis for the
-    padded occupied slots of every member and channel. One spin type per
-    bucket (:func:`gdm_batched` groups a mixed list)."""
     for ks in kss:
         _check_supported(ks)
     nspins = {len(ks.nocc) for ks in kss}
@@ -174,32 +114,19 @@ def _block(a, shape):
 @partial(jax.jit, static_argnames=("nao", "naux", "ng"))
 def _pad_arrays(S, hcore, int3c, int2c_inv, ao, dao, weights, int3c_lr,
                 int2c_inv_lr, *, nao, naux, ng):
-    """Every padded array of one molecule in one compiled program: the eager
-    version dispatched a dozen ops per molecule and cost 11 ms each (262 ms of
-    a 24-molecule batch whose solve takes 85 ms)."""
     n = S.shape[0]
     S_p = _block(S, (nao, nao)).at[n:, n:].set(jnp.eye(nao - n))
     hcore_p = _block(hcore, (nao, nao)).at[n:, n:].set(
         PAD * jnp.eye(nao - n))
     lr = (None if int3c_lr is None else
           (_block(int3c_lr, (nao, nao, naux)),
-           _block(int2c_inv_lr, (naux, naux))))   # (B_lr, None) if whitened
+           _block(int2c_inv_lr, (naux, naux))))
     return (S_p, hcore_p, _block(int3c, (nao, nao, naux)),
             _block(int2c_inv, (naux, naux)), _block(ao, (ng, nao)),
             _block(dao, (ng, nao, 3)), _block(weights, (ng,)), lr)
 
 
 def pad_ks(ks: KS, b: Bucket) -> PaddedKS:
-    """``ks`` padded to the bucket (see the module doc for why it is inert).
-
-    The padded basis functions all carry ``+PAD`` on the one-electron
-    diagonal, so nothing ever occupies them. Each channel's ``k`` empty
-    occupied slots (``k = bucket nocc - real nocc``, which can differ between
-    alpha and beta) are parked in the first ``k`` padded functions by
-    ``guess_shift``, applied to the guess Fock only: it sets where the empty
-    slots start, and since they carry no occupation and no gradient they stay
-    there, so the energy never sees the shift.
-    """
     _check_supported(ks)
     nspin = len(ks.nocc)
     if len(b.nocc) != nspin:
@@ -219,8 +146,6 @@ def pad_ks(ks: KS, b: Bucket) -> PaddedKS:
     shift = np.zeros((nspin, b.nao))
     for s in range(nspin):
         shift[s, n:n + empty[s]] = -2.0 * PAD
-    # hybrids: the exchange takes the orbitals with their occupations
-    # (DFCoulomb.energy_and_grad_orbitals), so the empty padded slots drop out
     if isinstance(c, PackedDFCoulomb):
         if b.npair < c.B.shape[1]:
             raise ValueError(f"bucket npair {b.npair} < {c.B.shape[1]}.")
@@ -258,8 +183,6 @@ def _where(c, a, b):
 
 def _solve_one(ks: PaddedKS, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
                m):
-    """One padded molecule, any number of spin channels; vmapped by
-    :func:`gdm_batched`."""
     S = ks.S
     nocc = ks.nocc
     nspin = len(nocc)
@@ -267,8 +190,6 @@ def _solve_one(ks: PaddedKS, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
     X = _lowdin(S)
     dt = S.dtype
 
-    # the guess reference, outside the loop: one Fock at the guess density,
-    # each channel's empty slots parked by its own guess shift
     _, F0 = ks.energy_and_fock(P0)
     Co0, Cv0, H0 = [], [], []
     for s in range(nspin):
@@ -290,7 +211,7 @@ def _solve_one(ks: PaddedKS, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
             lambda kk: tuple(_occupied(a, b, c) for a, b, c in zip(Co, Cv, kk)),
             k)
         e, dC = ks.energy_and_grad_orbitals(Cos)
-        (g,) = vjp(dC)                   # the cotangent of the kappa tuple
+        (g,) = vjp(dC)
         return e, g, dC, Cos
 
     def commutator(dC, Cos):
@@ -323,7 +244,6 @@ def _solve_one(ks: PaddedKS, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
         stalled = ~accept & (st["alpha"] < 1e-4)
         accept = accept | stalled
 
-        # accepted: L-BFGS update and the next direction
         s_k = tuple(a - b for a, b in zip(k_t, st["k"]))
         y_k = tuple(a - b for a, b in zip(g_t, st["g"]))
         sy = _tdot(s_k, y_k)
@@ -354,16 +274,12 @@ def _solve_one(ks: PaddedKS, P0, max_iter, e_tol, d_tol, max_step, gap_floor,
                      derr=derr, converged=conv, fresh=jnp.asarray(False),
                      Cocc=Cos_t)
 
-        # rejected: shrink the step along the same direction
         a = st["alpha"]
         curv = e_t - st["E"] - slope * a
         a_q = jnp.where(curv > 0, -slope * a * a / (2.0 * curv), 0.5 * a)
         shrunk = dict(st, alpha=jnp.clip(a_q, 0.1 * a, 0.5 * a))
 
         new = _where(accept, taken, shrunk)
-        # re-anchor once kappa is large: the rotated orbitals become the
-        # reference at kappa = 0 (no Fock, no eigh), and the next evaluation
-        # is a fresh point
         reset = accept & ~new["converged"] & (
             jnp.sqrt(_tdot(new["k"], new["k"])) > KAPPA_RESET)
         rot = [rotate_full(a, b, c)
@@ -406,31 +322,21 @@ class BatchedGDMResult:
     e_tot: np.ndarray
     converged: np.ndarray
     n_iter: np.ndarray
-    P: list            # each system's spin-stacked density, unpadded
+    P: list
     fallback: np.ndarray = None
 
 
-# An occupied orbital this far above the lowest unoccupied level (Ha) marks
-# a converged state that is not the aufbau one: a stationary point the batch
-# can settle in (Cr2 at 1.68 A, 0.6-0.7 Ha above the ground state) because
-# its preconditioner stays in the guess frame. Degenerate levels never trip
-# it.
 AUFBAU_TOL = 1e-3
 
 
 @eqx.filter_jit
 def _aufbau_violation(stacked: PaddedKS, P):
-    """Per system: occupation weight on orbitals more than ``AUFBAU_TOL``
-    above the highest level an aufbau state would fill. One Fock build and
-    one eigh per channel, after the loop."""
-
     def one(ks, P):
         _, F = ks.energy_and_fock(P)
         X = _lowdin(ks.S)
         bad = 0.0
         for s, f in enumerate(ks.occupations()):
             eps, U = jnp.linalg.eigh(X.T @ F[s] @ X)
-            # the occupied projector in the orthonormal basis; P = w C Cᵀ
             w = jnp.maximum(jnp.max(f), 1e-30)
             Xi = X.T @ ks.S
             q = jnp.einsum("ak,ab,bk->k", U, Xi @ P[s] @ Xi.T / w, U)
@@ -489,10 +395,6 @@ def gdm_batched(kss: Sequence[KS], *, max_iter: int = 200,
             at its resets). Marked in ``BatchedGDMResult.fallback``.
     """
     kss = list(kss)
-    # one batch per spin type and functional: both are static metadata of
-    # the padded system (the functional object, its exact-exchange
-    # fractions, whitened or not), and systems that differ in them cannot be
-    # stacked
     groups: dict[tuple, list[int]] = {}
     for i, ks in enumerate(kss):
         key = (len(ks.nocc), ks.xc_term.xc, float(ks.coulomb.hf_coeff),

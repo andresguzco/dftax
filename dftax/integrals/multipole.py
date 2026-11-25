@@ -1,19 +1,3 @@
-"""Cartesian moment (multipole) integral matrices ⟨μ| (r-C) |ν⟩ via Obara-Saika.
-
-The dipole integrals are obtained from the overlap recurrence with no new machinery:
-shifting the gauge origin by writing ``(x - C) = (x - B) + (B - C)`` raises the ket's
-angular momentum by one,
-
-    ⟨a| (x - C) |b⟩ = S(a, b+1ₓ) + (Bₓ - Cₓ) S(a, b),
-
-so each dipole block is read off the same 1D overlap tables used for ``S`` (which run
-to ``_MAX_L = 7``, leaving headroom for the ``b+1`` shift through g functions). The
-quadrupole integrals ⟨a|(x-C)(y-C)|b⟩ follow the same binomial expansion to second
-order. Moment operators are multiplicative, so every matrix is symmetric.
-
-Used by :mod:`dftax.ks.properties` (dipole moment, external-field coupling).
-"""
-
 from __future__ import annotations
 
 import jax
@@ -28,8 +12,6 @@ from dftax.integrals.overlap import (
 
 
 def _scatter_symmetric(blocks, pair_a, pair_b, shell_offsets, nao):
-    """Scatter per-shell-pair blocks ``(n_pairs, _MAX_COMP, _MAX_COMP)`` into a
-    symmetric ``(nao, nao)`` matrix (off-diagonal pairs add their transpose)."""
     off_a = shell_offsets[pair_a]
     off_b = shell_offsets[pair_b]
     ai = jnp.arange(_MAX_COMP)
@@ -53,7 +35,6 @@ def _compute_dipole_all(
     shell_ao_idx, shell_offsets, comps_all, n_comps,
     pair_a, pair_b, nao, origin,
 ):
-    """Compute the three dipole matrices ⟨μ|(r-origin)|ν⟩, shape ``(3, nao, nao)``."""
     def _one_pair(a_idx, b_idx):
         ao_a = shell_ao_idx[a_idx]
         ao_b = shell_ao_idx[b_idx]
@@ -62,9 +43,9 @@ def _compute_dipole_all(
         exps_a, coeffs_a = ao_exponents[ao_a], ao_coefficients[ao_a]
         exps_b, coeffs_b = ao_exponents[ao_b], ao_coefficients[ao_b]
         comps_a, comps_b = comps_all[a_idx], comps_all[b_idx]
-        BC = center_b - origin                     # (Bᵢ - Cᵢ) per axis
-        ca = comps_a[:, None, :]                   # (_MAX_COMP, 1, 3)
-        cb = comps_b[None, :, :]                   # (1, _MAX_COMP, 3)
+        BC = center_b - origin
+        ca = comps_a[:, None, :]
+        cb = comps_b[None, :, :]
 
         def _prim_a(a_exp, a_coeff):
             def _prim_b(b_exp, b_coeff):
@@ -76,21 +57,20 @@ def _compute_dipole_all(
                 K = jnp.exp(-a_exp * b_exp / sg * jnp.sum(AB ** 2))
                 pref = (jnp.pi / sg) ** 1.5 * K
                 tabs = [_overlap_1d_table(PA[k], PB[k], sg) for k in range(3)]
-                # per-axis overlap S(la, lb) and moment M(la,lb) = S(la,lb+1)+BC*S(la,lb)
-                S = [tabs[k][ca[..., k], cb[..., k]] for k in range(3)]          # (C,C)
+                S = [tabs[k][ca[..., k], cb[..., k]] for k in range(3)]
                 M = [tabs[k][ca[..., k], cb[..., k] + 1] + BC[k] * S[k] for k in range(3)]
                 Dx = M[0] * S[1] * S[2]
                 Dy = S[0] * M[1] * S[2]
                 Dz = S[0] * S[1] * M[2]
-                return a_coeff * b_coeff * pref * jnp.stack([Dx, Dy, Dz])         # (3,C,C)
+                return a_coeff * b_coeff * pref * jnp.stack([Dx, Dy, Dz])
             return jnp.sum(jax.vmap(_prim_b)(exps_b, coeffs_b), axis=0)
-        block = jnp.sum(jax.vmap(_prim_a)(exps_a, coeffs_a), axis=0)              # (3,C,C)
+        block = jnp.sum(jax.vmap(_prim_a)(exps_a, coeffs_a), axis=0)
 
         na, nb = n_comps[a_idx], n_comps[b_idx]
         mask = (jnp.arange(_MAX_COMP) < na)[:, None] & (jnp.arange(_MAX_COMP) < nb)[None, :]
         return block * mask[None]
 
-    blocks = jax.vmap(_one_pair)(pair_a, pair_b)                                  # (P,3,C,C)
+    blocks = jax.vmap(_one_pair)(pair_a, pair_b)
     return jnp.stack([
         _scatter_symmetric(blocks[:, k], pair_a, pair_b, shell_offsets, nao)
         for k in range(3)

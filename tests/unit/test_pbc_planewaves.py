@@ -1,12 +1,3 @@
-"""The plane-wave engine: projectors, Hamiltonian, SCF, forces and stress.
-
-The projectors are checked against the real-space Gaussian projectors of the
-Gaussian engine (which reproduce PySCF), the Hamiltonian against the energy
-it is the derivative of, the eigensolver against a dense diagonalization,
-and forces and stress against finite differences of converged energies at a
-fixed plane-wave set. The comparison with GPAW at equal cutoff is the
-baseline gate, ``scripts/pbc/run_pw.py``."""
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -23,19 +14,16 @@ from dftax.pbc.pw.energy import (
 from dftax.pbc.pw.projectors import channels, projectors
 from dftax.pbc.pw.solve import lobpcg
 
-ALAT = 5.431                                                # Angstrom
+ALAT = 5.431
 A_SI = 0.5 * ALAT * np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
 SI2 = f"Si 0 0 0; Si {ALAT / 4 + 0.05} {ALAT / 4 - 0.03} {ALAT / 4 + 0.04}"
 
 
 def test_projectors_match_real_space_gaussians():
-    """<G|p> in closed form against the FFT of the Gaussian projectors on a
-    fine mesh, through V_nl(G, G'), which does not depend on the choice of
-    real spherical harmonics."""
     from dftax.pbc.bloch import ao_on_grid, plan_values
     from dftax.pbc.gth import projector_basis
 
-    A = np.array([[7.0, 0.0, 0.0], [1.0, 6.5, 0.0], [0.5, -1.0, 7.5]])  # Bohr
+    A = np.array([[7.0, 0.0, 0.0], [1.0, 6.5, 0.0], [0.5, -1.0, 7.5]])
     cell = Cell.from_xyz("Si 0.5 0.4 0.3; O 3.4 1.1 0.9", A, "gth-szv",
                          "gth-pade", unit="bohr")
     a = jnp.asarray(cell.a)
@@ -55,16 +43,13 @@ def test_projectors_match_real_space_gaussians():
     F = jnp.fft.fftn(vals.reshape(*mesh, -1), axes=(0, 1, 2)).reshape(N, -1)
     m = np.mod(np.asarray(plan.miller[0, :n]).astype(int), mesh)
     idx = (m[:, 0] * mesh[1] + m[:, 1]) * mesh[2] + m[:, 2]
-    Pnum = (F[idx] * jnp.sqrt(vol) / N).conj().T          # beta = Pnum c
+    Pnum = (F[idx] * jnp.sqrt(vol) / N).conj().T
     Vnum = Pnum.conj().T @ jnp.asarray(H) @ Pnum
     np.testing.assert_allclose(V, Vnum, atol=1e-8)
 
 
 @pytest.mark.parametrize("xc", [LDA(), PBE()], ids=["lda", "pbe"])
 def test_band_energies_are_energy_derivatives(xc):
-    """Janak: dE/df_nk = w_k <ψ_nk|H[ρ]|ψ_nk> for any orbitals, so the
-    Hamiltonian (kinetic, projectors, Hartree, local, XC potential) is the
-    derivative of the energy it is built for."""
     cell = Cell.from_xyz(SI2, A_SI, "gth-szv", "gth-pade")
     model = build_model(cell, xc, planewaves(6.0), *monkhorst_pack((2, 1, 1)))
     coords, a = jnp.asarray(cell.atom_coords()), jnp.asarray(cell.a)
@@ -147,8 +132,6 @@ def test_forces_match_finite_differences(si2_scf):
 
 
 def test_stress_matches_finite_differences(si2_scf):
-    """At a fixed plane-wave set: the derivative is taken with the waves
-    kept, and so are the finite differences."""
     cell, res = si2_scf
     sigma = np.asarray(pw_stress(cell, res))
     vol = abs(np.linalg.det(cell.a))
@@ -164,9 +147,6 @@ def test_stress_matches_finite_differences(si2_scf):
 
 
 def test_smeared_stress_matches_finite_differences():
-    """A metal (fcc aluminium, Fermi smearing, a k-mesh): the stress of the
-    free energy at a fixed plane-wave set against finite differences,
-    through the common verbs."""
     import sys
     from pathlib import Path
 

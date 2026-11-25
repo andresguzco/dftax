@@ -56,8 +56,6 @@ def main():
 
     mol = Molecule.from_xyz(read_xyz(args.mol), args.basis)
     xc = getattr(xcmod, args.xc)()
-    # explicit, so the screening policy applies even before the default-grid
-    # fix (grid=None never screened)
     grid = becke() if args.grid == "default" else becke(75, 302, prune=None)
     t0 = time.perf_counter()
     ks = KS(mol, xc, grid=grid)

@@ -63,20 +63,15 @@ def main():
         _, F = eqx.filter_jit(lambda k, P: k.energy_and_fock(P))(ks, P0)
         _, Cp = jnp.linalg.eigh(X.T @ F[0] @ X)
         nocc = ks.nocc[0]
-        C = (X @ Cp)[:, :nocc] * jnp.sqrt(2.0)          # P = C C^T
+        C = (X @ Cp)[:, :nocc] * jnp.sqrt(2.0)
 
-        # the term is an argument, not a closure: closed over, its AO arrays
-        # would be baked into the program as constants
         @eqx.filter_jit
         def via_density(xt, C):
             e, V = xt.energy_and_potential((C @ C.T)[None])
-            # dE/dP is not symmetric for a GGA (the gradient term pairs ao
-            # with dao), so dE/dC is (V + V^T) C, as KS.energy_and_fock's
-            # symmetrized F gives
             return e, (V[0] + V[0].T) @ C
 
         def e_orb(C, xt):
-            psi = xt.ao @ C                             # (ng, nocc)
+            psi = xt.ao @ C
             dpsi = jnp.einsum("gmx,mi->gix", xt.dao, C)
             rho = jnp.sum(psi * psi, axis=1)
             grad = 2.0 * jnp.einsum("gi,gix->gx", psi, dpsi)

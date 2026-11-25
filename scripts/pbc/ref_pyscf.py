@@ -49,14 +49,10 @@ def run(args) -> dict:
         cell.mesh = list(args.mesh)
     cell.build()
 
-    # The k-point class at the Gamma point too: PySCF's Gamma-point gradient
-    # (and the stress built on it) only runs with its multigrid integrator,
-    # while the k-point one keeps the plain FFT formulation the Gaussian
-    # engine follows. A 1x1x1 mesh is the Gamma point.
     mf = dft.KRKS(cell, cell.make_kpts(list(args.kmesh)))
     mf.xc = args.xc
     mf.conv_tol = args.conv_tol
-    if args.conv_tol_grad is not None:          # default: sqrt(conv_tol)
+    if args.conv_tol_grad is not None:
         mf.conv_tol_grad = args.conv_tol_grad
     mf.max_cycle = 200
     if args.smearing:
@@ -64,8 +60,6 @@ def run(args) -> dict:
 
         mf = smearing_(mf, sigma=args.smearing, method="fermi")
     if args.lindep:
-        # canonical orthogonalization at every k, whatever the condition
-        # number (the trigger set to 1), as dftax's scf_k does
         from pyscf.scf.addons import remove_linear_dep_
 
         mf = remove_linear_dep_(mf, threshold=args.lindep, lindep=1.0)
@@ -94,33 +88,25 @@ def run(args) -> dict:
         "nelectron": int(cell.nelectron),
         "converged": bool(mf.converged),
         "e_tot": float(e_tot),
-        # e1 (kinetic + pseudopotential), coul, exc, nuc (Ewald)
         "summary": {k: float(np.real(v)) for k, v in mf.scf_summary.items()},
         "seconds_scf": time.perf_counter() - t0,
     }
-    # band edges over the k-mesh: highest level more than half occupied,
-    # lowest level less than half (a metal gives a gap near zero)
     e = np.concatenate([np.asarray(x).ravel() for x in mf.mo_energy])
     occ = np.concatenate([np.asarray(x).ravel() for x in mf.mo_occ])
     out["vbm"], out["cbm"] = float(e[occ > 1.0].max()), float(e[occ < 1.0].min())
     out["gap"] = out["cbm"] - out["vbm"]
-    # under smearing e_tot is the internal energy; the free energy is the
-    # variational one and e_zero PySCF's extrapolation to zero width
     for key in ("e_free", "e_zero", "entropy"):
         if getattr(mf, key, None) is not None:
             out[key] = float(getattr(mf, key))
-    # A derivative that PySCF refuses must not cost the converged energy: the
-    # failure is recorded beside it and the script exits nonzero.
     errors = {}
     if args.forces:
         try:
             g = mf.nuc_grad_method().kernel()
-            out["forces"] = (-np.asarray(g)).tolist()               # Ha/Bohr
+            out["forces"] = (-np.asarray(g)).tolist()
         except Exception as e:  # noqa: BLE001
             errors["forces"] = repr(e)
     if args.stress:
         try:
-            # (1/V) dE/d(strain), Ha/Bohr^3, as PySCF returns it (asymmetric)
             s = mf.nuc_grad_method().get_stress()
             out["stress"] = np.asarray(s).tolist()
         except Exception as e:  # noqa: BLE001

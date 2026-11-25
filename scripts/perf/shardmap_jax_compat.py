@@ -45,9 +45,9 @@ def make(kind):
         W = jnp.zeros_like(t3x)
         for d in range(ndev):
             block = rows[:, d * slab:(d + 1) * slab]
-            if kind == "einsum":                       # what dftax does today
+            if kind == "einsum":
                 part = jnp.einsum("mnP,PX->mnX", t3x, block)
-            elif kind == "reshape_matmul":             # explicit 2-D matmul
+            elif kind == "reshape_matmul":
                 m, n, p = t3x.shape
                 part = (t3x.reshape(m * n, p) @ block).reshape(m, n, -1)
             elif kind == "tensordot":
@@ -66,9 +66,7 @@ def make(kind):
 
 
 def make_flat():
-    """The candidate fix: hand shard_map a 2-D operand, so the dot_general's
-    bitcast has nothing 3-D to inherit a sharding from."""
-    def exchange(flat, Lfull):                     # flat: (nao*nao, slab)
+    def exchange(flat, Lfull):
         my = jax.lax.axis_index("aux")
         rows = jax.lax.dynamic_slice_in_dim(Lfull, my * slab, slab, axis=0)
         W = jnp.zeros_like(flat)

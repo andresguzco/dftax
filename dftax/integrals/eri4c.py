@@ -399,13 +399,13 @@ def _make_eri4c_kernel(la, lb, lc, ld, anga, angb, angc, angd, omega=None):
     (nca, ncb, ncc, ncd). Bra and ket are both genuine two-center pairs, so
     both sides use the two-center E tables; otherwise the same structure as
     the 3-center class kernel."""
-    from dftax.integrals.eri3c_bucketed import (
-        _E_table,
-        _hermite_convolve,
-        _hermite_table,
-    )
+    from dftax.integrals.eri3c_bucketed import _E_table, _hermite_table
 
     mt = max(la + lb + lc + ld + 1, 2)
+    conv = np.zeros((mt, mt, mt))
+    for t in range(mt):
+        for tau in range(mt - t):
+            conv[t, tau, t + tau] = 1.0
     sign = np.asarray([(-1.0) ** t for t in range(mt)])
     anga, angb = np.asarray(anga), np.asarray(angb)
     angc, angd = np.asarray(angc), np.asarray(angd)
@@ -435,7 +435,8 @@ def _make_eri4c_kernel(la, lb, lc, ld, anga, angb, angc, angd, omega=None):
                 pref = (K_ab * K_cd * 2.0 * jnp.pi ** 2.5
                         / (safeb * safek * jnp.sqrt(safeb + safek)))
                 R = _hermite_table(rho, P - Q, mt, omega)
-                G = [_hermite_convolve(Eab[x], Ecd[x] * sign) for x in range(3)]
+                G = [jnp.einsum("ijt,klu,tus->ijkls", Eab[x], Ecd[x] * sign,
+                                conv) for x in range(3)]
                 GX = G[0][ia[0][:, None, None, None], jb[0][None, :, None, None],
                           kc[0][None, None, :, None], ld_[0][None, None, None, :], :]
                 GY = G[1][ia[1][:, None, None, None], jb[1][None, :, None, None],

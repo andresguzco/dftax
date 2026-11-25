@@ -602,15 +602,6 @@ def _bump(row, X, i2g, mt):
             + jnp.where(t_idx + 1 < mt, (t_idx + 1) * right, 0.0))
 
 
-def _hermite_convolve(a, b):
-    mt = a.shape[-1]
-    lead = [(0, 0)] * (b.ndim - 1)
-    shifted = jnp.stack(
-        [jnp.pad(b[..., :mt - t], lead + [(t, 0)]) for t in range(mt)], axis=-2)
-    a = a.reshape(a.shape[:-1] + (1,) * (b.ndim - 1) + (mt, 1))
-    return jnp.sum(a * shifted, axis=-2)
-
-
 def _E_table(la, lb, alpha, beta, XAB, mt):
     """(la+1, lb+1, mt) two-center E table, unrolled at trace time."""
     gamma = alpha + beta
@@ -723,6 +714,10 @@ def _make_class_kernel(la, lb, lc, anga, angb, angc, omega=None):
     # closure constants stay numpy: the factory can first run inside an
     # active jit trace (the cached kernel outlives it), and a jnp constant
     # created there is trace-scoped and leaks into later traces
+    conv = np.zeros((mt, mt, mt))
+    for t in range(mt):
+        for tau in range(mt - t):
+            conv[t, tau, t + tau] = 1.0
     sign = np.asarray([(-1.0) ** t for t in range(mt)])
     anga, angb, angc = np.asarray(anga), np.asarray(angb), np.asarray(angc)
     ia = (anga[:, 0], anga[:, 1], anga[:, 2])
@@ -749,7 +744,8 @@ def _make_class_kernel(la, lb, lc, anga, angb, angc, omega=None):
                 # carries no axis dependence (the loop variable was unused).
                 # Only Et differs per axis.
                 Ec = _Ec_table(lc, ga, mt) * sign
-                G = [_hermite_convolve(Et[x], Ec) for x in range(3)]
+                G = [jnp.einsum("ijt,ku,tus->ijks", Et[x], Ec, conv)
+                     for x in range(3)]
                 GX = G[0][ia[0][:, None, None], jb[0][None, :, None],
                           kc[0][None, None, :], :]
                 GY = G[1][ia[1][:, None, None], jb[1][None, :, None],
@@ -1057,6 +1053,10 @@ def _make_eri2c_kernel(la, lb, anga, angb, omega=None):
     single-center E tables on both sides, matching _eri2c_primitive.
     """
     mt = max(la + lb + 1, 2)
+    conv = np.zeros((mt, mt, mt))
+    for t in range(mt):
+        for tau in range(mt - t):
+            conv[t, tau, t + tau] = 1.0
     sign = np.asarray([(-1.0) ** t for t in range(mt)])
     anga, angb = np.asarray(anga), np.asarray(angb)
     ia = (anga[:, 0], anga[:, 1], anga[:, 2])
@@ -1076,7 +1076,7 @@ def _make_eri2c_kernel(la, lb, anga, angb, omega=None):
             Ea = _Ec_table(la, al, mt)
             Eb = _Ec_table(lb, be, mt) * sign
             R = _hermite_table(rho, AB, mt, omega)
-            G = _hermite_convolve(Ea, Eb)
+            G = jnp.einsum("it,ju,tus->ijs", Ea, Eb, conv)
             GX = G[ia[0][:, None], jb[0][None, :], :]
             GY = G[ia[1][:, None], jb[1][None, :], :]
             GZ = G[ia[2][:, None], jb[2][None, :], :]

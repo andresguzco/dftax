@@ -18,6 +18,15 @@ to [Semantic Versioning](https://semver.org/).
   (~16 min, reused from the persistent compilation cache when it is enabled).
   Forces match PySCF to 2e-9 Ha/Bohr.
 
+### Changed
+- **jax 0.12.0 and 0.12.1 are excluded.** Their GPU scatter kernel reads past
+  the end of its index buffer when a scatter fits in one thread block, and
+  fails with `CUDA_ERROR_ILLEGAL_ADDRESS` when that buffer ends at an unmapped
+  page ([openxla/xla#53560](https://github.com/openxla/xla/pull/53560), fixed
+  upstream after 0.12.1). dftax's small integral scatters hit it under the
+  default GPU memory preallocation. jax 0.11.2 passes the same reproducer on
+  an A100.
+
 ## [0.10.0] - 2026-11-24
 
 ### Added

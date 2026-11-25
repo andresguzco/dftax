@@ -240,7 +240,8 @@ class PBECorrelation(DensityFunctional):
 
 
 class PBE(XCFunctional):
-    """Convenience wrapper for the full PBE XC functional."""
+    """PBE generalized-gradient functional (J. P. Perdew, K. Burke and M.
+    Ernzerhof, Phys. Rev. Lett. 77, 3865 (1996))."""
     name: ClassVar[str] = "PBE"
     xc_type: ClassVar[str] = "GGA"
     exchange: ClassVar[DensityFunctional] = PBEExchange()
@@ -525,14 +526,10 @@ class LYPCorrelation(DensityFunctional):
 
 
 class B3LYP(XCFunctional):
-    """Gaussian / libxc default B3LYP functional (uses VWN_RPA).
-
-    Total XC energy density (per electron):
-      ε_xc = 0.08 · ε_x^LDA + 0.72 · ε_x^B88 + 0.19 · ε_c^VWN_RPA + 0.81 · ε_c^LYP
-
-    The HF exchange coefficient (0.20) is exposed as ``hf_coeff``. The
-    ``EnergyFunctional`` is responsible for building the K matrix and adding
-    -0.5 · hf_coeff · Tr(P K) to the total energy.
+    """B3LYP global hybrid, in the Gaussian and libxc form (VWN-RPA):
+    ``0.08·E_x^LDA + 0.72·E_x^B88 + 0.19·E_c^VWN-RPA + 0.81·E_c^LYP`` plus
+    20 % exact exchange (P. J. Stephens et al., J. Phys. Chem. 98, 11623
+    (1994)).
     """
 
     name: ClassVar[str] = "B3LYP"
@@ -573,7 +570,7 @@ class B3LYP(XCFunctional):
 
 
 class LDA(XCFunctional):
-    """Local density approximation: Slater exchange + VWN5 correlation."""
+    """Local density approximation: Slater exchange and VWN5 correlation."""
 
     name: ClassVar[str] = "LDA"
     xc_type: ClassVar[str] = "LDA"
@@ -582,10 +579,8 @@ class LDA(XCFunctional):
 
 
 class PBE0(XCFunctional):
-    """PBE0 global hybrid: ε_xc = 0.75·ε_x^PBE + ε_c^PBE, plus 25% exact exchange.
-
-    The HF exchange fraction (0.25) is exposed as ``hf_coeff``; the exact-K
-    contribution is added by the energy driver (see :mod:`dftax.ks.energy`).
+    """PBE0 global hybrid: ``0.75·E_x^PBE + E_c^PBE`` plus 25 % exact exchange
+    (C. Adamo and V. Barone, J. Chem. Phys. 110, 6158 (1999)).
     """
 
     name: ClassVar[str] = "PBE0"
@@ -716,13 +711,11 @@ class ITYHB88Exchange(DensityFunctional):
 
 
 class CAMB3LYP(XCFunctional):
-    """CAM-B3LYP (Yanai-Tew-Handy 2004) range-separated hybrid.
+    """CAM-B3LYP range-separated hybrid (T. Yanai, D. P. Tew and N. C. Handy,
+    Chem. Phys. Lett. 393, 51 (2004)), as libxc ``HYB_GGA_XC_CAM_B3LYP``.
 
-    DFT part (identified against libxc ``HYB_GGA_XC_CAM_B3LYP`` to machine
-    precision): ``0.35·B88 + 0.46·SR-B88(ITYH, ω=0.33) + 0.81·LYP +
-    0.19·VWN5``. Exact exchange: ``0.19·K + 0.46·K_lr(ω=0.33)`` (PySCF
-    ``rsh_coeff`` convention (0.33, 0.65, -0.46) re-expressed as
-    full-range + long-range).
+    Semilocal part ``0.35·B88 + 0.46·SR-B88(ω = 0.33) + 0.81·LYP + 0.19·VWN5``;
+    exact exchange ``0.19·K + 0.46·K_lr(ω = 0.33)``.
     """
 
     name: ClassVar[str] = "CAM-B3LYP"
@@ -749,10 +742,11 @@ class CAMB3LYP(XCFunctional):
 
 
 class LCBLYP(XCFunctional):
-    """LC-BLYP (Tawada-Tsuneda-Yanagisawa-Yanai-Hirao 2004), long-range-corrected
-    BLYP at ω = 0.33: SR-B88 (ITYH) + LYP, exact exchange ``K_lr(ω = 0.33)``
-    alone. libxc ``HYB_GGA_XC_LC_BLYP`` (src/hyb_gga_xc_lc_blyp.c: ITYH + LYP,
-    CAM α = 1, β = −1, ω = 0.33).
+    """LC-BLYP long-range-corrected hybrid (Y. Tawada et al., J. Chem. Phys.
+    120, 8425 (2004)), as libxc ``HYB_GGA_XC_LC_BLYP``.
+
+    Short-range B88 exchange and LYP correlation, with only long-range exact
+    exchange, ``K_lr(ω = 0.33)``.
     """
 
     name: ClassVar[str] = "LC-BLYP"
@@ -804,13 +798,12 @@ class _B97Pieces:
 
 
 class WB97X(XCFunctional):
-    """ωB97X (Chai-Head-Gordon 2008) range-separated hybrid GGA.
+    """ωB97X range-separated hybrid (J.-D. Chai and M. Head-Gordon, J. Chem.
+    Phys. 128, 084106 (2008)), as libxc ``HYB_GGA_XC_WB97X``.
 
-    Exchange: B97 series over SR-LDA (ω = 0.3); correlation: B97 series over
-    Stoll-partitioned PW92 (same-spin / opposite-spin). Exact exchange:
-    ``0.157706·K + 0.842294·K_lr(ω=0.3)``. The series coefficients match
-    libxc ``HYB_GGA_XC_WB97X`` (recovered by exact linear fit, residual
-    ~1e-10) and the published parameters.
+    B97 power series over short-range LDA exchange (ω = 0.3) and
+    spin-partitioned PW92 correlation; exact exchange
+    ``0.157706·K + 0.842294·K_lr(ω = 0.3)``.
     """
 
     name: ClassVar[str] = "wB97X"
@@ -872,10 +865,11 @@ class WB97X(XCFunctional):
 
 
 class WB97(WB97X):
-    """ωB97 (Chai-Head-Gordon 2008): the ωB97X form with no short-range exact
-    exchange, ω = 0.4; exact exchange ``K_lr(ω = 0.4)`` alone. Coefficients and
-    CAM α = 1, β = −1, ω = 0.4 from libxc ``HYB_GGA_XC_WB97``
-    (src/hyb_gga_xc_wb97.c, par_wb97), J. Chem. Phys. 128, 084106 (2008).
+    """ωB97 long-range-corrected hybrid (J.-D. Chai and M. Head-Gordon, J.
+    Chem. Phys. 128, 084106 (2008)), as libxc ``HYB_GGA_XC_WB97``.
+
+    The ωB97X form with its own coefficients at ω = 0.4 and only long-range
+    exact exchange, ``K_lr(ω = 0.4)``.
     """
 
     name: ClassVar[str] = "wB97"
@@ -890,13 +884,12 @@ class WB97(WB97X):
 
 
 class WB97XV(WB97X):
-    """ωB97X-V (Mardirossian-Head-Gordon 2014): 10-parameter RSH GGA + VV10.
+    """ωB97X-V range-separated hybrid with VV10 nonlocal correlation (N.
+    Mardirossian and M. Head-Gordon, Phys. Chem. Chem. Phys. 16, 9904
+    (2014)), as libxc ``HYB_GGA_XC_WB97X_V``.
 
-    The B97 series is deliberately short (3 exchange, 2 + 2 correlation
-    terms); nonlocal correlation is VV10 with ``b = 6.0``, ``C = 0.01``
-    (declared via ``nlc_b``/``nlc_c``; the KS builder adds the double-grid
-    term). Exact exchange ``0.167·K + 0.833·K_lr(ω = 0.3)``. Series
-    coefficients verified pointwise against libxc ``HYB_GGA_XC_WB97X_V``.
+    Exact exchange ``0.167·K + 0.833·K_lr(ω = 0.3)``; VV10 with ``b = 6.0``
+    and ``C = 0.01``. VV10 cannot run on a device mesh.
     """
 
     name: ClassVar[str] = "wB97X-V"
@@ -913,19 +906,12 @@ class WB97XV(WB97X):
 
 
 class WB97MV(XCFunctional):
-    """ωB97M-V (Mardirossian-Head-Gordon 2016): 12-parameter RSH mGGA + VV10.
+    """ωB97M-V range-separated meta-GGA hybrid with VV10 nonlocal correlation
+    (N. Mardirossian and M. Head-Gordon, J. Chem. Phys. 144, 214110 (2016)),
+    as libxc ``HYB_MGGA_XC_WB97M_V``.
 
-    The B97 double power series ``g = Σ c_ij·w^i·u^j`` over the same bases as
-    ωB97X (SR-LDA exchange at ω = 0.3, Stoll-partitioned PW92 correlation),
-    with the meta ingredient entering through ``w = (τ^unif − τ)/(τ^unif + τ)``
-    per spin (``τ^unif_σ = (3/10)(6π²)^{2/3} ρ_σ^{5/3}``); the opposite-spin
-    channel uses the ``p``-weighted average of the two channels' ``w``
-    (``p = τ/(τ^unif + τ)``) and the mean-square gradient variable, exactly
-    the libxc ``b97mv`` scheme. Exact exchange ``0.15·K + 0.85·K_lr(ω=0.3)``
-    (libxc CAM ``alpha=1, beta=−0.85`` re-expressed as full-range +
-    long-range); VV10 with ``b = 6.0``, ``C = 0.01``. Coefficients and term
-    selection verbatim from libxc ``HYB_MGGA_XC_WB97M_V`` / the published
-    parameters; validated pointwise against libxc.
+    Exact exchange ``0.15·K + 0.85·K_lr(ω = 0.3)``; VV10 with ``b = 6.0`` and
+    ``C = 0.01``.
     """
 
     name: ClassVar[str] = "wB97M-V"
@@ -1225,12 +1211,8 @@ class R2SCANCorrelation(DensityFunctional):
 
 
 class R2SCAN(XCFunctional):
-    """r2SCAN meta-GGA (regularized-restored SCAN; the modern default mGGA).
-
-    Needs the kinetic-energy density τ on the grid (``xc_type = "MGGA"``);
-    the KS terms provide it and the Fock matrix comes from autodiff of the
-    energy, so no vxc code exists anywhere. Validated pointwise against
-    libxc ``mgga_x_r2scan``/``mgga_c_r2scan`` to machine precision.
+    """r²SCAN meta-GGA (J. W. Furness et al., J. Phys. Chem. Lett. 11, 8208
+    (2020)), as libxc ``mgga_x_r2scan`` and ``mgga_c_r2scan``.
     """
 
     name: ClassVar[str] = "r2SCAN"
@@ -1264,13 +1246,14 @@ _FUNCTIONALS: dict[str, type[XCFunctional]] = {
 
 
 def functional(name: str) -> XCFunctional:
-    """The XC functional named ``name``, ready to pass to :class:`~dftax.KS`.
+    """The exchange-correlation functional called ``name``.
 
-    Lookup ignores case and punctuation, so ``"wB97X-V"``, ``"wb97xv"`` and
-    ``"WB97X_V"`` all resolve to the same functional. Dispersion stays a
-    separate axis (``KS(..., dispersion=d3bj())``), matching the library's
-    choices-as-values style: a functional is a functional, not a functional
-    plus a correction.
+    Case and punctuation are ignored, so ``"wB97X-V"``, ``"wb97xv"`` and
+    ``"WB97X_V"`` name the same functional. Dispersion is passed to
+    :class:`~dftax.ks.energy.KS` separately, as ``dispersion=``.
+
+    Raises:
+        ValueError: an unknown name.
 
     Example:
         ```python

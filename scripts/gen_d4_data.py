@@ -27,12 +27,14 @@ Run with a throwaway environment that has torch + tad-dftd4:
 
 The script also prints reference EEQ charges and D4 energies for the
 molecules used in tests/unit/test_d4.py.
+
+With ``--damping`` only the damping table is rewritten (a new functional's
+published parameters), every other table kept as vendored, with NumPy alone.
 """
 
 from pathlib import Path
 
 import numpy as np
-import torch
 
 OUT = Path(__file__).resolve().parents[1] / "dftax" / "energy" / "data" / "d4.npz"
 
@@ -43,12 +45,20 @@ DAMPING = {
     "b3lyp":     (1.0, 0.40868035, 2.02929367, 4.53807137),
     "cam-b3lyp": (1.0, 0.40147577, 1.66041301, 5.17350180),
     "r2scan":    (1.0, 0.49484001, 0.60187490, 5.73408312),
+    # dftd4 assets/parameters.toml @ 4a5bbf0f, d4.bj-eeq-atm of [parameter.lcblyp]
+    # and [parameter.wb97] (doi 10.1063/1.5090222) and [parameter.lcwpbe]
+    # (doi 10.1021/acs.jctc.3c00717).
+    "lc-blyp":   (1.0, 0.45769839, 1.60344180, 7.86924893),
+    "lc-wpbe":   (1.0, 0.378, 1.170, 4.816),
+    "wb97":      (1.0, 0.76666802, 6.55792598, 8.36027334),
 }
 
 NELEM = 104   # direct atomic-number indexing, row 0 unused
 
 
 def main() -> int:
+    import torch
+
     dd = dict(dtype=torch.float64)
 
     zmax = 86  # tad-dftd4 references cover H..Rn
@@ -144,5 +154,18 @@ def main() -> int:
     return 0
 
 
+def damping_only() -> int:
+    """``--damping``: only the damping table, ``methods``/``params`` of the vendored file rewritten from DAMPING and
+    every other table kept bit for bit (NumPy alone: no torch, no tad packages)."""
+    with np.load(OUT) as t:
+        tables = {k: t[k] for k in t.files}
+    tables["methods"] = np.array(sorted(DAMPING))
+    tables["params"] = np.array([DAMPING[m] for m in sorted(DAMPING)])
+    np.savez_compressed(OUT, **tables)
+    print(f"wrote {OUT}: damping for " + ", ".join(sorted(DAMPING)))
+    return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import sys
+    raise SystemExit(damping_only() if "--damping" in sys.argv[1:] else main())

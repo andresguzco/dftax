@@ -18,6 +18,8 @@ materialized XC grid.
 ::: dftax.energy.xc.B3LYP
 ::: dftax.energy.xc.CAMB3LYP
 ::: dftax.energy.xc.WB97X
+::: dftax.energy.xc.WB97
+::: dftax.energy.xc.LCBLYP
 ::: dftax.energy.xc.WB97XV
 ::: dftax.energy.xc.WB97MV
 ::: dftax.energy.xc.R2SCAN

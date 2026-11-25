@@ -78,7 +78,9 @@ on the fly (`exchange_k_4c`); under density fitting it uses streamed RI-K. The L
 path is compile- and memory-bounded by scanning the bra primitive pair in the ERI kernel
 (so cc-pVDZ compiles in seconds rather than OOMing).
 
-Range-separated hybrids (`CAMB3LYP`, `WB97X`, `WB97XV`) split the exchange into
+Range-separated hybrids (`CAMB3LYP`, `WB97X`, `WB97XV`, and the
+long-range-corrected `WB97` and `LCBLYP`, whose exact exchange is long-range
+only) split the exchange into
 short- and long-range parts via `erf(ω·r₁₂)/r₁₂` integrals and run on every DF
 backend: the materialized path holds the attenuated tensors, the streamed path
 recomputes attenuated 3-center elements on the fly (only the small attenuated

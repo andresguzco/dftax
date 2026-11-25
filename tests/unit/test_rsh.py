@@ -1,4 +1,5 @@
-"""Range-separated hybrids: attenuated integrals, CAM-B3LYP, wB97X.
+"""Range-separated hybrids: attenuated integrals, CAM-B3LYP, wB97X, and the
+long-range-corrected wB97 and LC-BLYP.
 
 Layered oracles: the erf-attenuated ERIs against PySCF ``with_range_coulomb``
 (machine precision), the functional forms pointwise against libxc, and the
@@ -12,7 +13,8 @@ import pytest
 
 from dftax import KS, Molecule, df, exact, scf
 from dftax.energy.gto import extract_basis_data
-from dftax.energy.xc import CAMB3LYP, WB97X, ITYHB88Exchange, PW92Correlation
+from dftax.energy.xc import (CAMB3LYP, LCBLYP, WB97, WB97X, ITYHB88Exchange,
+                             PW92Correlation, functional)
 from dftax.integrals import eri2c_matrix
 from dftax.integrals.eri4c import eri4c_matrix
 
@@ -87,7 +89,9 @@ def test_ityh_sr_b88_vs_libxc():
 
 @pytest.mark.pyscf
 @pytest.mark.parametrize("xc_obj,code", [(CAMB3LYP(), "camb3lyp"),
-                                         (WB97X(), "wb97x")])
+                                         (WB97X(), "wb97x"),
+                                         (WB97(), "hyb_gga_xc_wb97"),
+                                         (LCBLYP(), "hyb_gga_xc_lc_blyp")])
 def test_rsh_functionals_pointwise_vs_libxc(xc_obj, code):
     from pyscf.dft import libxc
 
@@ -104,12 +108,41 @@ def test_rsh_functionals_pointwise_vs_libxc(xc_obj, code):
     assert np.abs(ours - ref).max() < 1e-8
 
 
+@pytest.mark.pyscf
+@pytest.mark.parametrize("xc_obj,code", [(WB97(), "hyb_gga_xc_wb97"),
+                                         (LCBLYP(), "hyb_gga_xc_lc_blyp")])
+def test_lc_potentials_vs_libxc(xc_obj, code):
+    """v_ρ = ∂(ρε)/∂ρ and v_σ = ∂(ρε)/∂σ (σ = |∇ρ|²) by autodiff, closed
+    shell, against libxc."""
+    from pyscf.dft import libxc
+
+    rho, _, ga, _ = _random_points()
+    vrho, vsigma = libxc.eval_xc(code, np.vstack([rho, ga.T]), spin=0,
+                                 deriv=1)[1][:2]
+    e = lambda r, g: r * xc_obj(r, g)
+    r, g = jnp.asarray(rho), jnp.asarray(ga)
+    vr = jax.vmap(jax.grad(e, 0))(r, g)
+    vg = jax.vmap(jax.grad(e, 1))(r, g)                     # = 2 v_σ ∇ρ
+    vs = jnp.sum(vg * g, -1) / (2.0 * jnp.sum(g * g, -1))
+    np.testing.assert_allclose(np.asarray(vr), vrho, rtol=1e-8, atol=1e-10)
+    np.testing.assert_allclose(np.asarray(vs), vsigma, rtol=1e-8, atol=1e-10)
+
+
+def test_lc_functionals_are_long_range_only():
+    for name, cls, omega in (("wB97", WB97, 0.4), ("LC-BLYP", LCBLYP, 0.33)):
+        xc = functional(name)
+        assert isinstance(xc, cls)
+        assert (xc.hf_coeff, xc.hf_coeff_lr, xc.omega) == (0.0, 1.0, omega)
+    assert ITYHB88Exchange.omega == LCBLYP.omega
+
 # ---------------------------------------------------------------------------
 # Full SCF vs PySCF
 # ---------------------------------------------------------------------------
 
 @pytest.mark.pyscf
-@pytest.mark.parametrize("xc_obj,code", [(CAMB3LYP(), "camb3lyp")])
+@pytest.mark.parametrize("xc_obj,code", [(CAMB3LYP(), "camb3lyp"),
+                                         (WB97(), "hyb_gga_xc_wb97"),
+                                         (LCBLYP(), "hyb_gga_xc_lc_blyp")])
 def test_rsh_scf_vs_pyscf(xc_obj, code):
     from pyscf import dft, gto
 

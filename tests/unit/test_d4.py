@@ -13,7 +13,7 @@ import pytest
 
 from dftax import KS, Molecule, d4, exact
 from dftax.energy.d4 import _d4_params, d4_energy, eeq_charges
-from dftax.energy.xc import PBE
+from dftax.energy.xc import LCBLYP, PBE, WB97
 
 WATER_Z = [8, 1, 1]
 WATER_XYZ = np.array([[0.0, 0.0, 0.0],
@@ -108,3 +108,29 @@ def test_d4_through_ks_energy():
     xyz = mol.atom_coords()
     e_ref = float(d4_energy(xyz, z, _d4_params("pbe"), atm=True))
     assert abs(d - e_ref) < 1e-12
+
+
+# dftd4 assets/parameters.toml @ 4a5bbf0f, d4.bj-eeq-atm: (s6, a1, s8, a2).
+LC_DAMPING = {
+    "lc-blyp": (1.0, 0.45769839, 1.60344180, 7.86924893),   # doi 10.1063/1.5090222
+    "lc-wpbe": (1.0, 0.378, 1.170, 4.816),                  # doi 10.1021/acs.jctc.3c00717
+    "wb97": (1.0, 0.76666802, 6.55792598, 8.36027334),      # doi 10.1063/1.5090222
+}
+
+
+@pytest.mark.parametrize("method", sorted(LC_DAMPING))
+def test_lc_damping_is_the_published_set(method):
+    assert _d4_params(method) == LC_DAMPING[method]
+
+
+@pytest.mark.float64
+@pytest.mark.parametrize("xc,method", [(WB97(), "wb97"), (LCBLYP(), "lc-blyp")])
+def test_d4_resolves_lc_functionals_by_name(xc, method):
+    """dispersion=d4() takes the long-range-corrected functionals' own sets."""
+    mol = Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043",
+                            "sto-3g")
+    grid = jnp.zeros((8, 3)), jnp.zeros((8,))
+    ks0 = KS(mol, xc, grid=grid, coulomb=exact())
+    ks4 = KS(mol, xc, grid=grid, coulomb=exact(), dispersion=d4(atm=True))
+    e_ref = float(d4_energy(mol.atom_coords(), [8, 1, 1], _d4_params(method), atm=True))
+    assert abs(float(ks4.e_disp) - float(ks0.e_disp) - e_ref) < 1e-12

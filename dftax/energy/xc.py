@@ -748,6 +748,23 @@ class CAMB3LYP(XCFunctional):
         )
 
 
+class LCBLYP(XCFunctional):
+    """LC-BLYP (Tawada-Tsuneda-Yanagisawa-Yanai-Hirao 2004), long-range-corrected
+    BLYP at ω = 0.33: SR-B88 (ITYH) + LYP, exact exchange ``K_lr(ω = 0.33)``
+    alone. libxc ``HYB_GGA_XC_LC_BLYP`` (src/hyb_gga_xc_lc_blyp.c: ITYH + LYP,
+    CAM α = 1, β = −1, ω = 0.33).
+    """
+
+    name: ClassVar[str] = "LC-BLYP"
+    xc_type: ClassVar[str] = "GGA"
+    hf_coeff: ClassVar[float] = 0.0
+    hf_coeff_lr: ClassVar[float] = 1.0
+    omega: ClassVar[float] = 0.33
+
+    exchange: ClassVar[DensityFunctional] = ITYHB88Exchange()
+    correlation: ClassVar[DensityFunctional] = LYPCorrelation()
+
+
 class _B97Pieces:
     """Shared machinery for the wB97X power series (Chai-Head-Gordon 2008).
 
@@ -852,6 +869,24 @@ class WB97X(XCFunctional):
         )
         return e_dens / jnp.clip(density, 1e-20
         )
+
+
+class WB97(WB97X):
+    """ωB97 (Chai-Head-Gordon 2008): the ωB97X form with no short-range exact
+    exchange, ω = 0.4; exact exchange ``K_lr(ω = 0.4)`` alone. Coefficients and
+    CAM α = 1, β = −1, ω = 0.4 from libxc ``HYB_GGA_XC_WB97``
+    (src/hyb_gga_xc_wb97.c, par_wb97), J. Chem. Phys. 128, 084106 (2008).
+    """
+
+    name: ClassVar[str] = "wB97"
+    xc_type: ClassVar[str] = "GGA"
+    hf_coeff: ClassVar[float] = 0.0
+    hf_coeff_lr: ClassVar[float] = 1.0
+    omega: ClassVar[float] = 0.4
+
+    CX: ClassVar[tuple] = (1.0, 1.13116, -2.74915, 12.0900, -5.71642)
+    CSS: ClassVar[tuple] = (1.0, -2.55352, 11.8926, -26.9452, 17.0927)
+    CAB: ClassVar[tuple] = (1.0, 3.99051, -17.0066, 1.07292, 8.88211)
 
 
 class WB97XV(WB97X):
@@ -1219,6 +1254,8 @@ _FUNCTIONALS: dict[str, type[XCFunctional]] = {
     "b3lyp": B3LYP,
     "pbe0": PBE0, "pbeh": PBE0,
     "camb3lyp": CAMB3LYP,
+    "lcblyp": LCBLYP,
+    "wb97": WB97,
     "wb97x": WB97X,
     "wb97xv": WB97XV,
     "wb97mv": WB97MV,

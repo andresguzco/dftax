@@ -34,7 +34,7 @@ build it for small systems / validation. For energies on larger systems use
 the fly and never materialise the full tensor (O(N²) memory).
 """
 
-from functools import lru_cache
+from functools import lru_cache, partial
 
 import jax
 import jax.numpy as jnp
@@ -582,23 +582,75 @@ def eri4c_matrix_bucketed(
     symmetry, and blocks within one scatter are disjoint because canonical
     quartets are distinct).
     """
-    from dftax.integrals.eri3c_bucketed import _IDX
-
     if plan is None:
         plan = plan_eri4c(basis)
-    nao, classes = plan
-    out = jnp.zeros((nao, nao, nao, nao), dtype=basis.centers.dtype)
-    for (la, lb, lc, ldl, anga, angb, angc, angd,
-         ra, rb, rc, rd, nprims) in classes:
-        rows = [np.asarray(r).astype(_IDX) for r in (ra, rb, rc, rd)]
-        fn = _eri4c_class_program(
-            la, lb, lc, ldl, anga, angb, angc, angd, nprims, omega,
-            min(_eri4c_class_chunk(la, lb, lc, ldl, nprims), rows[0].shape[0]),
-        )
-        out = fn(out, basis.centers, basis.exponents, basis.coefficients, *rows)
+    out = _eri4c_cart(plan, omega, basis.centers, basis.exponents,
+                      basis.coefficients)
     if basis.cart2sph is not None:
         out = _cart_to_sph_4c(out, basis.cart2sph)
     return out
+
+
+def _eri4c_matrix_for_forces(basis, plan, omega=None):
+    out = _eri4c_cart_center_vjp(plan, omega, basis.centers, basis.exponents,
+                                 basis.coefficients)
+    if basis.cart2sph is not None:
+        out = _cart_to_sph_4c(out, basis.cart2sph)
+    return out
+
+
+def _class_rows_and_key(cls, omega):
+    from dftax.integrals.eri3c_bucketed import _IDX
+
+    la, lb, lc, ldl, anga, angb, angc, angd, ra, rb, rc, rd, nprims = cls
+    rows = [np.asarray(r).astype(_IDX) for r in (ra, rb, rc, rd)]
+    chunk = min(_eri4c_class_chunk(la, lb, lc, ldl, nprims), rows[0].shape[0])
+    return rows, (la, lb, lc, ldl, anga, angb, angc, angd, nprims, omega, chunk)
+
+
+def _eri4c_cart(plan, omega, cen, exps, coefs):
+    nao, classes = plan
+    out = jnp.zeros((nao, nao, nao, nao), dtype=cen.dtype)
+    for cls in classes:
+        rows, key = _class_rows_and_key(cls, omega)
+        out = _eri4c_class_program(*key)(out, cen, exps, coefs, *rows)
+    return out
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(0, 1))
+def _eri4c_cart_center_vjp(plan, omega, cen, exps, coefs):
+    return _eri4c_cart(plan, omega, cen, exps, coefs)
+
+
+def _eri4c_cart_center_vjp_fwd(plan, omega, cen, exps, coefs):
+    return _eri4c_cart(plan, omega, cen, exps, coefs), (cen, exps, coefs)
+
+
+def _eri4c_cart_center_vjp_bwd(plan, omega, res, g):
+    cen, exps, coefs = res
+    dcen = jnp.zeros_like(cen)
+    for cls in plan[1]:
+        rows, key = _class_rows_and_key(cls, omega)
+        dcen = _eri4c_class_center_vjp(*key)(dcen, cen, exps, coefs, *rows, g)
+    return dcen, jnp.zeros_like(exps), jnp.zeros_like(coefs)
+
+
+_eri4c_cart_center_vjp.defvjp(_eri4c_cart_center_vjp_fwd,
+                              _eri4c_cart_center_vjp_bwd)
+
+
+@lru_cache(maxsize=4096)
+def _eri4c_class_center_vjp(*key):
+    write = _eri4c_class_program(*key)
+
+    @jax.jit
+    def vjp(dcen, cen, exps, coefs, ra, rb, rc, rd, g):
+        _, pull = jax.vjp(
+            lambda c: write(jnp.zeros_like(g), c, exps, coefs, ra, rb, rc, rd),
+            cen)
+        return dcen + pull(g)[0]
+
+    return vjp
 
 
 _QUARTET_PERMS = (

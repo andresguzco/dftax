@@ -31,7 +31,7 @@ from dftax.energy.xc import XCFunctional
 from dftax.basis.loader import build_basis_data
 from dftax.grid import Becke, becke, becke_grid, becke_grid_size, points
 from dftax.integrals import overlap_matrix
-from dftax.integrals.eri4c import eri4c_matrix_bucketed, plan_eri4c
+from dftax.integrals.eri4c import _eri4c_matrix_for_forces, plan_eri4c
 from dftax.ks.energy import KS, System, _resolve_chunk, _resolve_df_chunk
 from dftax.ks.scf import KSResult
 from dftax.ks.terms import (
@@ -409,9 +409,9 @@ def forces(
             ks = eqx.tree_at(
                 lambda k: k.coulomb, ks,
                 ExactCoulomb(
-                    eri=eri4c_matrix_bucketed(basis, plan=eri_plan), hf_coeff=hf_ax,
+                    eri=_eri4c_matrix_for_forces(basis, eri_plan), hf_coeff=hf_ax,
                     eri_lr=(None if omega_x is None
-                            else eri4c_matrix_bucketed(basis, omega=omega_x, plan=eri_plan)),
+                            else _eri4c_matrix_for_forces(basis, eri_plan, omega_x)),
                     hf_coeff_lr=hf_lr,
                 ),
             )

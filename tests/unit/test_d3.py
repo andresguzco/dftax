@@ -155,3 +155,9 @@ def test_d3bj_atm_knob_adds_repulsive_term():
     e2 = float(_resolve_dispersion(d3bj(), PBE(), z)(jnp.asarray(ETHANOL_XYZ)))
     e3 = float(_resolve_dispersion(d3bj(atm=True), PBE(), z)(jnp.asarray(ETHANOL_XYZ)))
     assert abs((e3 - e2) - ATM_REFS["ethanol"]) < 1e-14
+
+
+def test_lc_wpbe_damping_is_the_published_set():
+    """simple-dftd3 assets/parameters.toml @ 84cb7cdd, [parameter.lcwpbe]
+    d3.bj (doi 10.1039/c0cp02984j): (s6, a1, s8, a2)."""
+    assert _d3_params("lc-wpbe") == (1.0, 0.3919, 1.8541, 5.0897)

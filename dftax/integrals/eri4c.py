@@ -34,6 +34,8 @@ build it for small systems / validation. For energies on larger systems use
 the fly and never materialise the full tensor (O(N²) memory).
 """
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache, partial
 
 import jax
@@ -608,12 +610,45 @@ def _class_rows_and_key(cls, omega):
     return rows, (la, lb, lc, ldl, anga, angb, angc, angd, nprims, omega, chunk)
 
 
+def _compile_workers():
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:
+        return max(1, os.cpu_count() or 1)
+
+
+_COMPILED = {}
+
+
+def _compiled(jobs):
+    keys = [(tag, tuple((np.shape(a), str(a.dtype)) for a in args))
+            for tag, _, args in jobs]
+    todo = {}
+    for key, (_, fn, args) in zip(keys, jobs):
+        if key not in _COMPILED and key not in todo:
+            todo[key] = fn.lower(*(jax.ShapeDtypeStruct(np.shape(a), a.dtype)
+                                   for a in args))
+    if todo:
+        with ThreadPoolExecutor(min(len(todo), _compile_workers())) as ex:
+            _COMPILED.update(zip(todo, ex.map(lambda low: low.compile(),
+                                              todo.values())))
+    return [_COMPILED[k] for k in keys]
+
+
+def _traced(*xs):
+    return any(isinstance(x, jax.core.Tracer) for x in xs)
+
+
 def _eri4c_cart(plan, omega, cen, exps, coefs):
     nao, classes = plan
     out = jnp.zeros((nao, nao, nao, nao), dtype=cen.dtype)
-    for cls in classes:
-        rows, key = _class_rows_and_key(cls, omega)
-        out = _eri4c_class_program(*key)(out, cen, exps, coefs, *rows)
+    jobs = [_class_rows_and_key(cls, omega) for cls in classes]
+    progs = [_eri4c_class_program(*key) for _, key in jobs]
+    if not _traced(cen, exps, coefs):
+        progs = _compiled([(("fwd", key), prog, (out, cen, exps, coefs, *rows))
+                           for (rows, key), prog in zip(jobs, progs)])
+    for (rows, _), prog in zip(jobs, progs):
+        out = prog(out, cen, exps, coefs, *rows)
     return out
 
 
@@ -629,9 +664,13 @@ def _eri4c_cart_center_vjp_fwd(plan, omega, cen, exps, coefs):
 def _eri4c_cart_center_vjp_bwd(plan, omega, res, g):
     cen, exps, coefs = res
     dcen = jnp.zeros_like(cen)
-    for cls in plan[1]:
-        rows, key = _class_rows_and_key(cls, omega)
-        dcen = _eri4c_class_center_vjp(*key)(dcen, cen, exps, coefs, *rows, g)
+    jobs = [_class_rows_and_key(cls, omega) for cls in plan[1]]
+    progs = [_eri4c_class_center_vjp(*key) for _, key in jobs]
+    if not _traced(cen, exps, coefs, g):
+        progs = _compiled([(("bwd", key), prog, (dcen, cen, exps, coefs, *rows, g))
+                           for (rows, key), prog in zip(jobs, progs)])
+    for (rows, _), prog in zip(jobs, progs):
+        dcen = prog(dcen, cen, exps, coefs, *rows, g)
     return dcen, jnp.zeros_like(exps), jnp.zeros_like(coefs)
 
 

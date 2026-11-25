@@ -164,48 +164,36 @@ def forces(
     coulomb: ExactSpec | DFSpec | None = None,
     dispersion=None,
 ) -> Float[Array, "n_atom 3"]:
-    """Nuclear forces ``F = -dE/dR`` (Ha/Bohr), shape ``(n_atom, 3)``.
+    """Nuclear forces ``F = -dE/dR`` (Ha/Bohr), ``(natom, 3)``.
+
+    The derivative of the energy at the converged density, by automatic
+    differentiation; it includes the grid weight and basis function
+    (Pulay) terms.
 
     Args:
-        mol: a native :class:`~dftax.system.molecule.Molecule` (the energy is
-            rebuilt as a function of the nuclear coordinates, so the basis and
-            grid must be reconstructible; PySCF ``Mole`` objects are not
-            supported here).
-        xc: the exchange-correlation functional.
-        result: the converged :class:`~dftax.ks.scf.KSResult` (from
-            :func:`~dftax.ks.scf.scf` or :func:`~dftax.ks.minimize.minimize`),
-            or the per-channel occupied coefficients directly. From a result
-            the frozen density is taken from ``result.P`` (see
-            :func:`_occupied_coefficients`), so the forces belong to exactly
-            the density the solver returned.
-        grid: Becke-grid quality (a :func:`~dftax.grid.becke` spec; match the
-            energy calculation; a ``chunk`` on the spec streams the XC grid
-            here too). Explicit point grids cannot follow the nuclei, so only
-            Becke specs are accepted.
-        coulomb: a :func:`~dftax.ks.terms.df` spec (default, matching the KS
-            default backend) or a plain materialized
-            :func:`~dftax.ks.terms.exact`. ``df(chunk="auto")`` materializes
-            the 3-center tensor when it fits the memory budget, packed over
-            the kept shell pairs with exchange at the frozen occupied
-            coefficients (:class:`~dftax.ks.terms.PackedDFForcesCoulomb`;
-            smeared hybrids keep the square tensor), and otherwise streams
-            the geometry gradient over shell-aligned
-            auxiliary slabs (RI-J by plain autodiff, RI-K at the frozen
-            occupied coefficients; see
-            :func:`dftax.ks.terms._streamed_df_rik_frozen`); an int ``chunk``
-            forces streaming, ``chunk=None`` forces the materialized tensor.
-            Range-separated hybrids stream both exchange channels (the LR
-            3-center rebuilt per slab). ``screen=`` (with an int ``chunk``)
-            streams too: the Schwarz shell-pair mask is resolved at the
-            reference geometry and baked into the slab plans. The streamed
-            path uses the cartesian auxiliary span, like the streamed SCF
-            backend. Smeared (fractionally occupied) hybrid results need the
-            materialized backend.
+        mol: a :class:`~dftax.system.molecule.Molecule` (a PySCF ``Mole`` is
+            not accepted), or a periodic :class:`~dftax.pbc.cell.Cell`.
+        xc: the exchange-correlation functional of the calculation.
+        result: the converged :class:`~dftax.ks.scf.KSResult`, or the
+            occupied orbital coefficients per spin channel.
+        grid: the :func:`~dftax.grid.becke` spec of the calculation (explicit
+            point grids cannot move with the nuclei); for a Cell, its
+            :func:`~dftax.pbc.build.uniform` grid.
+        coulomb: the backend of the calculation: :func:`~dftax.ks.terms.df`
+            (the default) or :func:`~dftax.ks.terms.exact` without
+            ``stream`` or ``screen``. ``df(chunk="auto")`` stores the 3-center
+            tensor when it fits and streams otherwise; ``chunk=None`` always
+            stores it, an int always streams. Hybrids with fractional
+            occupations (``smearing``) need ``chunk=None``. A Cell takes no
+            ``coulomb``.
+        dispersion: the :func:`~dftax.energy.d3.d3bj` or
+            :func:`~dftax.energy.d4.d4` spec of the calculation.
 
-    A periodic :class:`~dftax.pbc.Cell` takes the result of any periodic
-    engine (Gamma point, k-points, plane waves), the ``grid=uniform(...)``
-    of a Gaussian calculation and no ``coulomb=`` (see
-    :func:`dftax.pbc.derivatives.cell_forces`).
+    Example:
+        ```python
+        res = scf(KS(mol, PBE0(), grid=becke(75, 302)))
+        F = forces(mol, PBE0(), res, grid=becke(75, 302))
+        ```
     """
     from dftax.pbc.cell import Cell
 

@@ -12,11 +12,11 @@ to [Semantic Versioning](https://semver.org/).
   with PBE0 ran out of 32 GB of host memory while compiling it, and smaller
   cases recompiled about 250 per-class backward programs on every call. The
   4-center tensors are now built one shell-quartet class at a time, each class
-  one cached program with a cached backward pass. On water/def2-svp a repeat
-  call takes 1.0 s instead of 332 to 1,019 s, with peak host memory of
-  9.8 GB; the first call in a process still compiles about 520 programs
-  (~16 min, reused from the persistent compilation cache when it is enabled).
-  Forces match PySCF to 2e-9 Ha/Bohr.
+  one cached program with a cached backward pass, and an eager build compiles
+  these programs in parallel. On water/def2-svp with 6 CPUs the first call in
+  a process takes about 9 min with a peak host memory of 10.5 GB, and calls
+  from the third on take 0.8 s (the second also compiles the fused integral
+  build, about 45 s). Forces match PySCF to 2e-9 Ha/Bohr.
 
 ### Changed
 - **jax 0.12.0 and 0.12.1 are excluded.** Their GPU scatter kernel reads past

@@ -6,6 +6,18 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **`forces()` with `coulomb=exact()` for hybrids.** The gradient
+  differentiated the whole jitted integral build as one program; water/def2-svp
+  with PBE0 ran out of 32 GB of host memory while compiling it, and smaller
+  cases recompiled about 250 per-class backward programs on every call. The
+  4-center tensors are now built one shell-quartet class at a time, each class
+  one cached program with a cached backward pass. On water/def2-svp a repeat
+  call takes 1.0 s instead of 332 to 1,019 s, with peak host memory of
+  9.8 GB; the first call in a process still compiles about 520 programs
+  (~16 min, reused from the persistent compilation cache when it is enabled).
+  Forces match PySCF to 2e-9 Ha/Bohr.
+
 ## [0.10.0] - 2026-11-24
 
 ### Added

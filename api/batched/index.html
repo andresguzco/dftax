@@ -1650,22 +1650,341 @@ opt-in; <code>mesh=</code> shards the batch axis across devices.</p>
 
     <div class="doc doc-contents first">
 
-        <p>KS SCF over a batch of geometries <code>coords_batch</code> of shape
-<code>(B, n_atom, 3)</code> (Bohr). <code>mol</code> supplies the (fixed) atoms + basis; only
-the coordinates vary. <code>spin</code> follows the :class:<code>~dftax.ks.energy.KS</code>
-rule (None → infer from <code>mol</code>; explicit → polarized channels).</p>
-<p>With <code>forces=True</code> the result carries the analytic force tensor
-<code>(B, n_atom, 3)</code>; with <code>return_orbitals=True</code> it also carries
-<code>P</code>/<code>mo_coeff</code>/<code>mo_energy</code> (O(B·nspin·nao²) memory, off by
-default). <code>mesh=</code> shards the batch axis across a device mesh.</p>
-<p><code>guess</code> is a spec from :mod:<code>dftax.ks.guess</code> (<code>core</code>/<code>sad</code>/<code>minao</code>/
-<code>sap</code>); it is resolved once (SAD/MinAO atomic densities are
-geometry-independent) and applied per geometry inside the solve.</p>
-<p><code>coulomb</code> follows the KS default (density fitting): the auxiliary basis
-is built once as a template and re-centered per geometry. Value-based
-knobs are rejected here (Schwarz <code>screen</code> needs concrete integrals, but
-the per-geometry build is traced), and batched <code>forces=True</code> with a
-<em>streamed</em> hybrid RI-K is rejected (its vjp has no geometry gradients).</p>
+        <p>SCF over many geometries of the same molecule in one compiled call.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>mol</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.system.molecule.Molecule" href="../build/#dftax.system.molecule.Molecule">Molecule</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the molecule; gives the atoms, basis, charge and spin.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>coords_batch</code>
+            </td>
+            <td>
+                  <code><span title="builtins.Array">Array</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>nuclear coordinates (Bohr), <code>(B, natom, 3)</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>xc</code>
+            </td>
+            <td>
+                  <code>XCFunctional</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the exchange-correlation functional.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>spin</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>as for :class:<code>~dftax.ks.energy.KS</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>grid</code>
+            </td>
+            <td>
+                  <code><span title="dftax.grid.grid.Becke">Becke</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>a :func:<code>~dftax.grid.becke</code> spec (rebuilt per geometry).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>coulomb</code>
+            </td>
+            <td>
+                  <code><span title="dftax.ks.terms.ExactSpec">ExactSpec</span> | <span title="dftax.ks.terms.DFSpec">DFSpec</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>:func:<code>~dftax.ks.terms.df</code> (the default) or plain
+:func:<code>~dftax.ks.terms.exact</code>; <code>screen</code> is not supported.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>dispersion</code>
+            </td>
+            <td>
+                  <code>D3BJSpec | D4Spec | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>a :func:<code>~dftax.energy.d3.d3bj</code> or
+:func:<code>~dftax.energy.d4.d4</code> spec.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>forces</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>also compute the forces.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>return_orbitals</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>also return the orbitals and densities
+(<code>O(B·nao²)</code> memory).</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>mesh</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.ks.shard.MeshSpec" href="../multi-device/#dftax.ks.shard.MeshSpec">MeshSpec</a> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>a :func:<code>~dftax.ks.shard.mesh</code> spec to divide the batch over
+devices.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>max_iter</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>as for :func:<code>~dftax.ks.scf.scf</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>128</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>e_tol</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>as for :func:<code>~dftax.ks.scf.scf</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-08</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>d_tol</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>as for :func:<code>~dftax.ks.scf.scf</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>1e-06</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>diis_space</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>as for :func:<code>~dftax.ks.scf.scf</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>8</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>level_shift</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>as for :func:<code>~dftax.ks.scf.scf</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>0.0</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>guess</code>
+            </td>
+            <td>
+                  <code>GuessSpec | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>a guess spec from :mod:<code>dftax.ks.guess</code>; density arrays are
+not accepted.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+<td><code>A</code></td>            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.ks.batched.BatchedResult" href="#dftax.ks.batched.BatchedResult">BatchedResult</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>class:<code>BatchedResult</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>grid</code> is not a :func:<code>~dftax.grid.becke</code> spec,
+<code>exact</code> with <code>screen</code> or <code>stream</code>, or <code>forces=True</code> with a
+hybrid on the streamed density-fitting backend.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="TypeError">TypeError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>guess</code> is not a spec.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
 
 
     </div>
@@ -1687,12 +2006,115 @@ the per-geometry build is traced), and batched <code>forces=True</code> with a
 
 
 
-        <p>Per-geometry results of a batched KS solve (leading axis = batch <code>B</code>).</p>
-<p>A distinct type from the single-solve :class:<code>~dftax.ks.scf.KSResult</code>, so
-consumers written against per-geometry scalars (<code>forces</code>,
-<code>if res.converged</code>) reject a batch loudly instead of mis-slicing it.
-Orbital fields are <code>None</code> unless the run asked for them
-(<code>return_orbitals=True</code>).</p>
+        <p>Results of :func:<code>scf_batched</code>, one entry per geometry along the
+leading axis <code>B</code>.</p>
+
+
+<p><span class="doc-section-title">Attributes:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched.BatchedResult.e_tot">e_tot</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>total energies (Ha), <code>(B,)</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched.BatchedResult.e_elec">e_elec</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>electronic energies (Ha), <code>(B,)</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched.BatchedResult.converged">converged</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>whether each solve converged, <code>(B,)</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched.BatchedResult.n_iter">n_iter</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>iterations of each solve, <code>(B,)</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched.BatchedResult.nocc">nocc</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>occupied orbitals per spin channel.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched.BatchedResult.forces">forces</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>forces (Ha/Bohr), <code>(B, natom, 3)</code>, with <code>forces=True</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched.BatchedResult.mo_energy">mo_energy</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>orbital energies, <code>(B, nspin, nmo)</code>, with
+<code>return_orbitals=True</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched.BatchedResult.mo_coeff">mo_coeff</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>orbital coefficients, <code>(B, nspin, nao, nmo)</code>, with
+<code>return_orbitals=True</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched.BatchedResult.P">P</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>density matrices, <code>(B, nspin, nao, nao)</code>, with
+<code>return_orbitals=True</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
 
 
 
@@ -2061,8 +2483,9 @@ or in a non-aufbau state is re-solved alone by <code>gdm</code>
 
     <div class="doc doc-contents first">
 
-        <p>Minimize the KS energy of every system in <code>kss</code> at once. The
-tolerances and step controls are those of :func:<code>~dftax.ks.gdm.gdm</code>.</p>
+        <p>Direct minimization of many systems at once, padded to common sizes
+and solved in one compiled call.</p>
+<p>The tolerances and step controls are those of :func:<code>~dftax.ks.gdm.gdm</code>.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2085,10 +2508,9 @@ tolerances and step controls are those of :func:<code>~dftax.ks.gdm.gdm</code>.<
             </td>
             <td>
               <div class="doc-md-description">
-                <p>built :class:<code>~dftax.ks.energy.KS</code> objects (materialized DF and
-grid; see the module doc). Closed and open shells, and different
-functionals, may be mixed: they are solved as one batch per spin
-type and functional, results in input order.</p>
+                <p>the systems, each a :class:<code>~dftax.ks.energy.KS</code> built with
+<code>coulomb=df(chunk=None)</code> and <code>grid=becke(chunk=None)</code>. Closed
+and open shells and different functionals may be mixed.</p>
               </div>
             </td>
             <td>
@@ -2104,9 +2526,9 @@ type and functional, results in input order.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>the padded sizes, for a batch of one spin type; default the
-smallest that fits each group. Passing a fixed bucket lets batches
-of similar molecules share one compiled program.</p>
+                <p>fixed padded sizes for a batch of one spin type and one
+functional, so batches of similar molecules reuse one compiled
+program; <code>None</code> uses the smallest sizes that fit.</p>
               </div>
             </td>
             <td>
@@ -2122,8 +2544,7 @@ of similar molecules share one compiled program.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>a guess spec as for :func:<code>~dftax.ks.scf.scf</code>, applied per
-molecule before padding.</p>
+                <p>a guess, as for :func:<code>~dftax.ks.scf.scf</code>.</p>
               </div>
             </td>
             <td>
@@ -2139,16 +2560,70 @@ molecule before padding.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>re-solve one at a time, with :func:<code>~dftax.ks.gdm.gdm</code>,
-every system the batch leaves unconverged or converges to a
-non-aufbau state (the batched loop keeps its preconditioner in
-the guess frame and can settle in an excited stationary state on
-hard cases such as Cr2; :func:<code>~dftax.ks.gdm.gdm</code> re-diagonalizes
-at its resets). Marked in <code>BatchedGDMResult.fallback</code>.</p>
+                <p>re-solve alone, with :func:<code>~dftax.ks.gdm.gdm</code>, every
+system the batch leaves unconverged or in a state whose occupied
+orbitals are not the lowest ones.</p>
               </div>
             </td>
             <td>
                   <code>True</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+<td><code>A</code></td>            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.ks.batched_gdm.BatchedGDMResult" href="#dftax.ks.batched_gdm.BatchedGDMResult">BatchedGDMResult</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>class:<code>BatchedGDMResult</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="NotImplementedError">NotImplementedError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>a system with streamed density fitting or grid
+values, or with VV10.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>a <code>bucket</code> with mixed spin types or functionals.</p>
+              </div>
             </td>
           </tr>
       </tbody>
@@ -2174,11 +2649,72 @@ at its resets). Marked in <code>BatchedGDMResult.fallback</code>.</p>
 
 
 
-        <p>Per-system results of :func:<code>gdm_batched</code>, in input order.</p>
-<p><code>fallback</code> marks the systems the batch did not settle (not converged,
-or converged to a state whose occupied orbitals are not the lowest ones)
-and that were re-solved one at a time by :func:<code>~dftax.ks.gdm.gdm</code>; their
-<code>n_iter</code> is that solve's.</p>
+        <p>Results of :func:<code>gdm_batched</code>, in the order of the input systems.</p>
+
+
+<p><span class="doc-section-title">Attributes:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched_gdm.BatchedGDMResult.e_tot">e_tot</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>total energies (Ha).</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched_gdm.BatchedGDMResult.converged">converged</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>whether each system converged.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched_gdm.BatchedGDMResult.n_iter">n_iter</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>energy evaluations of each system.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched_gdm.BatchedGDMResult.P">P</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>density matrix of each system, <code>(nspin, nao, nao)</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.batched_gdm.BatchedGDMResult.fallback">fallback</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>whether each system was re-solved alone with
+:func:<code>~dftax.ks.gdm.gdm</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
 
 
 

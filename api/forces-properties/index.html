@@ -1710,7 +1710,10 @@ their own SCF from <code>(mol, xc)</code> and take a <code>grid=becke(...)</code
 
     <div class="doc doc-contents first">
 
-        <p>Nuclear forces <code>F = -dE/dR</code> (Ha/Bohr), shape <code>(n_atom, 3)</code>.</p>
+        <p>Nuclear forces <code>F = -dE/dR</code> (Ha/Bohr), <code>(natom, 3)</code>.</p>
+<p>The derivative of the energy at the converged density, by automatic
+differentiation; it includes the grid weight and basis function
+(Pulay) terms.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -1733,10 +1736,8 @@ their own SCF from <code>(mol, xc)</code> and take a <code>grid=becke(...)</code
             </td>
             <td>
               <div class="doc-md-description">
-                <p>a native :class:<code>~dftax.system.molecule.Molecule</code> (the energy is
-rebuilt as a function of the nuclear coordinates, so the basis and
-grid must be reconstructible; PySCF <code>Mole</code> objects are not
-supported here).</p>
+                <p>a :class:<code>~dftax.system.molecule.Molecule</code> (a PySCF <code>Mole</code> is
+not accepted), or a periodic :class:<code>~dftax.pbc.cell.Cell</code>.</p>
               </div>
             </td>
             <td>
@@ -1752,7 +1753,7 @@ supported here).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>the exchange-correlation functional.</p>
+                <p>the exchange-correlation functional of the calculation.</p>
               </div>
             </td>
             <td>
@@ -1768,12 +1769,8 @@ supported here).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>the converged :class:<code>~dftax.ks.scf.KSResult</code> (from
-:func:<code>~dftax.ks.scf.scf</code> or :func:<code>~dftax.ks.minimize.minimize</code>),
-or the per-channel occupied coefficients directly. From a result
-the frozen density is taken from <code>result.P</code> (see
-:func:<code>_occupied_coefficients</code>), so the forces belong to exactly
-the density the solver returned.</p>
+                <p>the converged :class:<code>~dftax.ks.scf.KSResult</code>, or the
+occupied orbital coefficients per spin channel.</p>
               </div>
             </td>
             <td>
@@ -1789,10 +1786,9 @@ the density the solver returned.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Becke-grid quality (a :func:<code>~dftax.grid.becke</code> spec; match the
-energy calculation; a <code>chunk</code> on the spec streams the XC grid
-here too). Explicit point grids cannot follow the nuclei, so only
-Becke specs are accepted.</p>
+                <p>the :func:<code>~dftax.grid.becke</code> spec of the calculation (explicit
+point grids cannot move with the nuclei); for a Cell, its
+:func:<code>~dftax.pbc.build.uniform</code> grid.</p>
               </div>
             </td>
             <td>
@@ -1808,25 +1804,30 @@ Becke specs are accepted.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>a :func:<code>~dftax.ks.terms.df</code> spec (default, matching the KS
-default backend) or a plain materialized
-:func:<code>~dftax.ks.terms.exact</code>. <code>df(chunk="auto")</code> materializes
-the 3-center tensor when it fits the memory budget, packed over
-the kept shell pairs with exchange at the frozen occupied
-coefficients (:class:<code>~dftax.ks.terms.PackedDFForcesCoulomb</code>;
-smeared hybrids keep the square tensor), and otherwise streams
-the geometry gradient over shell-aligned
-auxiliary slabs (RI-J by plain autodiff, RI-K at the frozen
-occupied coefficients; see
-:func:<code>dftax.ks.terms._streamed_df_rik_frozen</code>); an int <code>chunk</code>
-forces streaming, <code>chunk=None</code> forces the materialized tensor.
-Range-separated hybrids stream both exchange channels (the LR
-3-center rebuilt per slab). <code>screen=</code> (with an int <code>chunk</code>)
-streams too: the Schwarz shell-pair mask is resolved at the
-reference geometry and baked into the slab plans. The streamed
-path uses the cartesian auxiliary span, like the streamed SCF
-backend. Smeared (fractionally occupied) hybrid results need the
-materialized backend.</p>
+                <p>the backend of the calculation: :func:<code>~dftax.ks.terms.df</code>
+(the default) or :func:<code>~dftax.ks.terms.exact</code> without
+<code>stream</code> or <code>screen</code>. <code>df(chunk="auto")</code> stores the 3-center
+tensor when it fits and streams otherwise; <code>chunk=None</code> always
+stores it, an int always streams. Hybrids with fractional
+occupations (<code>smearing</code>) need <code>chunk=None</code>. A Cell takes no
+<code>coulomb</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>dispersion</code>
+            </td>
+            <td>
+                  <code>D3BJSpec | D4Spec | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the :func:<code>~dftax.energy.d3.d3bj</code> or
+:func:<code>~dftax.energy.d4.d4</code> spec of the calculation.</p>
               </div>
             </td>
             <td>
@@ -1835,11 +1836,14 @@ materialized backend.</p>
           </tr>
       </tbody>
     </table>
-        <p>A periodic :class:<code>~dftax.pbc.Cell</code> takes the result of any periodic
-engine (Gamma point, k-points, plane waves), the <code>grid=uniform(...)</code>
-of a Gaussian calculation and no <code>coulomb=</code> (see
-:func:<code>dftax.pbc.derivatives.cell_forces</code>).</p>
 
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE0</span><span class="p">(),</span> <span class="n">grid</span><span class="o">=</span><span class="n">becke</span><span class="p">(</span><span class="mi">75</span><span class="p">,</span> <span class="mi">302</span><span class="p">)))</span>
+<span class="n">F</span> <span class="o">=</span> <span class="n">forces</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE0</span><span class="p">(),</span> <span class="n">res</span><span class="p">,</span> <span class="n">grid</span><span class="o">=</span><span class="n">becke</span><span class="p">(</span><span class="mi">75</span><span class="p">,</span> <span class="mi">302</span><span class="p">))</span>
+</code></pre></div>
+</details>
 
     </div>
 
@@ -1900,13 +1904,12 @@ through the converged density, no field stepping. Returned symmetrized.</p>
     <div class="doc doc-contents first">
 
         <p>Nuclear Hessian <code>∂²E/∂R_A∂R_B</code> (Ha/Bohr², shape <code>(3N, 3N)</code>).</p>
-<p><code>method="fd"</code> (default): central finite difference of the analytic
-Pulay-free forces (6N SCF solves). <code>method="analytic"</code>: the exact
-orbital-rotation Schur complement
-<code>H = E_RR − E_Rκ (E_κκ)⁻¹ E_κR</code> at one tightly converged reference
-(3N CG response solves; RKS and UKS, materialized Coulomb backends;
-see :mod:<code>dftax.ks.hessian</code>). <code>step</code> applies to the FD path,
-<code>cg_iters</code> to the analytic response solves.</p>
+<p><code>method="fd"</code> (default): central finite differences of the analytic
+forces with displacement <code>step</code> (6N SCF solves). <code>method="analytic"</code>:
+coupled-perturbed response at one tightly converged density (3N
+conjugate-gradient solves of up to <code>cg_iters</code> iterations); restricted
+and unrestricted, with stored Coulomb integrals (<code>exact()</code> or
+<code>df(chunk=None)</code>).</p>
 
 
     </div>
@@ -1980,16 +1983,10 @@ at every ±Cartesian displacement (<code>O(N)</code> Hessians' worth of work).</
 
     <div class="doc doc-contents first">
 
-        <p>Alchemical gradient <code>∂E/∂Z_A</code> at fixed electron count (Ha per unit charge).</p>
-<p>Hellmann-Feynman: the converged density (every spin channel, held fixed via
-its solve-based projector) and the energy is differentiated w.r.t. the
-nuclear charges, which enter only the nuclear-attraction and
-nuclear-repulsion terms.</p>
-<p><code>coulomb=None</code> resolves to :func:<code>~dftax.ks.terms.exact</code> here (not the
-DF default) for backward compatibility, but <code>df(...)</code> works: the
-auxiliary basis is resolved eagerly against the molecule (its centers are
-geometry-fixed here; only the charges vary), so the raw-:class:<code>System</code>
-charge closure and the outer solve share the same fitted backend.</p>
+        <p>Alchemical gradient <code>∂E/∂Z_A</code> at fixed electron count (Ha per unit
+nuclear charge), from the converged density (Hellmann-Feynman).</p>
+<p><code>coulomb=None</code> uses :func:<code>~dftax.ks.terms.exact</code>, not the density
+fitting default; <code>df(...)</code> is also accepted.</p>
 
 
     </div>

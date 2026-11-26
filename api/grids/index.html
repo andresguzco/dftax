@@ -1666,15 +1666,6 @@ the streamed dense path at def2-svp, it is a ~10% <em>loss</em> at 23 atoms, 1.5
 
     <div class="doc doc-contents first">
 
-        <p>Radial quadratures, Bragg-Slater radii, and the fuzzy-Voronoi partition.</p>
-<p>Two radial schemes (Becke's and Treutler-Ahlrichs' M4) and the atomic radii
-are coordinate-independent constants; the fuzzy-Voronoi partition is written
-in JAX so it is differentiable w.r.t. nuclear coordinates (needed for analytic
-forces). Two cell functions: Becke's three-fold smoothing, and
-Stratmann-Scuseria-Frisch's polynomial, which is exactly 0 or 1 past
-|ν| = 0.64, so a point's weight needs only the cells its owner's does not
-decide.</p>
-
 
 
 
@@ -2114,36 +2105,6 @@ errors defaults to 'strict'.</p>
 
 
 
-<h5 id="dftax.grid.becke.__doc__" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="vm">__doc__</span></code>
-
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-module-attribute"><code>module-attribute</code></small>
-  </span>
-
-<a href="#dftax.grid.becke.__doc__" class="headerlink" title="Permanent link">¤</a></h5>
-
-
-    <div class="doc doc-contents ">
-
-        <p>str(object='') -&gt; str
-str(bytes_or_buffer[, encoding[, errors]]) -&gt; str</p>
-<p>Create a new string object from the given object. If encoding or
-errors is specified, then the object must expose a data buffer
-that will be decoded using the given encoding and error handler.
-Otherwise, returns the result of object.<strong>str</strong>() (if defined)
-or repr(object).
-encoding defaults to 'utf-8'.
-errors defaults to 'strict'.</p>
-
-    </div>
-
-</div>
-
-<div class="doc doc-object doc-attribute">
-
-
-
 <h5 id="dftax.grid.becke.__file__" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="vm">__file__</span></code>
 
@@ -2264,8 +2225,6 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Bragg-Slater radius (Bohr) for atomic number <code>Z</code>.</p>
-
 
     </div>
 
@@ -2281,8 +2240,6 @@ errors defaults to 'strict'.</p>
 
 
     <div class="doc doc-contents ">
-
-        <p>Treutler-Ahlrichs radial size parameter (Bohr) for atomic number <code>Z</code>.</p>
 
 
     </div>
@@ -2300,56 +2257,6 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Becke radial quadrature for <code>∫₀^∞ f(r) r² dr ≈ Σ w_i f(r_i)</code>.</p>
-<p>Second-kind Gauss-Chebyshev nodes mapped by <code>r = R (1+x)/(1-x)</code>.</p>
-
-
-<p><span class="doc-section-title">Parameters:</span></p>
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th>Description</th>
-          <th>Default</th>
-        </tr>
-      </thead>
-      <tbody>
-          <tr class="doc-section-item">
-            <td>
-                <code>n</code>
-            </td>
-            <td>
-                  <code><span title="int">int</span></code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>number of radial points.</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>scale</code>
-            </td>
-            <td>
-                  <code><span title="float">float</span></code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>radial size parameter <code>R</code> (Bohr).</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-      </tbody>
-    </table>
-
 
     </div>
 
@@ -2365,59 +2272,6 @@ errors defaults to 'strict'.</p>
 
 
     <div class="doc doc-contents ">
-
-        <p>Treutler-Ahlrichs M4 radial quadrature for <code>∫₀^∞ f(r) r² dr</code>.</p>
-<p>The same second-kind Gauss-Chebyshev nodes as :func:<code>becke_radial</code>, mapped
-by <code>r = (xi/ln 2) (1+x)^0.6 ln(2/(1-x))</code> (mapping M4 of JCP 102, 346
-(1995), with alpha = 0.6). It puts fewer points in the far tail than
-Becke's mapping, so a coarse grid spends more of them where the density is.</p>
-
-
-<p><span class="doc-section-title">Parameters:</span></p>
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th>Description</th>
-          <th>Default</th>
-        </tr>
-      </thead>
-      <tbody>
-          <tr class="doc-section-item">
-            <td>
-                <code>n</code>
-            </td>
-            <td>
-                  <code><span title="int">int</span></code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>number of radial points.</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>xi</code>
-            </td>
-            <td>
-                  <code><span title="float">float</span></code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>radial size parameter (Bohr), :func:<code>treutler_xi</code> per element.</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-      </tbody>
-    </table>
 
 
     </div>
@@ -2435,15 +2289,6 @@ Becke's mapping, so a coarse grid spends more of them where the density is.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Heteronuclear cell-size parameters <code>a_AB</code> (antisymmetric, natom²) from
-the atoms' Bragg radii <code>bragg</code> (natom,).</p>
-<p>Becke 1988, App. A: <code>a = u / (u² - 1)</code> with <code>u = (chi-1)/(chi+1)</code>.
-<code>"becke"</code> takes <code>chi</code> as the Bragg-radius ratio and bounds <code>|a|</code> by
-0.45; <code>"treutler"</code> takes the square root of that ratio (JCP 102, 346)
-and bounds <code>|a|</code> by 1/2, as PySCF does; <code>None</code> leaves the cells
-unadjusted. In jnp, so under <code>jit</code> the natom² matrix is computed from
-the natom radii rather than embedded as a constant.</p>
-
 
     </div>
 
@@ -2459,12 +2304,6 @@ the natom radii rather than embedded as a constant.</p>
 
 
     <div class="doc doc-contents ">
-
-        <p>SSF's <code>g(ν)</code> (CPL 257, 213 (1996), eq. 14): with <code>x = ν/a</code>,
-<code>(35x - 35x³ + 21x⁵ - 5x⁷)/16</code> inside <code>|ν| &lt; a = 0.64</code> and the sign
-of <code>ν</code> outside, exactly, so a cell's factor <code>(1 - g)/2</code> is exactly 0
-or 1 there with a zero derivative. Evaluated as PySCF's
-<code>gen_grid.stratmann</code>.</p>
 
 
     </div>
@@ -2482,15 +2321,6 @@ or 1 there with a zero derivative. Evaluated as PySCF's
 
     <div class="doc doc-contents ">
 
-        <p>Unnormalized cell functions <code>P_A(point)</code>, shape (n_grid, n_atom).</p>
-<p>Vectorized JAX (differentiable w.r.t. <code>coords</code>); includes the heteronuclear
-size adjustment selected by <code>radii_adjust</code> (see :func:<code>size_adjustment</code>)
-and the cell function selected by <code>partition</code> (<code>"becke"</code> or
-<code>"stratmann"</code>). Points are processed in budget-derived chunks so the
-per-point <code>(chunk, A, B)</code> transient stays bounded for large molecules
-(checkpointed, so the backward pass used by the forces rematerializes each
-chunk instead of storing them all).</p>
-
 
     </div>
 
@@ -2506,16 +2336,6 @@ chunk instead of storing them all).</p>
 
 
     <div class="doc doc-contents ">
-
-        <p>Weight factors <code>P_owner(p) / Σ_A P_A(p)</code> of points <code>p</code> owned
-by atoms <code>owners</code> (int, (n_grid,)), shape (n_grid,).</p>
-<p>One chunked pass over every atom's points with the pair quantities formed
-once, so a molecule's grid is one loop in the compiled program (a pass per
-atom was natom loops, each with its own natom² constants) and the
-(n_grid, n_atom) cell functions are never held. Differentiable w.r.t.
-<code>coords</code>, checkpointed like :func:<code>becke_partition</code>. With
-<code>partition="stratmann"</code> the normalization takes only the cells that can
-be nonzero (:func:<code>_ssf_weights</code>).</p>
 
 
     </div>
@@ -2541,9 +2361,70 @@ be nonzero (:func:<code>_ssf_weights</code>).</p>
 
     <div class="doc doc-contents first">
 
-        <p>An explicit quadrature grid <code>(coords, weights)</code> (e.g. from PySCF).</p>
-<p><code>chunk</code> streams the XC integral over grid chunks (see :func:<code>becke</code>);
-<code>"auto"</code> picks materialized vs streamed by memory budget.</p>
+        <p>An explicit quadrature grid, e.g. PySCF's.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>coords</code>
+            </td>
+            <td>
+                  <code>Array</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>points (Bohr), <code>(ngrid, 3)</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>weights</code>
+            </td>
+            <td>
+                  <code>Array</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>weights, <code>(ngrid,)</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>chunk</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span> | <span title="str">str</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>memory strategy of the XC integral, as in :func:<code>becke</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;auto&#39;</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
 
 
     </div>
@@ -2561,23 +2442,91 @@ be nonzero (:func:<code>_ssf_weights</code>).</p>
 
     <div class="doc doc-contents first">
 
-        <p>Build a molecular quadrature grid (points in Bohr, weights).</p>
-<p>Each atom contributes <code>n_radial</code> radial shells (mapped per <code>radial</code>)
-times a Lebedev angular grid whose order is pruned per radial region (see
-:func:<code>becke</code>); the per-atom grids are merged with a fuzzy-Voronoi
-partition, its cells sized per <code>radii_adjust</code> and shaped per
-<code>partition</code> (Becke's or Stratmann-Scuseria-Frisch's).</p>
-<p>Returns <code>(coords, weights)</code> as JAX arrays of shape <code>(n_grid, 3)</code> and
-<code>(n_grid,)</code>, differentiable w.r.t. <code>coords_bohr</code>. Shapes depend only
-on <code>symbols</code> and the spec constants, so this can run under <code>jit</code> /
-<code>vmap</code> with traced coordinates.</p>
-<p>Jitted, one compiled program per (symbols, spec) shape for every
-geometry. The partition is one chunked pass over all atoms' points
-(:func:<code>~dftax.grid.becke.becke_weights</code>), and each element's point
-template is one constant, so the program and its constants grow with the
-number of elements, not of atoms. Each point's owner and raw weight are
-looked up from its index in per-atom tables, so no constant is of the
-grid's size.</p>
+        <p>The points and weights of a :func:<code>becke</code> grid.</p>
+<p>Takes the arguments of :func:<code>becke</code> that define the grid. The array
+shapes depend only on <code>symbols</code> and the arguments, so the function
+works under <code>jit</code> and <code>vmap</code>, and the result is differentiable with
+respect to <code>coords_bohr</code>.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>symbols</code>
+            </td>
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>element symbols.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>coords_bohr</code>
+            </td>
+            <td>
+                  <code>Array</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>nuclear coordinates (Bohr), <code>(natom, 3)</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+<td><code>coords</code></td>            <td>
+                  <code>Array</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the points (Bohr), <code>(ngrid, 3)</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+<td><code>weights</code></td>            <td>
+                  <code>Array</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the weights, <code>(ngrid,)</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
 
 
     </div>
@@ -2595,11 +2544,8 @@ grid's size.</p>
 
     <div class="doc doc-contents first">
 
-        <p>Number of grid points :func:<code>becke_grid</code> will emit (static per spec).</p>
-<p>Lets callers that build the grid under <code>jit</code>/<code>vmap</code> (forces, the
-batched solver) make eager, shape-dependent decisions, e.g. resolving the
-<code>chunk="auto"</code> streaming policy. The partition changes the weights
-only, never the points.</p>
+        <p>Number of points :func:<code>becke_grid</code> returns for these elements and
+arguments; it does not depend on the geometry.</p>
 
 
     </div>

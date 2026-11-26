@@ -1649,12 +1649,10 @@ for the tour.</p>
 
 
 
-        <p>Spin-stacked KS total energy as a differentiable function of <code>P</code>.</p>
-<p>Built directly from a system + functional + backend/grid values (see the
-module docstring). <code>P</code> has shape <code>(nspin, nao, nao)</code> with
-<code>nspin = len(self.nocc)</code>: one doubly-occupied channel (<code>P[0] = 2ΣCCᵀ</code>)
-for a closed shell, two unit-occupation channels (<code>P[σ] = ΣC_σC_σᵀ</code>) for
-a spin-polarized system.</p>
+        <p>The Kohn-Sham total energy as a differentiable function of the density
+matrix.</p>
+<p><code>P</code> has shape <code>(nspin, nao, nao)</code>: one channel holding the total
+density for a closed shell, α and β channels for a spin-polarized system.</p>
 
 
 
@@ -2008,7 +2006,8 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
             <td>
               <div class="doc-md-description">
                 <p>a :class:<code>~dftax.system.molecule.Molecule</code>, a PySCF
-<code>Mole</code> (setup only), or a raw :class:<code>System</code>.</p>
+<code>Mole</code>, a :class:<code>System</code>, or a periodic
+:class:<code>~dftax.pbc.cell.Cell</code>.</p>
               </div>
             </td>
             <td>
@@ -2024,7 +2023,7 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>the exchange-correlation functional (e.g. <code>PBE()</code>).</p>
+                <p>the exchange-correlation functional, e.g. <code>PBE()</code>.</p>
               </div>
             </td>
             <td>
@@ -2040,10 +2039,10 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>quadrature choice, a :func:<code>~dftax.grid.becke</code> spec
-(default), an explicit <code>(coords, weights)</code> tuple, or a
-:func:<code>~dftax.grid.points</code> spec (explicit grid + streaming
-chunk).</p>
+                <p>the quadrature: a :func:<code>~dftax.grid.becke</code> spec (the
+default), a <code>(coords, weights)</code> tuple, or a
+:func:<code>~dftax.grid.points</code> spec. A Cell takes
+:func:<code>~dftax.pbc.build.uniform</code>.</p>
               </div>
             </td>
             <td>
@@ -2059,10 +2058,9 @@ chunk).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Coulomb/exchange backend, :func:<code>~dftax.ks.terms.df</code>
-(default: <code>def2-universal-jkfit</code>, auto materialize/stream)
-or :func:<code>~dftax.ks.terms.exact</code> (O(N⁴); also the raw-System
-fallback).</p>
+                <p>:func:<code>~dftax.ks.terms.df</code> (the default) or
+:func:<code>~dftax.ks.terms.exact</code>; a :class:<code>System</code> defaults to
+<code>exact()</code>.</p>
               </div>
             </td>
             <td>
@@ -2078,9 +2076,9 @@ fallback).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p><code>None</code> infers from the system (closed shell → restricted);
-an explicit <code>spin</code> (= 2S, including 0) requests
-spin-polarized α/β channels.</p>
+                <p>number of unpaired electrons, <code>2S</code>. <code>None</code> takes the
+system's value and solves a closed shell restricted; an
+explicit value, 0 included, solves spin-polarized.</p>
               </div>
             </td>
             <td>
@@ -2096,10 +2094,9 @@ spin-polarized α/β channels.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>a :func:<code>~dftax.ks.shard.mesh</code> spec to shard the calculation
-across a device mesh (the XC quadrature and the DF 3-center
-tensor; the dense nao² matrices stay replicated).
-<code>None</code> = single device.</p>
+                <p>a :func:<code>~dftax.ks.shard.mesh</code> spec to divide the
+quadrature and the density-fitting tensor over devices;
+<code>None</code> runs on one device.</p>
               </div>
             </td>
             <td>
@@ -2115,10 +2112,8 @@ tensor; the dense nao² matrices stay replicated).
             </td>
             <td>
               <div class="doc-md-description">
-                <p>a :func:<code>~dftax.energy.d3.d3bj</code> spec adds the two-body
-D3(BJ) correction to <code>total()</code> (P-independent, so the SCF is
-untouched; forces get its gradient by autodiff). Parameters
-resolve from the functional's name unless given explicitly.</p>
+                <p>a :func:<code>~dftax.energy.d3.d3bj</code> or
+:func:<code>~dftax.energy.d4.d4</code> spec, added to the total energy.</p>
               </div>
             </td>
             <td>
@@ -2129,11 +2124,43 @@ resolve from the functional's name unless given explicitly.</p>
     </table>
 
 
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>spin</code> inconsistent with the number of electrons.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="NotImplementedError">NotImplementedError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>coulomb</code>, <code>mesh</code> or <code>dispersion</code> with
+a Cell.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
 <details class="example" open>
   <summary>Example</summary>
-  <div class="highlight"><pre><span></span><code><span class="n">ks</span> <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE0</span><span class="p">(),</span>
-        <span class="n">grid</span><span class="o">=</span><span class="n">becke</span><span class="p">(</span><span class="mi">75</span><span class="p">,</span> <span class="mi">302</span><span class="p">),</span>
-        <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="s2">"def2-universal-jkfit"</span><span class="p">))</span>
+  <div class="highlight"><pre><span></span><code><span class="n">ks</span> <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE0</span><span class="p">(),</span> <span class="n">grid</span><span class="o">=</span><span class="n">becke</span><span class="p">(</span><span class="mi">75</span><span class="p">,</span> <span class="mi">302</span><span class="p">),</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="n">chunk</span><span class="o">=</span><span class="kc">None</span><span class="p">))</span>
 </code></pre></div>
 </details>
 
@@ -2206,18 +2233,79 @@ resolve from the functional's name unless given explicitly.</p>
 
     <div class="doc doc-contents ">
 
-        <p><code>(E_total, F)</code> for one density, sharing the work between them.</p>
-<p>Computing the two separately walks the quadrature twice, because the
-streaming backends checkpoint their grid blocks and <code>grad</code>
-rematerializes them. Each term is therefore asked for both at once
-(:meth:<code>~dftax.ks.terms.XCTerm.energy_and_potential</code>,
-:meth:<code>~dftax.ks.terms.CoulombTerm.energy_and_potential</code>).</p>
-<p><code>idempotent</code> says whether <code>P</code> is an integer-occupation projector:
-true of an aufbau density, false under Fermi smearing. The Coulomb
-term falls back to reverse mode when told otherwise.</p>
-<p>The result is the same <code>(total(P), sym(∂E/∂P))</code> as the two separate
-calls, which <code>total</code> / <code>electronic</code> still provide for every other
-consumer (forces, the Hessian, Newton, direct minimization).</p>
+        <p>Total energy and Fock matrix <code>sym(∂E/∂P)</code> for one density,
+computed together at about the cost of one.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>P</code>
+            </td>
+            <td>
+                  <code><span title="builtins.Float">Float</span>[<span title="builtins.Array">Array</span>, &#39;nspin nao nao&#39;]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>density matrix, <code>(nspin, nao, nao)</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>idempotent</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>whether <code>P</code> has integer occupations (<code>False</code>
+under smearing).</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="tuple">tuple</span>[<span title="builtins.Shaped[Array, '']">Scalar</span>, <span title="builtins.Float">Float</span>[<span title="builtins.Array">Array</span>, &#39;nspin nao nao&#39;]]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>(E, F)</code>, with <code>F</code> of the shape of <code>P</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
 
 
     </div>
@@ -2235,16 +2323,90 @@ consumer (forces, the Hessian, Newton, direct minimization).</p>
 
     <div class="doc doc-contents ">
 
-        <p><code>(E_total, ∂E/∂C_σ)</code> for the occupied orbitals of each channel.</p>
-<p>The density is <code>P_σ = C_σ diag(w_σ) C_σᵀ</code> with the occupations of
-:meth:<code>occupations</code> (<code>2</code> closed shell, <code>1</code> per spin channel), so
-<code>∂E/∂C_σ = 2 F_σ C_σ diag(w_σ)</code> with <code>F = sym(∂E/∂P)</code>.
-The one-electron and two-electron parts take that route, through
-their (cheap) potentials; the XC part, almost all of an iteration,
-comes straight from the orbitals
-(:meth:<code>~dftax.ks.terms.XCTerm.energy_and_grad_orbitals</code>), which never
-forms the <code>nao x nao</code> XC potential. What a direct minimizer
-(:func:<code>~dftax.ks.gdm.gdm</code>) needs, and nothing more.</p>
+        <p>Total energy and its gradient with respect to the occupied
+orbitals.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>Cs</code>
+            </td>
+            <td>
+                  <code><span title="tuple">tuple</span>[<span title="builtins.Array">Array</span>, ...]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>occupied orbital coefficients per spin channel, each
+<code>(nao, nocc_σ)</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>idempotent</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>as in :meth:<code>energy_and_fock</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+<td><code>E</code></td>            <td>
+                  <code><span title="builtins.Array">Array</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the total energy (Hartree).</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+<td><code>grads</code></td>            <td>
+                  <code><span title="tuple">tuple</span>[<span title="builtins.Array">Array</span>, ...]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>grads[σ] = ∂E/∂C_σ = 2 F_σ C_σ diag(w_σ)</code>, with
+<code>w</code> from :meth:<code>occupations</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
 
 
     </div>
@@ -2262,9 +2424,8 @@ forms the <code>nao x nao</code> XC potential. What a direct minimizer
 
     <div class="doc doc-contents ">
 
-        <p>Occupation of each channel's occupied orbitals: 2 each for a
-closed shell, 1 each per spin channel. A padded system
-(:mod:<code>dftax.ks.batched_gdm</code>) gives its padding slots 0.</p>
+        <p>Occupation numbers of the occupied orbitals per channel: 2 for a
+closed shell, 1 per spin channel.</p>
 
 
     </div>
@@ -2308,7 +2469,9 @@ closed shell, 1 each per spin channel. A padded system
 
     <div class="doc doc-contents first">
 
-        <p>D3(BJ) dispersion correction (two-body, optionally with ATM).</p>
+        <p>Grimme's D3 dispersion correction with Becke-Johnson damping (S.
+Grimme, S. Ehrlich and L. Goerigk, J. Comput. Chem. 32, 1456 (2011)).</p>
+<p>Pass the result as <code>KS(..., dispersion=d3bj())</code>.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2331,9 +2494,8 @@ closed shell, 1 each per spin channel. A padded system
             </td>
             <td>
               <div class="doc-md-description">
-                <p>damping-parameter set name (<code>"pbe"</code>, <code>"pbe0"</code>,
-<code>"b3lyp"</code>, <code>"cam-b3lyp"</code>, <code>"r2scan"</code>); <code>None</code> resolves it
-from the functional the KS is built with.</p>
+                <p>name of the damping-parameter set, e.g. <code>"pbe0"</code>; <code>None</code>
+takes the set of the functional the KS is built with.</p>
               </div>
             </td>
             <td>
@@ -2349,10 +2511,7 @@ from the functional the KS is built with.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>add the Axilrod-Teller-Muto three-body term (<code>s9 = 1</code>); off by
-default, matching the common two-body D3(BJ) convention. The term
-is repulsive, O(nat³), and independent of the BJ damping
-parameters (it uses the pairwise van-der-Waals radii).</p>
+                <p>add the Axilrod-Teller-Muto three-body term (<code>s9 = 1</code>).</p>
               </div>
             </td>
             <td>
@@ -2378,7 +2537,9 @@ parameters (it uses the pairwise van-der-Waals radii).</p>
 
     <div class="doc doc-contents first">
 
-        <p>Charge-dependent D4 dispersion correction.</p>
+        <p>Grimme's charge-dependent D4 dispersion correction (E. Caldeweyher et
+al., J. Chem. Phys. 150, 154122 (2019)).</p>
+<p>Pass the result as <code>KS(..., dispersion=d4())</code>.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2401,9 +2562,8 @@ parameters (it uses the pairwise van-der-Waals radii).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>damping-parameter set name (<code>"pbe"</code>, <code>"pbe0"</code>,
-<code>"b3lyp"</code>, <code>"cam-b3lyp"</code>, <code>"r2scan"</code>); <code>None</code> resolves it
-from the functional the KS is built with.</p>
+                <p>name of the damping-parameter set, e.g. <code>"pbe0"</code>; <code>None</code>
+takes the set of the functional the KS is built with.</p>
               </div>
             </td>
             <td>
@@ -2419,8 +2579,7 @@ from the functional the KS is built with.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>add the Axilrod-Teller-Muto three-body term on the D4
-coefficients (<code>s9 = 1</code>); off by default.</p>
+                <p>add the Axilrod-Teller-Muto three-body term (<code>s9 = 1</code>).</p>
               </div>
             </td>
             <td>
@@ -2761,12 +2920,77 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 
 
 
-        <p>A raw, already-built system: basis + geometry + electron/spin counts.</p>
-<p>The low-level :class:<code>KS</code> input for callers that construct the basis
-themselves, e.g. forces, which rebuild the energy as a function of traced
-nuclear coordinates via a <code>tree_at</code>-recentered basis template. <code>spin</code>
-(= 2S) is the system's default spin; the :class:<code>KS</code> builder's <code>spin</code>
-argument overrides it.</p>
+        <p>A system given by its built basis, for callers that construct the
+basis themselves.</p>
+
+
+<p><span class="doc-section-title">Attributes:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.energy.System.basis">basis</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the orbital basis.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.energy.System.coords">coords</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>nuclear coordinates (Bohr), <code>(natom, 3)</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.energy.System.charges">charges</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>nuclear charges, <code>(natom,)</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.energy.System.nelec">nelec</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>number of electrons.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><a class="autorefs autorefs-internal" title="            spin
+
+  
+      class-attribute
+   (dftax.ks.energy.System.spin)" href="#dftax.ks.energy.System.spin">spin</a></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>number of unpaired electrons, <code>2S</code>; the <code>spin</code> argument of
+:class:<code>KS</code> overrides it.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
 
 
 

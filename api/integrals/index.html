@@ -1700,11 +1700,8 @@ never call these directly.</p>
 
     <div class="doc doc-contents first">
 
-        <p>Compute the overlap matrix S_μν in the AO basis.</p>
-<p>Pure JAX, fully differentiable w.r.t. basis.centers. Delegates to the
-shell-class-bucketed engine (see :mod:<code>dftax.integrals.eri3c_bucketed</code>);
-<code>plan</code> is a static :func:<code>~dftax.integrals.eri3c_bucketed.plan_pairs</code>
-skeleton, derived here when the basis metadata is concrete.</p>
+        <p>Overlap matrix <code>S_μν = ⟨χ_μ|χ_ν⟩</code>.</p>
+<p>Differentiable with respect to <code>basis.centers</code>.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -1727,191 +1724,8 @@ skeleton, derived here when the basis metadata is concrete.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>BasisData from extract_basis_data(mol).</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-      </tbody>
-    </table>
-
-
-    <p><span class="doc-section-title">Returns:</span></p>
-    <table>
-      <thead>
-        <tr>
-          <th>Type</th>
-          <th>Description</th>
-        </tr>
-      </thead>
-      <tbody>
-          <tr class="doc-section-item">
-            <td>
-                  <code><span title="builtins.Float">Float</span>[<span title="builtins.Array">Array</span>, &#39;nao nao&#39;]</code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>S matrix, shape (nao, nao) where nao = nao_cart (or nao_sph if cart2sph).</p>
-              </div>
-            </td>
-          </tr>
-      </tbody>
-    </table>
-
-
-    </div>
-
-</div>
-
-<div class="doc doc-object doc-function">
-
-
-<h4 id="dftax.integrals.kinetic_matrix" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">kinetic_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">plan</span><span class="p">:</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'nao nao'</span><span class="p">]</span></code>
-
-<a href="#dftax.integrals.kinetic_matrix" class="headerlink" title="Permanent link">¤</a></h4>
-
-
-    <div class="doc doc-contents first">
-
-        <p>Compute the kinetic energy matrix T_μν in the AO basis.</p>
-<p>Pure JAX, fully differentiable w.r.t. basis.centers. Delegates to the
-shell-class-bucketed engine (see :mod:<code>dftax.integrals.eri3c_bucketed</code>).</p>
-
-
-<p><span class="doc-section-title">Parameters:</span></p>
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th>Description</th>
-          <th>Default</th>
-        </tr>
-      </thead>
-      <tbody>
-          <tr class="doc-section-item">
-            <td>
-                <code>basis</code>
-            </td>
-            <td>
-                  <code><a class="autorefs autorefs-internal" title="            dftax.energy.gto.BasisData" href="#dftax.energy.gto.BasisData">BasisData</a></code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>BasisData from extract_basis_data(mol).</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-      </tbody>
-    </table>
-
-
-    <p><span class="doc-section-title">Returns:</span></p>
-    <table>
-      <thead>
-        <tr>
-          <th>Type</th>
-          <th>Description</th>
-        </tr>
-      </thead>
-      <tbody>
-          <tr class="doc-section-item">
-            <td>
-                  <code><span title="builtins.Float">Float</span>[<span title="builtins.Array">Array</span>, &#39;nao nao&#39;]</code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>T matrix, shape (nao, nao).</p>
-              </div>
-            </td>
-          </tr>
-      </tbody>
-    </table>
-
-
-    </div>
-
-</div>
-
-<div class="doc doc-object doc-function">
-
-
-<h4 id="dftax.integrals.nuclear_attraction_matrix" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">nuclear_attraction_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">atom_coords</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'n_atoms 3'</span><span class="p">],</span> <span class="n">atom_charges</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">n_atoms</span><span class="p">],</span> <span class="n">plan</span><span class="p">:</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'nao nao'</span><span class="p">]</span></code>
-
-<a href="#dftax.integrals.nuclear_attraction_matrix" class="headerlink" title="Permanent link">¤</a></h4>
-
-
-    <div class="doc doc-contents first">
-
-        <p>Compute nuclear attraction matrix V_μν in the AO basis.</p>
-<p>V_μν = -Σ_A Z_A ∫ χ_μ(r) · 1/|r-R_A| · χ_ν(r) dr</p>
-<p>Pure JAX, fully differentiable w.r.t. basis.centers and atom_coords.
-Delegates to the shell-class-bucketed engine (see
-:mod:<code>dftax.integrals.eri3c_bucketed</code>): the flat per-element build held
-every (pair, nucleus) Hermite table at molecule-padded sizes at once and
-owned the KS build's memory peak (27.5 GiB for ethanol/def2-svp).</p>
-
-
-<p><span class="doc-section-title">Parameters:</span></p>
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th>Description</th>
-          <th>Default</th>
-        </tr>
-      </thead>
-      <tbody>
-          <tr class="doc-section-item">
-            <td>
-                <code>basis</code>
-            </td>
-            <td>
-                  <code><a class="autorefs autorefs-internal" title="            dftax.energy.gto.BasisData" href="#dftax.energy.gto.BasisData">BasisData</a></code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>BasisData from extract_basis_data(mol).</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>atom_coords</code>
-            </td>
-            <td>
-                  <code><span title="builtins.Float">Float</span>[<span title="builtins.Array">Array</span>, &#39;n_atoms 3&#39;]</code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Nuclear positions, shape (n_atoms, 3).</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>atom_charges</code>
-            </td>
-            <td>
-                  <code><span title="builtins.Float">Float</span>[<span title="builtins.Array">Array</span>, n_atoms]</code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Nuclear charges, shape (n_atoms,).</p>
+                <p>the orbital basis, from
+:func:<code>~dftax.energy.gto.extract_basis_data</code>.</p>
               </div>
             </td>
             <td>
@@ -1927,10 +1741,10 @@ owned the KS build's memory peak (27.5 GiB for ethanol/def2-svp).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>static pair skeleton from
-:func:<code>~dftax.integrals.eri3c_bucketed.plan_pairs</code>; required when
-this build is traced with a fully-traced <code>BasisData</code>, derived
-here otherwise.</p>
+                <p>the shell-pair plan from
+:func:<code>~dftax.integrals.eri3c_bucketed.plan_pairs</code>; needed only
+when <code>basis</code> is traced, as under <code>jit</code> with the basis as an
+argument.</p>
               </div>
             </td>
             <td>
@@ -1956,7 +1770,226 @@ here otherwise.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>V matrix, shape (nao, nao).</p>
+                <p><code>(nao, nao)</code> array, spherical when the basis is.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.integrals.kinetic_matrix" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">kinetic_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">plan</span><span class="p">:</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'nao nao'</span><span class="p">]</span></code>
+
+<a href="#dftax.integrals.kinetic_matrix" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Kinetic energy matrix <code>T_μν = -½ ⟨χ_μ|∇²|χ_ν⟩</code>.</p>
+<p>Differentiable with respect to <code>basis.centers</code>.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>basis</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.energy.gto.BasisData" href="#dftax.energy.gto.BasisData">BasisData</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the orbital basis, from
+:func:<code>~dftax.energy.gto.extract_basis_data</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>plan</code>
+            </td>
+            <td>
+                  <code><span title="tuple">tuple</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the shell-pair plan from
+:func:<code>~dftax.integrals.eri3c_bucketed.plan_pairs</code>; needed only
+when <code>basis</code> is traced, as under <code>jit</code> with the basis as an
+argument.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="builtins.Float">Float</span>[<span title="builtins.Array">Array</span>, &#39;nao nao&#39;]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>(nao, nao)</code> array, spherical when the basis is.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="dftax.integrals.nuclear_attraction_matrix" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">dftax</span><span class="o">.</span><span class="n">integrals</span><span class="o">.</span><span class="n">nuclear_attraction_matrix</span><span class="p">(</span><span class="n">basis</span><span class="p">:</span> <span class="n">BasisData</span><span class="p">,</span> <span class="n">atom_coords</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'n_atoms 3'</span><span class="p">],</span> <span class="n">atom_charges</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">n_atoms</span><span class="p">],</span> <span class="n">plan</span><span class="p">:</span> <span class="nb">tuple</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">'nao nao'</span><span class="p">]</span></code>
+
+<a href="#dftax.integrals.nuclear_attraction_matrix" class="headerlink" title="Permanent link">¤</a></h4>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Nuclear attraction matrix
+<code>V_μν = -Σ_A Z_A ∫ χ_μ(r) χ_ν(r) / |r - R_A| dr</code>.</p>
+<p>Differentiable with respect to <code>basis.centers</code> and <code>atom_coords</code>.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>basis</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.energy.gto.BasisData" href="#dftax.energy.gto.BasisData">BasisData</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the orbital basis, from
+:func:<code>~dftax.energy.gto.extract_basis_data</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>atom_coords</code>
+            </td>
+            <td>
+                  <code><span title="builtins.Float">Float</span>[<span title="builtins.Array">Array</span>, &#39;n_atoms 3&#39;]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>nuclear coordinates (Bohr), <code>(natom, 3)</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>atom_charges</code>
+            </td>
+            <td>
+                  <code><span title="builtins.Float">Float</span>[<span title="builtins.Array">Array</span>, n_atoms]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>nuclear charges, <code>(natom,)</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>plan</code>
+            </td>
+            <td>
+                  <code><span title="tuple">tuple</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the shell-pair plan from
+:func:<code>~dftax.integrals.eri3c_bucketed.plan_pairs</code>; needed only
+when <code>basis</code> is traced, as under <code>jit</code> with the basis as an
+argument.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="builtins.Float">Float</span>[<span title="builtins.Array">Array</span>, &#39;nao nao&#39;]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>(nao, nao)</code> array.</p>
               </div>
             </td>
           </tr>
@@ -1979,9 +2012,6 @@ here otherwise.</p>
 <a href="#dftax.integrals.nuclear_repulsion" class="headerlink" title="Permanent link">¤</a></h4>
 
     <div class="doc doc-contents first">
-
-        <p>Nuclear repulsion energy V_nn = Σ_{A&lt;B} Z_A Z_B / |R_A - R_B|.</p>
-<p>Trivially differentiable w.r.t. nuclear coordinates via JAX autodiff.</p>
 
 
 
@@ -2012,36 +2042,6 @@ here otherwise.</p>
   </span>
 
 <a href="#dftax.integrals.nuclear_repulsion.__cached__" class="headerlink" title="Permanent link">¤</a></h5>
-
-
-    <div class="doc doc-contents ">
-
-        <p>str(object='') -&gt; str
-str(bytes_or_buffer[, encoding[, errors]]) -&gt; str</p>
-<p>Create a new string object from the given object. If encoding or
-errors is specified, then the object must expose a data buffer
-that will be decoded using the given encoding and error handler.
-Otherwise, returns the result of object.<strong>str</strong>() (if defined)
-or repr(object).
-encoding defaults to 'utf-8'.
-errors defaults to 'strict'.</p>
-
-    </div>
-
-</div>
-
-<div class="doc doc-object doc-attribute">
-
-
-
-<h5 id="dftax.integrals.nuclear_repulsion.__doc__" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="vm">__doc__</span></code>
-
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-module-attribute"><code>module-attribute</code></small>
-  </span>
-
-<a href="#dftax.integrals.nuclear_repulsion.__doc__" class="headerlink" title="Permanent link">¤</a></h5>
 
 
     <div class="doc doc-contents ">
@@ -2260,9 +2260,9 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents first">
 
-        <p>Compute 2-center Coulomb matrix J_{PQ} = (P|Q).</p>
-<p>Pure JAX, fully differentiable w.r.t. aux_basis.centers. Delegates to the
-shell-class-bucketed engine (see :mod:<code>dftax.integrals.eri3c_bucketed</code>).</p>
+        <p>2-center electron repulsion integrals <code>(P|Q)</code>, the density-fitting
+metric.</p>
+<p>Differentiable with respect to <code>aux_basis.centers</code>.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2285,7 +2285,7 @@ shell-class-bucketed engine (see :mod:<code>dftax.integrals.eri3c_bucketed</code
             </td>
             <td>
               <div class="doc-md-description">
-                <p>BasisData for auxiliary basis (from extract_basis_data(auxmol)).</p>
+                <p>the auxiliary basis.</p>
               </div>
             </td>
             <td>
@@ -2301,7 +2301,8 @@ shell-class-bucketed engine (see :mod:<code>dftax.integrals.eri3c_bucketed</code
             </td>
             <td>
               <div class="doc-md-description">
-                <p>None for the Coulomb kernel, a float for the long-range one.</p>
+                <p><code>None</code> for the Coulomb operator; a float for the
+long-range operator <code>erf(ω r₁₂)/r₁₂</code>.</p>
               </div>
             </td>
             <td>
@@ -2317,9 +2318,10 @@ shell-class-bucketed engine (see :mod:<code>dftax.integrals.eri3c_bucketed</code
             </td>
             <td>
               <div class="doc-md-description">
-                <p>static pair skeleton from
-:func:<code>~dftax.integrals.eri3c_bucketed.plan_pairs</code>; required when
-traced with a fully-traced <code>BasisData</code>, derived here otherwise.</p>
+                <p>the shell-pair plan from
+:func:<code>~dftax.integrals.eri3c_bucketed.plan_pairs</code>; needed only
+when <code>aux_basis</code> is traced, as under <code>jit</code> with the basis as an
+argument.</p>
               </div>
             </td>
             <td>
@@ -2345,7 +2347,7 @@ traced with a fully-traced <code>BasisData</code>, derived here otherwise.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>J matrix, shape (n_aux, n_aux) in spherical harmonics.</p>
+                <p><code>(naux, naux)</code> array.</p>
               </div>
             </td>
           </tr>
@@ -2368,13 +2370,9 @@ traced with a fully-traced <code>BasisData</code>, derived here otherwise.</p>
 
     <div class="doc doc-contents first">
 
-        <p>Compute 3-center ERI tensor (μν|P) in the AO basis.</p>
-<p>Pure JAX, fully differentiable w.r.t. basis.centers and aux_basis.centers.
-Delegates to the shell-class-bucketed engine
-(:func:<code>~dftax.integrals.eri3c_bucketed.eri3c_matrix_bucketed</code>): one
-right-sized kernel per (l_a, l_b, l_aux) class instead of a
-molecule-padded per-element build (50x on ethanol/def2-svp, sub-GiB
-peak, identical to machine precision).</p>
+        <p>3-center electron repulsion integrals <code>(μν|P)</code>.</p>
+<p>Differentiable with respect to <code>basis.centers</code> and
+<code>aux_basis.centers</code>.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2397,7 +2395,8 @@ peak, identical to machine precision).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>BasisData for primary AO basis (from extract_basis_data(mol)).</p>
+                <p>the orbital basis, from
+:func:<code>~dftax.energy.gto.extract_basis_data</code>.</p>
               </div>
             </td>
             <td>
@@ -2413,7 +2412,7 @@ peak, identical to machine precision).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>BasisData for auxiliary basis (from extract_basis_data(auxmol)).</p>
+                <p>the auxiliary basis.</p>
               </div>
             </td>
             <td>
@@ -2429,8 +2428,8 @@ peak, identical to machine precision).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>None for the Coulomb kernel, a float for the long-range
-<code>erf(ω·r₁₂)/r₁₂</code> kernel (range-separated hybrids).</p>
+                <p><code>None</code> for the Coulomb operator <code>1/r₁₂</code>; a float for the
+long-range operator <code>erf(ω r₁₂)/r₁₂</code>.</p>
               </div>
             </td>
             <td>
@@ -2446,10 +2445,10 @@ peak, identical to machine precision).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>static bucket skeleton from
-:func:<code>~dftax.integrals.eri3c_bucketed.plan_eri3c</code>; required when
-this build is traced with a fully-traced <code>BasisData</code> (the
-jitted <code>_build_integrals</code> passes it), derived here otherwise.</p>
+                <p>the shell-class plan from
+:func:<code>~dftax.integrals.eri3c_bucketed.plan_eri3c</code>; needed only
+when the bases are traced, as under <code>jit</code> with the bases as
+arguments.</p>
               </div>
             </td>
             <td>
@@ -2475,7 +2474,7 @@ jitted <code>_build_integrals</code> passes it), derived here otherwise.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>(μν|P) tensor, shape (nao, nao, n_aux) in spherical harmonics.</p>
+                <p><code>(nao, nao, naux)</code> array.</p>
               </div>
             </td>
           </tr>
@@ -2523,9 +2522,8 @@ jitted <code>_build_integrals</code> passes it), derived here otherwise.</p>
 
 
 
-        <p>Precomputed GTO basis data extracted from a PySCF mol object.</p>
-<p>All arrays are JAX arrays; construction is done once on CPU via
-extract_basis_data(mol).</p>
+        <p>A Gaussian basis set placed on a molecule, as the integral and grid
+functions take it.</p>
 
 
 <p><span class="doc-section-title">Attributes:</span></p>
@@ -2544,7 +2542,7 @@ extract_basis_data(mol).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Atom centre for each AO, shape (nao_cart, 3).</p>
+                <p>center of each cartesian AO (Bohr), <code>(nao_cart, 3)</code>.</p>
               </div>
             </td>
           </tr>
@@ -2554,7 +2552,7 @@ extract_basis_data(mol).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Primitive exponents, zero-padded, shape (nao_cart, max_prim).</p>
+                <p>primitive exponents, zero-padded, <code>(nao_cart, max_prim)</code>.</p>
               </div>
             </td>
           </tr>
@@ -2564,8 +2562,8 @@ extract_basis_data(mol).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Final contraction coefficients (primitive-normed *
-          contracted-normed), zero-padded, shape (nao_cart, max_prim).</p>
+                <p>normalized contraction coefficients, zero-padded,
+<code>(nao_cart, max_prim)</code>.</p>
               </div>
             </td>
           </tr>
@@ -2575,7 +2573,8 @@ extract_basis_data(mol).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Cartesian angular momenta (lx, ly, lz), shape (nao_cart, 3).</p>
+                <p>cartesian powers <code>(lx, ly, lz)</code> of each AO,
+<code>(nao_cart, 3)</code>.</p>
               </div>
             </td>
           </tr>
@@ -2585,8 +2584,8 @@ extract_basis_data(mol).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Cartesian-to-spherical transformation, shape (nao_cart, nao_sph),
-          or None when the molecule uses Cartesian GTOs.</p>
+                <p>cartesian-to-spherical transformation,
+<code>(nao_cart, nao_sph)</code>, or <code>None</code> for a cartesian basis.</p>
               </div>
             </td>
           </tr>
@@ -2600,9 +2599,7 @@ extract_basis_data(mol).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Maximum total angular momentum in the basis (static int).
-          Lets the integral builders size their recursion to the
-          molecule instead of the global g-type cap.</p>
+                <p>largest angular momentum in the basis.</p>
               </div>
             </td>
           </tr>
@@ -3003,9 +3000,7 @@ iteral.</p>
 
     <div class="doc doc-contents first">
 
-        <p>Extract GTO basis data from a PySCF Mole object.</p>
-<p>This is a CPU-side function called once at setup.  It returns a
-BasisData whose arrays live on the JAX default device.</p>
+        <p>The :class:<code>BasisData</code> of a PySCF molecule.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -3028,7 +3023,7 @@ BasisData whose arrays live on the JAX default device.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>A built PySCF gto.Mole object.</p>
+                <p>a built PySCF <code>gto.Mole</code>.</p>
               </div>
             </td>
             <td>
@@ -3043,18 +3038,18 @@ BasisData whose arrays live on the JAX default device.</p>
     <table>
       <thead>
         <tr>
-          <th>Type</th>
+<th>Name</th>          <th>Type</th>
           <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
-            <td>
+<td><code>Its</code></td>            <td>
                   <code><a class="autorefs autorefs-internal" title="            dftax.energy.gto.BasisData" href="#dftax.energy.gto.BasisData">BasisData</a></code>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>BasisData suitable for eval_gto.</p>
+                <p>class:<code>BasisData</code>, spherical when <code>mol.cart</code> is false.</p>
               </div>
             </td>
           </tr>
@@ -3077,9 +3072,8 @@ BasisData whose arrays live on the JAX default device.</p>
 
     <div class="doc doc-contents first">
 
-        <p>Evaluate contracted GTO basis functions at point r.</p>
-<p>Pure JAX, no PySCF calls, no pure_callback.  Fully differentiable via
-JAX autodiff and compatible with jit and vmap.</p>
+        <p>Values of the contracted basis functions at one point.</p>
+<p>Differentiable, and works under <code>jit</code> and <code>vmap</code>.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -3102,7 +3096,7 @@ JAX autodiff and compatible with jit and vmap.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Precomputed basis data from extract_basis_data(mol).</p>
+                <p>the basis, from :func:<code>extract_basis_data</code>.</p>
               </div>
             </td>
             <td>
@@ -3118,7 +3112,7 @@ JAX autodiff and compatible with jit and vmap.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>3D coordinate in Bohr, shape (3,).</p>
+                <p>the point (Bohr), <code>(3,)</code>.</p>
               </div>
             </td>
             <td>
@@ -3144,7 +3138,7 @@ JAX autodiff and compatible with jit and vmap.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>AO values, shape (nao,), matching dft.numint.eval_ao(mol, r[None])[0].</p>
+                <p><code>(nao,)</code> array, in the order of PySCF's <code>eval_ao</code>.</p>
               </div>
             </td>
           </tr>

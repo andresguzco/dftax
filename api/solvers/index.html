@@ -1762,7 +1762,10 @@ minimal basis does not reach.</p>
 
     <div class="doc doc-contents first">
 
-        <p>Run KS SCF to self-consistency (restricted and spin-polarized alike).</p>
+        <p>Solve the Kohn-Sham equations self-consistently.</p>
+<p>Restricted (<code>nspin = 1</code>) and spin-polarized (<code>nspin = 2</code>) systems use
+the same call; DIIS on the commutator <code>FPS - SPF</code> accelerates the
+iterations.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -1785,7 +1788,10 @@ minimal basis does not reach.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>the built :class:<code>~dftax.ks.energy.KS</code> energy functional.</p>
+                <p>the energy functional, from :class:<code>~dftax.ks.energy.KS</code>, or a
+k-point functional from :func:<code>~dftax.pbc.kpoint_ks</code> (solved by
+:func:<code>~dftax.pbc.kpoints.scf_k</code>, which takes no <code>guess</code>,
+<code>accel</code> or <code>level_shift</code>).</p>
               </div>
             </td>
             <td>
@@ -1801,7 +1807,7 @@ minimal basis does not reach.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>maximum SCF iterations.</p>
+                <p>maximum number of iterations.</p>
               </div>
             </td>
             <td>
@@ -1817,23 +1823,10 @@ minimal basis does not reach.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>convergence threshold on the total-energy change (Ha).</p>
-<p>An energy evaluation has a floating-point floor of roughly
-<code>5e-11·|E|</code>, essentially all of it in the density-fitted Coulomb
-term (the RI metric pseudo-inverse retains directions down to 1e-7
-of the largest eigenvalue, so contracting against the explicit
-inverse is that ill-conditioned by construction; the XC quadrature
-and the one-electron terms are clean to 1e-14). Measured by
-sweeping the density along a line and fitting the parabola the
-energy is analytically supposed to be: 1.06e-8 Ha on cubane,
-2.30e-8 on bicyclo[2.2.2]octane, 2.07e-8 on adamantane, 3.52e-8 on
-coronene. A threshold below that is not a test but a coin flip,
-which is worth knowing before tightening this: on coronene,
-<code>e_tol=1e-9</code> costs 102 iterations against 10 for <code>1e-8</code>, and
-buys 8.4e-9 Ha. The floor is far below chemical accuracy and does
-not affect any energy difference; it only limits what this
-argument can usefully be set to, and it grows with the molecule
-while the default does not.</p>
+                <p>convergence threshold on the change of the total energy (Ha).
+Density-fitted energies carry a floating-point noise of about
+<code>5e-11·|E|</code>, so thresholds below that do not converge reliably;
+tighten <code>d_tol</code> instead.</p>
               </div>
             </td>
             <td>
@@ -1849,11 +1842,8 @@ while the default does not.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>convergence threshold on the DIIS commutator norm. This is the
-orbital gradient, and unlike <code>e_tol</code> it has no such floor, so it
-is the criterion to tighten and the one that keeps working as the
-system grows. PySCF's convention for the pair is
-<code>d_tol = sqrt(e_tol)</code>.</p>
+                <p>convergence threshold on the norm of the commutator, the
+orbital gradient. PySCF's convention is <code>d_tol = sqrt(e_tol)</code>.</p>
               </div>
             </td>
             <td>
@@ -1869,7 +1859,7 @@ system grows. PySCF's convention for the pair is
             </td>
             <td>
               <div class="doc-md-description">
-                <p>DIIS history depth (fixed buffer size).</p>
+                <p>number of previous iterations DIIS extrapolates over.</p>
               </div>
             </td>
             <td>
@@ -1885,7 +1875,8 @@ system grows. PySCF's convention for the pair is
             </td>
             <td>
               <div class="doc-md-description">
-                <p>overlap-eigenvalue cutoff for canonical orthonormalization.</p>
+                <p>overlap eigenvalues below this are dropped from the
+orthonormal basis (removes linear dependencies).</p>
               </div>
             </td>
             <td>
@@ -1901,7 +1892,8 @@ system grows. PySCF's convention for the pair is
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Saunders-Hillier virtual level shift (Ha).</p>
+                <p>shift (Ha) added to the virtual orbital energies; damps
+oscillations at the cost of slower convergence.</p>
               </div>
             </td>
             <td>
@@ -1917,12 +1909,11 @@ system grows. PySCF's convention for the pair is
             </td>
             <td>
               <div class="doc-md-description">
-                <p>initial density, a spec from :func:<code>~dftax.ks.guess.core</code> /
-:func:<code>~dftax.ks.guess.sad</code> / :func:<code>~dftax.ks.guess.minao</code> /
-:func:<code>~dftax.ks.guess.sap</code>, or an explicit <code>(nspin, nao, nao)</code>
-density array (warm restart). <code>None</code> is
-:func:<code>~dftax.ks.guess.minao</code>, falling back to the core
-Hamiltonian where the atomic densities cannot be built.</p>
+                <p>initial density: :func:<code>~dftax.ks.guess.core</code>,
+:func:<code>~dftax.ks.guess.sad</code>, :func:<code>~dftax.ks.guess.minao</code>,
+:func:<code>~dftax.ks.guess.sap</code>, or a <code>(nspin, nao, nao)</code> density.
+<code>None</code> is <code>minao()</code>, or the core Hamiltonian where the atomic
+densities are unavailable.</p>
               </div>
             </td>
             <td>
@@ -1938,11 +1929,8 @@ Hamiltonian where the atomic densities cannot be built.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>an :func:<code>adiis</code> spec runs the far-from-convergence
-iterations with ADIIS (energy-model extrapolation, no
-oscillation), blending into Pulay DIIS near the fixed point;
-<code>None</code> is plain Pulay DIIS. When given, its <code>space</code>
-supersedes <code>diis_space</code>.</p>
+                <p>:func:<code>adiis</code> for ADIIS far from convergence and DIIS near it
+(its <code>space</code> replaces <code>diis_space</code>); <code>None</code> is DIIS alone.</p>
               </div>
             </td>
             <td>
@@ -1958,9 +1946,8 @@ supersedes <code>diis_space</code>.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>a :func:<code>fermi</code> spec replaces the integer aufbau fill with
-Fermi-Dirac fractional occupations (small-gap systems, smooth
-energies through level crossings); <code>None</code> is the aufbau fill.</p>
+                <p>:func:<code>fermi</code> for Fermi-Dirac occupations; <code>None</code> fills
+the lowest orbitals.</p>
               </div>
             </td>
             <td>
@@ -1976,7 +1963,7 @@ energies through level crossings); <code>None</code> is the aufbau fill.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>print per-iteration energy / error (via jax.debug.print).</p>
+                <p>print the energy and commutator norm at every iteration.</p>
               </div>
             </td>
             <td>
@@ -1987,20 +1974,70 @@ energies through level crossings); <code>None</code> is the aufbau fill.</p>
     </table>
 
 
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+<td><code>A</code></td>            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.ks.scf.KSResult" href="#dftax.ks.scf.KSResult">KSResult</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>class:<code>KSResult</code>. <code>converged</code> is <code>False</code> (and a warning is</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+<td></td>            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.ks.scf.KSResult" href="#dftax.ks.scf.KSResult">KSResult</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>issued) when <code>max_iter</code> is reached first.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="NotImplementedError">NotImplementedError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>smearing</code> with a hybrid on the streamed
+density-fitting backend (use <code>coulomb=df(chunk=None)</code>), or
+<code>guess</code>, <code>accel</code> or <code>level_shift</code> with k-points.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
 <details class="example" open>
   <summary>Example</summary>
-  <div class="highlight"><pre><span></span><code><span class="n">ks</span> <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">())</span>
-<span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">e_tol</span><span class="o">=</span><span class="mf">1e-9</span><span class="p">)</span>
-<span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">guess</span><span class="o">=</span><span class="n">sad</span><span class="p">())</span>               <span class="c1"># fewer iterations</span>
-<span class="n">res</span><span class="o">.</span><span class="n">e_tot</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">P</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>       <span class="c1"># P is spin-stacked</span>
+  <div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">()),</span> <span class="n">guess</span><span class="o">=</span><span class="n">sad</span><span class="p">())</span>
+<span class="n">res</span><span class="o">.</span><span class="n">e_tot</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">P</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
 </code></pre></div>
-</details>        <p>A periodic cell at a k-mesh (a :class:<code>~dftax.pbc.kpoints.KPointKS</code>,
-from :func:<code>~dftax.pbc.kpoint_ks</code>) is solved by
-:func:<code>~dftax.pbc.kpoints.scf_k</code> with <code>smearing</code>, the tolerances,
-<code>max_iter</code>, <code>diis_space</code> and <code>verbose</code> passed on; it starts from
-the core Hamiltonian, keeps its own linear-dependence threshold (PySCF's)
-and takes no <code>guess</code>, <code>accel</code> or <code>level_shift</code>.</p>
-
+</details>
 
     </div>
 
@@ -2017,14 +2054,12 @@ and takes no <code>guess</code>, <code>accel</code> or <code>level_shift</code>.
 
     <div class="doc doc-contents first">
 
-        <p>ADIIS-accelerated SCF (Hu-Yang energy-model extrapolation).</p>
-<p>Plain Pulay DIIS extrapolates on the commutator error and can oscillate
-or limit-cycle when the starting density is poor (transition metals,
-radicals, stretched geometries). ADIIS instead minimizes an interpolated
-energy model over the density/Fock history, which cannot overshoot, and
-switches to Pulay DIIS whenever the commutator norm is below <code>switch</code>
-(Pulay converges faster near the fixed point; the switch is re-entrant,
-so an error that grows again hands back to ADIIS).</p>
+        <p>ADIIS acceleration for :func:<code>scf</code> (Hu and Yang, J. Chem. Phys. 132,
+054109 (2010)).</p>
+<p>ADIIS minimizes a model of the energy over the previous densities and
+Fock matrices, which does not overshoot from a poor start; while the
+commutator norm is below <code>switch</code> the iterations use DIIS instead. Use
+it when plain DIIS oscillates.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2047,7 +2082,7 @@ so an error that grows again hands back to ADIIS).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>history depth (shared by the ADIIS and Pulay buffers).</p>
+                <p>number of previous iterations kept, for ADIIS and DIIS alike.</p>
               </div>
             </td>
             <td>
@@ -2063,8 +2098,7 @@ so an error that grows again hands back to ADIIS).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>commutator-norm threshold between the ADIIS and Pulay
-extrapolations.</p>
+                <p>commutator norm below which DIIS takes over.</p>
               </div>
             </td>
             <td>
@@ -2077,8 +2111,8 @@ extrapolations.</p>
 
 <details class="example" open>
   <summary>Example</summary>
-  <div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">accel</span><span class="o">=</span><span class="n">adiis</span><span class="p">())</span>             <span class="c1"># robust far-from-convergence</span>
-<span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">accel</span><span class="o">=</span><span class="n">adiis</span><span class="p">(</span><span class="n">switch</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">))</span>  <span class="c1"># trust ADIIS longer</span>
+  <div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">accel</span><span class="o">=</span><span class="n">adiis</span><span class="p">())</span>
+<span class="n">res</span> <span class="o">=</span> <span class="n">scf</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">accel</span><span class="o">=</span><span class="n">adiis</span><span class="p">(</span><span class="n">switch</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">))</span>
 </code></pre></div>
 </details>
 
@@ -2098,20 +2132,13 @@ extrapolations.</p>
     <div class="doc doc-contents first">
 
         <p>Fermi-Dirac smearing of the SCF occupations.</p>
-<p>Occupations become <code>f_i = w / (1 + exp((eps_i - mu) / sigma))</code> with the
-chemical potential <code>mu</code> solved per spin channel so the electron count
-is conserved. Small-gap and metallic-like systems (transition metals,
-stretched bonds, clusters) converge where integer aufbau occupations
-flip-flop between quasi-degenerate configurations, and the occupations
-become a smooth function of the orbital energies, which keeps the energy
-differentiable through level crossings.</p>
-<p>The reported <code>e_tot</code> is the Mermin free energy <code>A = E - sigma·S</code> (the
-Kohn-Sham energy at the smeared density minus the electronic-entropy term),
-which is the quantity the finite-temperature SCF makes stationary and whose
-gradient is the force. The entropy term is returned as <code>KSResult.ts</code> so
-the KS energy (<code>e_tot + ts</code>) and the <code>sigma -&gt; 0</code> estimate
-(<code>e_tot + 0.5·ts</code>) are recoverable; taking <code>sigma</code> to zero sends the
-free energy to the integer-occupation ground-state energy.</p>
+<p>Occupations are <code>f_i = w / (1 + exp((eps_i - mu) / sigma))</code>, with the
+chemical potential <code>mu</code> fixed per spin channel by the electron count.
+Use it for small-gap systems, where integer occupations do not converge.</p>
+<p><code>e_tot</code> is then the free energy <code>E - sigma·S</code>, whose gradient is the
+force; <code>KSResult.ts</code> holds <code>sigma·S</code>, so <code>e_tot + ts</code> is the
+Kohn-Sham energy and <code>e_tot + 0.5·ts</code> estimates the <code>sigma -&gt; 0</code>
+energy.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2741,15 +2768,10 @@ on an uphill proposal, doubled (capped at 1) on success.</p>
 
     <div class="doc doc-contents first">
 
-        <p>Restricted open-shell KS via shared-orbital Newton.</p>
-<p>One set of spatial orbitals for both spin channels (alpha fills the
-first <code>nocc[0]</code>, beta the first <code>nocc[1]</code>), so the wavefunction is a
-spin eigenfunction with none of UKS's spin contamination. Implemented as
-:func:<code>newton</code> over rotations of the single shared orbital set: kappa is
-masked to the doubly-occupied/singly-occupied/virtual inter-block
-rotations that change the density, and the constraint that the beta
-space sits inside the alpha space holds by construction. Requires a
-spin-polarized <code>ks</code> (<code>spin != 0</code>).</p>
+        <p>Restricted open-shell Kohn-Sham, solved by trust-region Newton.</p>
+<p>Both spin channels share one set of spatial orbitals (α fills the first
+<code>nocc[0]</code>, β the first <code>nocc[1]</code>), so the result has no spin
+contamination. <code>ks</code> must be spin-polarized (<code>spin != 0</code>).</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2772,7 +2794,7 @@ spin-polarized <code>ks</code> (<code>spin != 0</code>).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>the built spin-polarized :class:<code>~dftax.ks.energy.KS</code>.</p>
+                <p>a spin-polarized :class:<code>~dftax.ks.energy.KS</code>.</p>
               </div>
             </td>
             <td>
@@ -2836,7 +2858,7 @@ spin-polarized <code>ks</code> (<code>spin != 0</code>).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>CG iterations for the Newton step.</p>
+                <p>conjugate-gradient iterations per Newton step.</p>
               </div>
             </td>
             <td>
@@ -2852,7 +2874,7 @@ spin-polarized <code>ks</code> (<code>spin != 0</code>).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>initial trust radius on the rotation norm.</p>
+                <p>initial trust radius on the rotation norm (rad).</p>
               </div>
             </td>
             <td>
@@ -2868,7 +2890,7 @@ spin-polarized <code>ks</code> (<code>spin != 0</code>).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>initial density, same forms as :func:<code>~dftax.ks.scf.scf</code>.</p>
+                <p>initial density, as in :func:<code>~dftax.ks.scf.scf</code>.</p>
               </div>
             </td>
             <td>
@@ -2884,7 +2906,7 @@ spin-polarized <code>ks</code> (<code>spin != 0</code>).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>print per-iteration energy / gradient norm.</p>
+                <p>print the energy and gradient norm at every iteration.</p>
               </div>
             </td>
             <td>
@@ -2895,10 +2917,65 @@ spin-polarized <code>ks</code> (<code>spin != 0</code>).</p>
     </table>
 
 
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+<td><code>A</code></td>            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.ks.scf.KSResult" href="#dftax.ks.scf.KSResult">KSResult</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>class:<code>~dftax.ks.scf.KSResult</code> with the same orbitals in both</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+<td></td>            <td>
+                  <code><a class="autorefs autorefs-internal" title="            dftax.ks.scf.KSResult" href="#dftax.ks.scf.KSResult">KSResult</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>channels.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>ks</code> is not spin-polarized.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
 <details class="example" open>
   <summary>Example</summary>
-  <div class="highlight"><pre><span></span><code><span class="n">ks</span> <span class="o">=</span> <span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">spin</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>              <span class="c1"># triplet</span>
-<span class="n">res</span> <span class="o">=</span> <span class="n">roks</span><span class="p">(</span><span class="n">ks</span><span class="p">)</span>                           <span class="c1"># E &gt;= UKS, no contamination</span>
+  <div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">roks</span><span class="p">(</span><span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">PBE</span><span class="p">(),</span> <span class="n">spin</span><span class="o">=</span><span class="mi">2</span><span class="p">))</span>       <span class="c1"># triplet</span>
 </code></pre></div>
 </details>
 
@@ -2921,11 +2998,121 @@ spin-polarized <code>ks</code> (<code>spin != 0</code>).</p>
 
 
 
-        <p>Outcome of a KS solve (SCF or direct minimization), spin-stacked.</p>
-<p>All orbital/density fields carry a leading <code>nspin</code> axis (<code>nspin =
-len(nocc)</code>): a closed shell is <code>nspin = 1</code> (<code>P[0]</code> doubly occupied),
-a spin-polarized system is <code>nspin = 2</code> (α, β). Batched solves return the
-distinct :class:<code>~dftax.ks.batched.BatchedResult</code> instead.</p>
+        <p>Result of a Kohn-Sham solve (:func:<code>scf</code>, :func:<code>~dftax.ks.gdm.gdm</code>,
+:func:<code>~dftax.ks.newton.newton</code>, :func:<code>~dftax.ks.minimize.minimize</code>).</p>
+<p>Orbital and density arrays have a leading spin axis: <code>nspin = 1</code> for a
+closed shell (<code>P[0]</code> is the total density), <code>nspin = 2</code> (α, β) for a
+spin-polarized system.</p>
+
+
+<p><span class="doc-section-title">Attributes:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.scf.KSResult.e_tot">e_tot</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>total energy (Ha), including nuclear repulsion and dispersion;
+under smearing, the free energy <code>E - TS</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.scf.KSResult.e_elec">e_elec</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>electronic energy (Ha), <code>e_tot</code> without nuclear repulsion
+and dispersion.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.scf.KSResult.converged">converged</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>whether the convergence thresholds were met.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.scf.KSResult.n_iter">n_iter</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>number of iterations taken.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.scf.KSResult.nocc">nocc</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>occupied orbitals per spin channel.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.scf.KSResult.mo_energy">mo_energy</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>orbital energies (Ha), <code>(nspin, nmo)</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.scf.KSResult.mo_coeff">mo_coeff</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>orbital coefficients in the AO basis, <code>(nspin, nao, nmo)</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="dftax.ks.scf.KSResult.P">P</span></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>density matrix, <code>(nspin, nao, nao)</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><a class="autorefs autorefs-internal" title="            ts
+
+  
+      class-attribute
+   (dftax.ks.scf.KSResult.ts)" href="#dftax.ks.scf.KSResult.ts">ts</a></code></td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>entropy term <code>TS</code> (Ha) under smearing, else 0.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
 
 
 
@@ -3332,11 +3519,10 @@ differentiation of the SCF fixed point. Restricted (closed-shell) only.</p>
 
     <div class="doc doc-contents first">
 
-        <p>Core-Hamiltonian guess: aufbau fill of the <code>hcore</code> eigenvectors.</p>
-<p>The dftax default (<code>guess=None</code>); ignores electron repulsion, so it is
-the weakest standard guess: fine for small closed-shell systems, slow to
-converge (or saddle-prone under :func:<code>~dftax.ks.minimize.minimize</code>) for
-larger ones.</p>
+        <p>Initial guess from the core Hamiltonian: the lowest eigenvectors of
+<code>hcore</code>, without electron repulsion.</p>
+<p>The simplest and weakest guess; :func:<code>~dftax.ks.scf.scf</code> falls back to
+it when the default :func:<code>minao</code> guess cannot be built.</p>
 
 
     </div>
@@ -3354,11 +3540,8 @@ larger ones.</p>
 
     <div class="doc doc-contents first">
 
-        <p>Superposition of atomic densities from solved atoms.</p>
-<p>Per unique element, a spherically-averaged (fractional-occupation) atomic
-Hartree-Fock is converged in the molecule's own basis, and the atomic
-densities are assembled block-diagonally. The strongest density-based
-guess here; the per-element solves are tiny and cached.</p>
+        <p>Superposition of atomic densities, each from a spherically averaged
+atomic Hartree-Fock calculation in the molecule's basis.</p>
 
 
     </div>
@@ -3430,11 +3613,9 @@ Exchange name with one shell per occupied <code>(n, l)</code>
 
     <div class="doc doc-contents first">
 
-        <p>Superposition of atomic potentials: <code>F0 = T + V_SAP</code>.</p>
-<p>A potential-based guess (no density superposition): the screened effective
-potential of each atom, Gaussian-fitted, summed over atoms and integrated
-on a Becke grid. Robust and cheap; the only guess here whose quality does
-not depend on a converged atomic density.</p>
+        <p>Superposition of atomic potentials: the first Fock matrix is
+<code>T + Σ_A V_A</code> with fitted atomic potentials <code>V_A</code> (S. Lehtola, J.
+Chem. Theory Comput. 15, 1593 (2019)).</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -3457,7 +3638,7 @@ not depend on a converged atomic density.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>the Gaussian potential fit, a Basis Set Exchange name
+                <p>the potential fit, a Basis Set Exchange name
 (<code>"sap_helfem_large"</code>, <code>"sap_helfem_small"</code>,
 <code>"sap_grasp_large"</code>, <code>"sap_grasp_small"</code>).</p>
               </div>

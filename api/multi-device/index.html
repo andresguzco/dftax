@@ -2190,14 +2190,12 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 
 
 
-        <p>XC integral sharded over grid points across a 1-D device mesh.</p>
-<p><code>inner</code> is an ordinary :class:<code>GridXC</code> or :class:<code>StreamedGridXC</code> whose
-grid-axis arrays are padded to a multiple of the device count and laid out
-sharded over the mesh (see :func:<code>dftax.ks.shard._pad_shard_grid</code>). The
-energy runs each device's slice through the <em>unmodified</em> inner math under
-<code>shard_map</code> (the density is replicated, the partial energies are
-<code>psum</code>-reduced), so the quadrature is exactly the single-device sum and
-the collective differentiates natively (autodiff Fock, forces).</p>
+        <p>Exchange-correlation quadrature with the grid points divided over a
+device mesh.</p>
+<p>Built by :class:<code>~dftax.ks.energy.KS</code> when given <code>mesh=</code>; the energy
+equals the single-device quadrature up to summation order and
+differentiates as usual (Fock matrix, forces). VV10 (<code>WB97XV</code>) cannot
+be sharded.</p>
 
 
 
@@ -2573,22 +2571,11 @@ If iterable is specified the tuple is initialized from iterable's items.</p>
 
 
 
-        <p>Materialized RI-J with the 3-center tensor sharded over the aux axis.</p>
-<p>Each device holds a <code>(nao², naux/ndev)</code> slab of <code>int3c</code> (built
-directly in shards; see :func:<code>dftax.ks.shard._build_int3c_sharded</code>) and
-contracts its own slice of <code>γ_P = Σ_μν (μν|P) P_μν</code>; the slices are
-<code>all_gather</code>-ed (γ is a tiny naux-vector) and the metric quadratic form
-<code>½ γᵀ V⁻¹ γ</code> is evaluated replicated. Padded aux columns carry exact
-zeros in both γ and the (zero-padded) metric inverse, so the energy is the
-single-device value bit-for-bit up to summation order.</p>
-<p>Hybrid exact exchange uses <code>V⁻¹ = LLᵀ</code> and
-<code>Tr(P K(P)) = Σ_X ⟨P W_X P, W_X⟩</code> with <code>W = int3c·L</code>: each device
-builds only its own aux-slab of <code>W</code> (an all-to-all done as <code>ndev</code>
-rounds of <code>psum</code>, one per destination slab), contracts its slab's
-exchange partial against the replicated density, and the scalar partials
-are <code>psum</code>-reduced; per-device memory stays O(nao²·naux/ndev). Padded
-aux rows are zero in <code>int3c</code> and null in the padded metric, so they
-contribute exactly nothing to J or K.</p>
+        <p>Density-fitted Coulomb and exchange with the stored 3-center tensor
+divided over a device mesh along the auxiliary axis.</p>
+<p>Built by :class:<code>~dftax.ks.energy.KS</code> when given <code>mesh=</code> with a stored
+tensor; each device holds <code>nao²·naux/ndev</code> of it. Energies equal the
+single-device ones up to summation order.</p>
 
 
 
@@ -3048,31 +3035,11 @@ iteral.</p>
 
 
 
-        <p>Streamed RI-J with the auxiliary axis divided across a device mesh.</p>
-<p>The streamed backend never builds the <code>(nao², naux)</code> tensor, which is the
-only thing that fits at protein scale; this divides its auxiliary axis over
-the mesh as well, so the per-device work is <code>naux/ndev</code> auxiliary
-functions streamed <code>chunk</code> at a time. Combining the two is the point: the
-materialized aux-sharded backend still holds <code>nao²·naux/ndev</code> per device,
-which for insulin at triple zeta is 15 TiB.</p>
-<p>Each device streams its own contiguous slice of the auxiliary index range
-into its piece of <code>γ</code>, the pieces are <code>all_gather</code>-ed (γ is a
-<code>naux</code>-vector, so this is negligible traffic), and the metric quadratic
-form <code>½ γᵀ V⁻¹ γ</code> is evaluated replicated -- the same decomposition
-:class:<code>ShardedDFCoulomb</code> uses, and for the same reason: γ is the only
-quantity that has to cross devices.</p>
-<p>The auxiliary basis is <em>replicated</em>, not sliced. The streamed kernel looks
-an auxiliary function up by index (<code>_eri3c_elem(..., k)</code>) instead of
-slicing a stored slab, so a device needs the whole (small) auxiliary basis
-and only its own range of <code>k</code>. Indices are assigned contiguously and the
-range is padded to a multiple of the device count, with the padding masked
-to zero, so the gathered γ is already in auxiliary order and truncating it
-to <code>naux</code> is exact rather than needing a position map.</p>
-<p>Hybrids shard too, on a different axis: streamed RI-K sums over occupied
-orbitals, so each device scans its own slice of them and the partials are
-<code>psum</code>-reduced (:func:<code>_rik_energy_sharded</code>). Both halves of its
-<code>custom_vjp</code> shard the same way, so the analytic exchange Fock it returns
-is unchanged. Range-separated hybrids ride along on the attenuated metric.</p>
+        <p>Streamed density-fitted Coulomb and exchange over a device mesh.</p>
+<p>Built by :class:<code>~dftax.ks.energy.KS</code> when given <code>mesh=</code> with
+<code>df(chunk=&lt;int&gt;)</code>: each device streams its share of the auxiliary
+functions, <code>chunk</code> at a time, and no device stores the 3-center
+tensor. Hybrids, range-separated ones included, are supported.</p>
 
 
 

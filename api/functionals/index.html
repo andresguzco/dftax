@@ -1728,12 +1728,33 @@ materialized XC grid.</p>
 
     <div class="doc doc-contents first">
 
-        <p>The XC functional named <code>name</code>, ready to pass to :class:<code>~dftax.KS</code>.</p>
-<p>Lookup ignores case and punctuation, so <code>"wB97X-V"</code>, <code>"wb97xv"</code> and
-<code>"WB97X_V"</code> all resolve to the same functional. Dispersion stays a
-separate axis (<code>KS(..., dispersion=d3bj())</code>), matching the library's
-choices-as-values style: a functional is a functional, not a functional
-plus a correction.</p>
+        <p>The exchange-correlation functional called <code>name</code>.</p>
+<p>Case and punctuation are ignored, so <code>"wB97X-V"</code>, <code>"wb97xv"</code> and
+<code>"WB97X_V"</code> name the same functional. Dispersion is passed to
+:class:<code>~dftax.ks.energy.KS</code> separately, as <code>dispersion=</code>.</p>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>an unknown name.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
 
 
 <details class="example" open>
@@ -1762,7 +1783,7 @@ plus a correction.</p>
 
 
 
-        <p>Local density approximation: Slater exchange + VWN5 correlation.</p>
+        <p>Local density approximation: Slater exchange and VWN5 correlation.</p>
 
 
 
@@ -2170,7 +2191,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>VWN5 LDA correlation (parameterization V from VWN 1980).</p>
+        <p>VWN5Correlation()</p>
 
 
     </div>
@@ -2188,7 +2209,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Local density approximation (LDA) exchange energy density.</p>
+        <p>LDAExchange()</p>
 
 
     </div>
@@ -2218,7 +2239,8 @@ errors defaults to 'strict'.</p>
 
 
 
-        <p>Convenience wrapper for the full PBE XC functional.</p>
+        <p>PBE generalized-gradient functional (J. P. Perdew, K. Burke and M.
+Ernzerhof, Phys. Rev. Lett. 77, 3865 (1996)).</p>
 
 
 
@@ -2626,7 +2648,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>PBE correlation energy density with PW92 base.</p>
+        <p>PBECorrelation()</p>
 
 
     </div>
@@ -2644,7 +2666,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>PBE GGA exchange energy density.</p>
+        <p>PBEExchange()</p>
 
 
     </div>
@@ -2674,9 +2696,8 @@ errors defaults to 'strict'.</p>
 
 
 
-        <p>PBE0 global hybrid: ε_xc = 0.75·ε_x^PBE + ε_c^PBE, plus 25% exact exchange.</p>
-<p>The HF exchange fraction (0.25) is exposed as <code>hf_coeff</code>; the exact-K
-contribution is added by the energy driver (see :mod:<code>dftax.ks.energy</code>).</p>
+        <p>PBE0 global hybrid: <code>0.75·E_x^PBE + E_c^PBE</code> plus 25 % exact exchange
+(C. Adamo and V. Barone, J. Chem. Phys. 110, 6158 (1999)).</p>
 
 
 
@@ -3122,7 +3143,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>PBE correlation energy density with PW92 base.</p>
+        <p>PBECorrelation()</p>
 
 
     </div>
@@ -3140,7 +3161,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>PBE GGA exchange energy density.</p>
+        <p>PBEExchange()</p>
 
 
     </div>
@@ -3170,12 +3191,10 @@ errors defaults to 'strict'.</p>
 
 
 
-        <p>Gaussian / libxc default B3LYP functional (uses VWN_RPA).</p>
-<p>Total XC energy density (per electron):
-  ε_xc = 0.08 · ε_x^LDA + 0.72 · ε_x^B88 + 0.19 · ε_c^VWN_RPA + 0.81 · ε_c^LYP</p>
-<p>The HF exchange coefficient (0.20) is exposed as <code>hf_coeff</code>. The
-<code>EnergyFunctional</code> is responsible for building the K matrix and adding
--0.5 · hf_coeff · Tr(P K) to the total energy.</p>
+        <p>B3LYP global hybrid, in the Gaussian and libxc form (VWN-RPA):
+<code>0.08·E_x^LDA + 0.72·E_x^B88 + 0.19·E_c^VWN-RPA + 0.81·E_c^LYP</code> plus
+20 % exact exchange (P. J. Stephens et al., J. Phys. Chem. 98, 11623
+(1994)).</p>
 
 
 
@@ -3709,16 +3728,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>LYP GGA correlation energy density.</p>
-<p>Closed-shell expression (ρ_↑ = ρ_↓ = ρ/2) from Miehlich et al. (1989):</p>
-<pre><code>ε_c^LYP = -a · g(ρ)
-         - a·b·ω(ρ) · [ 2^{11/3} C_F · (ρ/2)^{8/3}/ρ
-                        + (1/36) · (47 - 7 δ) · γ/ρ
-                        - (5/4) · (γ_↑↑ + γ_↓↓) · (1/ρ)   (γ_σσ = |∇ρ_σ|² = γ/4)
-                        - ... ]
-</code></pre>
-<p>The exact algebraic form has been re-derived for ρ_↑ = ρ_↓ = ρ/2 and
-validated against <code>pyscf.dft.libxc.eval_xc(',LYP', ...)</code>.</p>
+        <p>LYPCorrelation()</p>
 
 
     </div>
@@ -3736,15 +3746,7 @@ validated against <code>pyscf.dft.libxc.eval_xc(',LYP', ...)</code>.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Becke 1988 GGA exchange.</p>
-
-
-<details class="per-spin-channel" open>
-  <summary>Per spin channel</summary>
-  <p>ε_x^{B88,σ}(ρ_σ, |∇ρ_σ|) =
-    -C_σ ρ_σ^{1/3}
-    - β ρ_σ^{1/3} x_σ^2 / (1 + 6 β x_σ sinh^{-1}(x_σ))</p>
-</details>        <p>with x_σ = |∇ρ_σ| / ρ_σ^{4/3}, β = 0.0042, C_σ = (3/4)(6/π)^{1/3}.</p>
+        <p>B88Exchange()</p>
 
 
     </div>
@@ -3774,12 +3776,10 @@ validated against <code>pyscf.dft.libxc.eval_xc(',LYP', ...)</code>.</p>
 
 
 
-        <p>CAM-B3LYP (Yanai-Tew-Handy 2004) range-separated hybrid.</p>
-<p>DFT part (identified against libxc <code>HYB_GGA_XC_CAM_B3LYP</code> to machine
-precision): <code>0.35·B88 + 0.46·SR-B88(ITYH, ω=0.33) + 0.81·LYP +
-0.19·VWN5</code>. Exact exchange: <code>0.19·K + 0.46·K_lr(ω=0.33)</code> (PySCF
-<code>rsh_coeff</code> convention (0.33, 0.65, -0.46) re-expressed as
-full-range + long-range).</p>
+        <p>CAM-B3LYP range-separated hybrid (T. Yanai, D. P. Tew and N. C. Handy,
+Chem. Phys. Lett. 393, 51 (2004)), as libxc <code>HYB_GGA_XC_CAM_B3LYP</code>.</p>
+<p>Semilocal part <code>0.35·B88 + 0.46·SR-B88(ω = 0.33) + 0.81·LYP + 0.19·VWN5</code>;
+exact exchange <code>0.19·K + 0.46·K_lr(ω = 0.33)</code>.</p>
 
 
 
@@ -4269,16 +4269,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>LYP GGA correlation energy density.</p>
-<p>Closed-shell expression (ρ_↑ = ρ_↓ = ρ/2) from Miehlich et al. (1989):</p>
-<pre><code>ε_c^LYP = -a · g(ρ)
-         - a·b·ω(ρ) · [ 2^{11/3} C_F · (ρ/2)^{8/3}/ρ
-                        + (1/36) · (47 - 7 δ) · γ/ρ
-                        - (5/4) · (γ_↑↑ + γ_↓↓) · (1/ρ)   (γ_σσ = |∇ρ_σ|² = γ/4)
-                        - ... ]
-</code></pre>
-<p>The exact algebraic form has been re-derived for ρ_↑ = ρ_↓ = ρ/2 and
-validated against <code>pyscf.dft.libxc.eval_xc(',LYP', ...)</code>.</p>
+        <p>LYPCorrelation()</p>
 
 
     </div>
@@ -4296,15 +4287,7 @@ validated against <code>pyscf.dft.libxc.eval_xc(',LYP', ...)</code>.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Becke 1988 GGA exchange.</p>
-
-
-<details class="per-spin-channel" open>
-  <summary>Per spin channel</summary>
-  <p>ε_x^{B88,σ}(ρ_σ, |∇ρ_σ|) =
-    -C_σ ρ_σ^{1/3}
-    - β ρ_σ^{1/3} x_σ^2 / (1 + 6 β x_σ sinh^{-1}(x_σ))</p>
-</details>        <p>with x_σ = |∇ρ_σ| / ρ_σ^{4/3}, β = 0.0042, C_σ = (3/4)(6/π)^{1/3}.</p>
+        <p>B88Exchange()</p>
 
 
     </div>
@@ -4334,12 +4317,11 @@ validated against <code>pyscf.dft.libxc.eval_xc(',LYP', ...)</code>.</p>
 
 
 
-        <p>ωB97X (Chai-Head-Gordon 2008) range-separated hybrid GGA.</p>
-<p>Exchange: B97 series over SR-LDA (ω = 0.3); correlation: B97 series over
-Stoll-partitioned PW92 (same-spin / opposite-spin). Exact exchange:
-<code>0.157706·K + 0.842294·K_lr(ω=0.3)</code>. The series coefficients match
-libxc <code>HYB_GGA_XC_WB97X</code> (recovered by exact linear fit, residual
-~1e-10) and the published parameters.</p>
+        <p>ωB97X range-separated hybrid (J.-D. Chai and M. Head-Gordon, J. Chem.
+Phys. 128, 084106 (2008)), as libxc <code>HYB_GGA_XC_WB97X</code>.</p>
+<p>B97 power series over short-range LDA exchange (ω = 0.3) and
+spin-partitioned PW92 correlation; exact exchange
+<code>0.157706·K + 0.842294·K_lr(ω = 0.3)</code>.</p>
 
 
 
@@ -4904,11 +4886,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Perdew-Wang 1992 LSDA correlation (the B97 family's LSDA backbone).</p>
-<p><code>ε_c(r_s, ζ) = ε_0 - α_c·f(ζ)/f''(0)·(1-ζ⁴) + (ε_1-ε_0)·f(ζ)·ζ⁴</code> with
-the three G-function fits of PW92 (the parameters fit −α_c, hence the
-sign). Validated against <code>libxc LDA_C_PW</code> to ~4e-10 (libxc carries one
-more digit on the A constants).</p>
+        <p>PW92Correlation()</p>
 
 
     </div>
@@ -4926,7 +4904,7 @@ more digit on the A constants).</p>
 
     <div class="doc doc-contents ">
 
-        <p>Local density approximation (LDA) exchange energy density.</p>
+        <p>LDAExchange()</p>
 
 
     </div>
@@ -4956,10 +4934,10 @@ more digit on the A constants).</p>
 
 
 
-        <p>ωB97 (Chai-Head-Gordon 2008): the ωB97X form with no short-range exact
-exchange, ω = 0.4; exact exchange <code>K_lr(ω = 0.4)</code> alone. Coefficients and
-CAM α = 1, β = −1, ω = 0.4 from libxc <code>HYB_GGA_XC_WB97</code>
-(src/hyb_gga_xc_wb97.c, par_wb97), J. Chem. Phys. 128, 084106 (2008).</p>
+        <p>ωB97 long-range-corrected hybrid (J.-D. Chai and M. Head-Gordon, J.
+Chem. Phys. 128, 084106 (2008)), as libxc <code>HYB_GGA_XC_WB97</code>.</p>
+<p>The ωB97X form with its own coefficients at ω = 0.4 and only long-range
+exact exchange, <code>K_lr(ω = 0.4)</code>.</p>
 
 
 
@@ -5520,10 +5498,10 @@ errors defaults to 'strict'.</p>
 
 
 
-        <p>LC-BLYP (Tawada-Tsuneda-Yanagisawa-Yanai-Hirao 2004), long-range-corrected
-BLYP at ω = 0.33: SR-B88 (ITYH) + LYP, exact exchange <code>K_lr(ω = 0.33)</code>
-alone. libxc <code>HYB_GGA_XC_LC_BLYP</code> (src/hyb_gga_xc_lc_blyp.c: ITYH + LYP,
-CAM α = 1, β = −1, ω = 0.33).</p>
+        <p>LC-BLYP long-range-corrected hybrid (Y. Tawada et al., J. Chem. Phys.
+120, 8425 (2004)), as libxc <code>HYB_GGA_XC_LC_BLYP</code>.</p>
+<p>Short-range B88 exchange and LYP correlation, with only long-range exact
+exchange, <code>K_lr(ω = 0.33)</code>.</p>
 
 
 
@@ -5997,16 +5975,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>LYP GGA correlation energy density.</p>
-<p>Closed-shell expression (ρ_↑ = ρ_↓ = ρ/2) from Miehlich et al. (1989):</p>
-<pre><code>ε_c^LYP = -a · g(ρ)
-         - a·b·ω(ρ) · [ 2^{11/3} C_F · (ρ/2)^{8/3}/ρ
-                        + (1/36) · (47 - 7 δ) · γ/ρ
-                        - (5/4) · (γ_↑↑ + γ_↓↓) · (1/ρ)   (γ_σσ = |∇ρ_σ|² = γ/4)
-                        - ... ]
-</code></pre>
-<p>The exact algebraic form has been re-derived for ρ_↑ = ρ_↓ = ρ/2 and
-validated against <code>pyscf.dft.libxc.eval_xc(',LYP', ...)</code>.</p>
+        <p>LYPCorrelation()</p>
 
 
     </div>
@@ -6024,11 +5993,7 @@ validated against <code>pyscf.dft.libxc.eval_xc(',LYP', ...)</code>.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Short-range B88 exchange via the ITYH scheme at ω = 0.33 (CAM-B3LYP).</p>
-<p>Per spin: <code>ε_x^{sr} = ε_x^{B88}·F(a_σ)</code> with the GGA-adapted momentum
-<code>a_σ = ω·√K_σ / (6√π·ρ_σ^{1/3})</code>, <code>K_σ = -2·ε_x^{B88}/ρ_σ^{1/3}</code>
-(Iikura-Tsuneda-Yanai-Hirao 2001). Matches <code>libxc GGA_X_ITYH</code> at
-ω = 0.33 to machine precision.</p>
+        <p>ITYHB88Exchange()</p>
 
 
     </div>
@@ -6058,12 +6023,11 @@ validated against <code>pyscf.dft.libxc.eval_xc(',LYP', ...)</code>.</p>
 
 
 
-        <p>ωB97X-V (Mardirossian-Head-Gordon 2014): 10-parameter RSH GGA + VV10.</p>
-<p>The B97 series is deliberately short (3 exchange, 2 + 2 correlation
-terms); nonlocal correlation is VV10 with <code>b = 6.0</code>, <code>C = 0.01</code>
-(declared via <code>nlc_b</code>/<code>nlc_c</code>; the KS builder adds the double-grid
-term). Exact exchange <code>0.167·K + 0.833·K_lr(ω = 0.3)</code>. Series
-coefficients verified pointwise against libxc <code>HYB_GGA_XC_WB97X_V</code>.</p>
+        <p>ωB97X-V range-separated hybrid with VV10 nonlocal correlation (N.
+Mardirossian and M. Head-Gordon, Phys. Chem. Chem. Phys. 16, 9904
+(2014)), as libxc <code>HYB_GGA_XC_WB97X_V</code>.</p>
+<p>Exact exchange <code>0.167·K + 0.833·K_lr(ω = 0.3)</code>; VV10 with <code>b = 6.0</code>
+and <code>C = 0.01</code>. VV10 cannot run on a device mesh.</p>
 
 
 
@@ -6668,18 +6632,11 @@ errors defaults to 'strict'.</p>
 
 
 
-        <p>ωB97M-V (Mardirossian-Head-Gordon 2016): 12-parameter RSH mGGA + VV10.</p>
-<p>The B97 double power series <code>g = Σ c_ij·w^i·u^j</code> over the same bases as
-ωB97X (SR-LDA exchange at ω = 0.3, Stoll-partitioned PW92 correlation),
-with the meta ingredient entering through <code>w = (τ^unif − τ)/(τ^unif + τ)</code>
-per spin (<code>τ^unif_σ = (3/10)(6π²)^{2/3} ρ_σ^{5/3}</code>); the opposite-spin
-channel uses the <code>p</code>-weighted average of the two channels' <code>w</code>
-(<code>p = τ/(τ^unif + τ)</code>) and the mean-square gradient variable, exactly
-the libxc <code>b97mv</code> scheme. Exact exchange <code>0.15·K + 0.85·K_lr(ω=0.3)</code>
-(libxc CAM <code>alpha=1, beta=−0.85</code> re-expressed as full-range +
-long-range); VV10 with <code>b = 6.0</code>, <code>C = 0.01</code>. Coefficients and term
-selection verbatim from libxc <code>HYB_MGGA_XC_WB97M_V</code> / the published
-parameters; validated pointwise against libxc.</p>
+        <p>ωB97M-V range-separated meta-GGA hybrid with VV10 nonlocal correlation
+(N. Mardirossian and M. Head-Gordon, J. Chem. Phys. 144, 214110 (2016)),
+as libxc <code>HYB_MGGA_XC_WB97M_V</code>.</p>
+<p>Exact exchange <code>0.15·K + 0.85·K_lr(ω = 0.3)</code>; VV10 with <code>b = 6.0</code> and
+<code>C = 0.01</code>.</p>
 
 
 
@@ -7288,11 +7245,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Perdew-Wang 1992 LSDA correlation (the B97 family's LSDA backbone).</p>
-<p><code>ε_c(r_s, ζ) = ε_0 - α_c·f(ζ)/f''(0)·(1-ζ⁴) + (ε_1-ε_0)·f(ζ)·ζ⁴</code> with
-the three G-function fits of PW92 (the parameters fit −α_c, hence the
-sign). Validated against <code>libxc LDA_C_PW</code> to ~4e-10 (libxc carries one
-more digit on the A constants).</p>
+        <p>PW92Correlation()</p>
 
 
     </div>
@@ -7310,7 +7263,7 @@ more digit on the A constants).</p>
 
     <div class="doc doc-contents ">
 
-        <p>Local density approximation (LDA) exchange energy density.</p>
+        <p>LDAExchange()</p>
 
 
     </div>
@@ -7340,11 +7293,8 @@ more digit on the A constants).</p>
 
 
 
-        <p>r2SCAN meta-GGA (regularized-restored SCAN; the modern default mGGA).</p>
-<p>Needs the kinetic-energy density τ on the grid (<code>xc_type = "MGGA"</code>);
-the KS terms provide it and the Fock matrix comes from autodiff of the
-energy, so no vxc code exists anywhere. Validated pointwise against
-libxc <code>mgga_x_r2scan</code>/<code>mgga_c_r2scan</code> to machine precision.</p>
+        <p>r²SCAN meta-GGA (J. W. Furness et al., J. Phys. Chem. Lett. 11, 8208
+(2020)), as libxc <code>mgga_x_r2scan</code> and <code>mgga_c_r2scan</code>.</p>
 
 
 
@@ -7768,7 +7718,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>r2SCAN correlation (built on the modified-PW92 LSDA).</p>
+        <p>R2SCANCorrelation()</p>
 
 
     </div>
@@ -7786,7 +7736,7 @@ errors defaults to 'strict'.</p>
 
     <div class="doc doc-contents ">
 
-        <p>r2SCAN exchange (spin-scaled per channel).</p>
+        <p>R2SCANExchange()</p>
 
 
     </div>

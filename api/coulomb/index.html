@@ -1618,7 +1618,8 @@ backend-choice table.</p>
 
     <div class="doc doc-contents first">
 
-        <p>Exact 4-center ERI Coulomb/exchange (small systems; O(N⁴) memory).</p>
+        <p>Exact 4-center Coulomb and exchange integrals, for small systems.</p>
+<p>Memory grows as O(N⁴); see :func:<code>df</code> for larger systems.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -1641,8 +1642,8 @@ backend-choice table.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>optional Cauchy-Schwarz threshold; negligible ERI quartets are
-skipped when materializing the tensor.</p>
+                <p>Cauchy-Schwarz threshold; integral quartets whose bound is
+below it are skipped. <code>None</code> keeps every quartet.</p>
               </div>
             </td>
             <td>
@@ -1658,12 +1659,35 @@ skipped when materializing the tensor.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>contract J/K on the fly instead of materializing the ERI
-tensor (O(N²) memory, slower; incompatible with <code>screen</code>).</p>
+                <p>contract Coulomb and exchange on the fly instead of storing
+the integrals: O(N²) memory, slower.</p>
               </div>
             </td>
             <td>
                   <code>False</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>screen</code> together with <code>stream=True</code>.</p>
+              </div>
             </td>
           </tr>
       </tbody>
@@ -1685,10 +1709,9 @@ tensor (O(N²) memory, slower; incompatible with <code>screen</code>).</p>
 
     <div class="doc doc-contents first">
 
-        <p>Density-fitted (RI) Coulomb/exchange with the given auxiliary basis.</p>
-<p>This is the KS default backend (O(N³) memory; RI error sub-mHa with a
-JK-fitting set); :func:<code>exact</code> remains available for small systems and
-reference comparisons.</p>
+        <p>Density-fitted (RI) Coulomb and exact exchange, the default backend.</p>
+<p>Memory grows as O(N³) instead of the O(N⁴) of :func:<code>exact</code>; with a
+JK-fitting auxiliary basis the fitting error is well below 1 mHa.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -1711,9 +1734,8 @@ reference comparisons.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>JK-fitting auxiliary basis name (default
-<code>"def2-universal-jkfit"</code>, the universal set covering any orbital
-basis), or an already built <code>BasisData</code>.</p>
+                <p>auxiliary basis name, or a built <code>BasisData</code>. The default,
+<code>"def2-universal-jkfit"</code>, fits any orbital basis.</p>
               </div>
             </td>
             <td>
@@ -1729,11 +1751,10 @@ basis), or an already built <code>BasisData</code>.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>RI memory strategy. <code>"auto"</code> (default) materializes the
-nao²×naux 3-center tensor when it fits a memory budget and
-otherwise streams RI-J/RI-K over budget-derived auxiliary chunks;
-<code>None</code> forces the materialized tensor; an int streams with
-exactly that chunk.</p>
+                <p>memory strategy. <code>"auto"</code> stores the 3-center tensor when it
+fits the device memory budget and otherwise streams it in
+auxiliary chunks; <code>None</code> always stores it; an int streams in
+chunks of that many auxiliary functions.</p>
               </div>
             </td>
             <td>
@@ -1749,16 +1770,10 @@ exactly that chunk.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>relative Cauchy-Schwarz threshold dropping negligible bra
-pairs (survivors are O(N) for extended systems). On the
-materialized path it is a shell-pair compact gather that omits
-the screened shell-pairs from the 3-center build (they stay
-exactly zero); with an int <code>chunk</code> it restricts the streamed
-RI-J bra sum to the significant AO pairs. <code>None</code> keeps every
-pair, a bit-identical build. <code>"auto"</code> (default) screens at
-<code>DF_SCREEN_AUTO_CUTOFF</code> from <code>DF_SCREEN_AUTO_MIN_ATOMS</code> atoms
-up (the grid's gate) and keeps every pair below it; batched
-geometries (<code>scf_batched</code>) never screen.</p>
+                <p>relative Cauchy-Schwarz threshold below which AO pairs are
+dropped from the fit. <code>"auto"</code> screens at 1e-10 from 50 atoms
+up and keeps every pair below that; <code>None</code> keeps every pair.
+Batched solves (<code>scf_batched</code>) never screen.</p>
               </div>
             </td>
             <td>
@@ -1774,15 +1789,9 @@ geometries (<code>scf_batched</code>) never screen.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>auxiliary basis span. <code>None</code> (default) uses spherical
-harmonics on the materialized paths, single-device and
-mesh-sharded alike (non-redundant fit, positive definite metric),
-and cartesian components on the streamed path (which contracts
-cartesian auxiliary elements on the fly). <code>False</code> forces
-cartesian everywhere, e.g. to
-compare a materialized result against a streamed one in the same
-fit space; <code>True</code> asserts the spherical span and raises where
-it is unsupported.</p>
+                <p><code>True</code> fits with spherical auxiliary functions,
+<code>False</code> with cartesian ones. <code>None</code> uses spherical functions
+when the tensor is stored and cartesian ones when it is streamed.</p>
               </div>
             </td>
             <td>
@@ -1798,15 +1807,10 @@ it is unsupported.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>fold the metric into the materialized tensor once, <code>B = Lᵀ T</code>
-with <code>L Lᵀ = V⁺</code> (:class:<code>WhitenedDFCoulomb</code>): the same energy to
-the density-fitting floor, no metric multiply per build, and an
-orbital-route exchange that never forms <code>nao x nao</code> kernels.
-<code>None</code> (default) whitens whenever the build is concrete and
-single-device materialized, and keeps :class:<code>DFCoulomb</code> where the
-geometry is traced (forces, Hessians, <code>scf_batched</code>), whose
-metric inverse carries the geometry derivative; <code>False</code> never
-whitens; <code>True</code> asserts it and raises where it cannot apply.</p>
+                <p>store the tensor with the inverse metric folded in, which
+saves one contraction per Fock build. <code>None</code> does so when the
+geometry is not being differentiated and the tensor is stored on
+one device.</p>
               </div>
             </td>
             <td>
@@ -1822,14 +1826,10 @@ whitens; <code>True</code> asserts it and raises where it cannot apply.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>store the whitened tensor packed over the kept bra shell
-pairs, <code>(naux, npair)</code> (:class:<code>PackedDFCoulomb</code>): about half
-the memory before screening and only the kept pairs with it, at
-the price of unpacking one aux block per exchange evaluation.
-<code>"auto"</code> (default) packs where that pays: when pair screening
-is on (<code>screen</code>) or when the square tensor would miss the
-device budget and the packed one fits; <code>True</code> / <code>False</code>
-force it. Traced builds (no whitening) stay square.</p>
+                <p>store only the kept AO pairs, <code>(naux, npair)</code>, about half
+the memory of the square tensor. <code>"auto"</code> packs when pairs are
+screened or when only the packed tensor fits the memory budget.
+Applies to the whitened tensor only.</p>
               </div>
             </td>
             <td>
@@ -1840,11 +1840,36 @@ force it. Traced builds (no whitening) stay square.</p>
     </table>
 
 
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>spherical=True</code> or <code>whiten=True</code> with an int
+<code>chunk</code> (streaming is cartesian and unwhitened), or
+<code>packed=True</code> with <code>whiten=False</code> or an int <code>chunk</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
 <details class="example" open>
   <summary>Example</summary>
   <div class="highlight"><pre><span></span><code><span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">)</span>                                    <span class="c1"># same as coulomb=df()</span>
-<span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="n">chunk</span><span class="o">=</span><span class="kc">None</span><span class="p">))</span>            <span class="c1"># force materialized</span>
-<span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="s2">"def2-universal-jkfit"</span><span class="p">,</span> <span class="n">chunk</span><span class="o">=</span><span class="mi">64</span><span class="p">))</span>  <span class="c1"># streamed</span>
+<span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="n">chunk</span><span class="o">=</span><span class="kc">None</span><span class="p">))</span>            <span class="c1"># always store the tensor</span>
+<span class="n">KS</span><span class="p">(</span><span class="n">mol</span><span class="p">,</span> <span class="n">xc</span><span class="p">,</span> <span class="n">coulomb</span><span class="o">=</span><span class="n">df</span><span class="p">(</span><span class="n">chunk</span><span class="o">=</span><span class="mi">64</span><span class="p">))</span>              <span class="c1"># stream in chunks of 64</span>
 </code></pre></div>
 </details>
 

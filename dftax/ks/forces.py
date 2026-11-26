@@ -117,7 +117,7 @@ def forces(
             stores it, an int always streams. Hybrids with fractional
             occupations (``smearing``) need ``chunk=None``. A Cell takes no
             ``coulomb``.
-        dispersion: the :func:`~dftax.energy.d3.d3bj` or
+        dispersion (D3BJSpec | D4Spec | None): the :func:`~dftax.energy.d3.d3bj` or
             :func:`~dftax.energy.d4.d4` spec of the calculation.
 
     Example:

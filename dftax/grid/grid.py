@@ -105,8 +105,8 @@ def points(coords, weights, *, chunk: int | str | None = "auto") -> Points:
     """An explicit quadrature grid, e.g. PySCF's.
 
     Args:
-        coords: points (Bohr), ``(ngrid, 3)``.
-        weights: weights, ``(ngrid,)``.
+        coords (Array): points (Bohr), ``(ngrid, 3)``.
+        weights (Array): weights, ``(ngrid,)``.
         chunk: memory strategy of the XC integral, as in :func:`becke`.
     """
     return Points(coords=coords, weights=weights, chunk=chunk)
@@ -237,10 +237,11 @@ def becke_grid(
 
     Args:
         symbols: element symbols.
-        coords_bohr: nuclear coordinates (Bohr), ``(natom, 3)``.
+        coords_bohr (Array): nuclear coordinates (Bohr), ``(natom, 3)``.
 
     Returns:
-        ``(coords, weights)``, of shapes ``(ngrid, 3)`` and ``(ngrid,)``.
+        coords (Array): the points (Bohr), ``(ngrid, 3)``.
+        weights (Array): the weights, ``(ngrid,)``.
     """
     _check_partition(partition)
     coords = jnp.asarray(coords_bohr).reshape(-1, 3)

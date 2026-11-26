@@ -73,23 +73,26 @@ def scf_batched(
     """SCF over many geometries of the same molecule in one compiled call.
 
     Args:
-        mol: the molecule; gives the atoms, basis, charge and spin.
-        coords_batch: nuclear coordinates (Bohr), ``(B, natom, 3)``.
-        xc: the exchange-correlation functional.
+        mol (Molecule): the molecule; gives the atoms, basis, charge and spin.
+        coords_batch (Array): nuclear coordinates (Bohr), ``(B, natom, 3)``.
+        xc (XCFunctional): the exchange-correlation functional.
         spin: as for :class:`~dftax.ks.energy.KS`.
         grid: a :func:`~dftax.grid.becke` spec (rebuilt per geometry).
         coulomb: :func:`~dftax.ks.terms.df` (the default) or plain
             :func:`~dftax.ks.terms.exact`; ``screen`` is not supported.
-        dispersion: a :func:`~dftax.energy.d3.d3bj` or
+        dispersion (D3BJSpec | D4Spec | None): a :func:`~dftax.energy.d3.d3bj` or
             :func:`~dftax.energy.d4.d4` spec.
         forces: also compute the forces.
         return_orbitals: also return the orbitals and densities
             (``O(B·nao²)`` memory).
         mesh: a :func:`~dftax.ks.shard.mesh` spec to divide the batch over
             devices.
-        max_iter, e_tol, d_tol, diis_space, level_shift: as for
-            :func:`~dftax.ks.scf.scf`.
-        guess: a guess spec from :mod:`dftax.ks.guess`; density arrays are
+        max_iter: as for :func:`~dftax.ks.scf.scf`.
+        e_tol: as for :func:`~dftax.ks.scf.scf`.
+        d_tol: as for :func:`~dftax.ks.scf.scf`.
+        diis_space: as for :func:`~dftax.ks.scf.scf`.
+        level_shift: as for :func:`~dftax.ks.scf.scf`.
+        guess (GuessSpec | None): a guess spec from :mod:`dftax.ks.guess`; density arrays are
             not accepted.
 
     Returns:

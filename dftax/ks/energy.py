@@ -757,13 +757,14 @@ class KS(eqx.Module):
         orbitals.
 
         Args:
-            Cs: occupied orbital coefficients per spin channel, each
+            Cs (tuple[Array, ...]): occupied orbital coefficients per spin channel, each
                 ``(nao, nocc_σ)``.
             idempotent: as in :meth:`energy_and_fock`.
 
         Returns:
-            ``(E, grads)`` with ``grads[σ] = ∂E/∂C_σ = 2 F_σ C_σ diag(w_σ)``,
-            ``w`` from :meth:`occupations`.
+            E (Array): the total energy (Hartree).
+            grads (tuple[Array, ...]): ``grads[σ] = ∂E/∂C_σ = 2 F_σ C_σ diag(w_σ)``, with
+                ``w`` from :meth:`occupations`.
         """
         ws = self.occupations()
         P = jnp.stack([(C * w) @ C.T for C, w in zip(Cs, ws)])

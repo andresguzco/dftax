@@ -275,7 +275,7 @@ def forces(
         if aux_t is not None:
             aux_basis = eqx.tree_at(lambda b: b.centers, aux_t, coords[aux_atom_idx])
             spec = (ExternalCoulombSpec() if packed
-                    else df(aux_basis, chunk=df_chunk))
+                    else df(aux_basis, chunk=df_chunk, screen=None))
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune, grid.r_max,
             grid.radial, grid.radii_adjust, partition=grid.partition,

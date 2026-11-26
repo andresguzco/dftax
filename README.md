@@ -188,7 +188,7 @@ a good neighbor to it, not a replacement.
   author  = {Guzm{\'a}n-Cordero, Andr{\'e}s},
   title   = {dftax: a differentiable Kohn-Sham DFT engine in JAX},
   url     = {https://github.com/andresguzco/dftax},
-  version = {0.11.0},
+  version = {0.11.1},
   year    = {2026},
 }
 ```

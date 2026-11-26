@@ -35,7 +35,9 @@ def d4(method: str | None = None, *, atm: bool = False) -> D4Spec:
     Args:
         method: name of the damping-parameter set, e.g. ``"pbe0"``; ``None``
             takes the set of the functional the KS is built with.
-        atm: add the Axilrod-Teller-Muto three-body term (``s9 = 1``).
+        atm: add the Axilrod-Teller-Muto three-body term (``s9 = 1``). The
+            parameter sets were fitted with it, and the reference D4 (dftd4)
+            includes it by default; ``atm=False`` is the two-body energy.
     """
     return D4Spec(method=method, atm=atm)
 

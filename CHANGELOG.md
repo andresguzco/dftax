@@ -4,6 +4,40 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
+## [0.11.1] - 2026-11-26
+
+### Fixed
+- **Basis sets with effective core potentials are rejected.** dftax has no
+  core potentials: a def2 basis on an element from Rb on, or a PySCF molecule
+  built with `ecp=`, ran every electron in the valence basis and returned a
+  meaningless energy without a warning. Both now raise `NotImplementedError`.
+- **`ir_spectrum` intensities were 1822.9 times too small, and
+  `raman_spectrum` activities about 143 times too small**: the normal modes
+  were mass-weighted in electron masses. Both are now in the documented units
+  (km/mol and Å⁴/amu), checked against the dipole and polarizability
+  derivatives of a diatomic.
+- **`level_shift` no longer leaks into `mo_energy`.** The virtual orbital
+  energies from `scf` and `scf_batched` came out `level_shift` too high.
+- **`scf` rejects `smearing` together with `level_shift`.** The shift set the
+  fractional occupations from shifted orbital energies, so the run converged
+  to the wrong density and reported success.
+- **Density fitting from 50 atoms in `forces`, `hessian(method="analytic")`
+  and `scf_batched`.** The Schwarz screening that switches on at 50 atoms ran
+  on traced coordinates and raised `TracerArrayConversionError`. On CPU,
+  `forces()` streams from about 50 atoms in def2-svp, so a plain call crashed
+  there.
+- **Gradients in nuclear charges or basis parameters with `df()`.**
+  `alchemical_deriv(coulomb=df())`, and any `jax.grad` of a density-fitted
+  `KS` in charges or exponents, could take the host-side integral build with
+  traced inputs and raise, depending on what earlier calls had compiled.
+- **`scf_batched(forces=True)` with a streamed long-range-corrected hybrid**
+  (wB97, LC-BLYP) raises the documented `ValueError` instead of failing inside
+  JAX.
+
+### Changed
+- The `d4()` documentation states that the reference D4 includes the
+  three-body term, which is `d4(atm=True)`; the default stays two-body.
+
 ## [0.11.0] - 2026-11-26
 
 ### Added

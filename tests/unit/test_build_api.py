@@ -168,3 +168,23 @@ def test_functional_registry_resolves_names_and_aliases():
     assert functional("r2scan").name == "r2SCAN"
     with pytest.raises(ValueError, match="available"):
         functional("m06-2x")
+
+
+def test_basis_with_core_potential_is_rejected():
+    from dftax.basis.loader import build_basis_data
+
+    coords = jnp.array([[0.0, 0.0, 0.0], [0.0, 0.0, 3.04]])
+    with pytest.raises(NotImplementedError, match="core potential"):
+        build_basis_data(["I", "H"], coords, "def2-svp")
+
+
+@pytest.mark.pyscf
+def test_pyscf_molecule_with_core_potential_is_rejected():
+    from pyscf import gto
+
+    from dftax import extract_basis_data
+
+    mol = gto.M(atom="I 0 0 0; H 0 0 1.61", basis="def2-svp", ecp="def2-svp",
+                verbose=0)
+    with pytest.raises(NotImplementedError, match="core potential"):
+        extract_basis_data(mol)

@@ -125,7 +125,7 @@ def _analytic_hessian(mol, xc, res, grid, coulomb, dispersion,
                 lambda b: b.centers, aux_t, coords[aux_atom_idx]
             )
             spec = (ExternalCoulombSpec() if packed
-                    else df(aux_b, chunk=df_chunk))
+                    else df(aux_b, chunk=df_chunk, screen=None))
         gc, gw = becke_grid(
             symbols, coords, grid.n_radial, grid.lebedev, grid.prune,
             grid.r_max, grid.radial, grid.radii_adjust, partition=grid.partition,

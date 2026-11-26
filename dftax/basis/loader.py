@@ -74,6 +74,14 @@ def build_basis_data(
     else:
         bdata = bse.get_basis(basis_name, elements=sorted(set(Zs)), header=False)
         elements = bdata["elements"]
+        ecp = sorted({s for s, Z in zip(symbols, Zs)
+                      if elements[str(Z)].get("ecp_potentials")})
+        if ecp:
+            raise NotImplementedError(
+                f"{basis_name!r} uses an effective core potential for "
+                f"{', '.join(ecp)}; dftax has no core potentials, so these "
+                f"atoms would run with all their electrons in a valence basis."
+            )
 
     raw_shells: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, int]] = []
     for atom_idx, (Z, center) in enumerate(zip(Zs, coords)):

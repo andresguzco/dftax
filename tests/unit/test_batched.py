@@ -4,7 +4,7 @@ import pytest
 
 from dftax.energy.xc import PBE
 from dftax.system.molecule import Molecule
-from dftax import KS, becke, exact, scf, forces, scf_batched, BatchedResult
+from dftax import KS, becke, df, exact, scf, forces, scf_batched, BatchedResult
 
 NR, LEB = 35, 50
 GRID = becke(NR, LEB)
@@ -81,3 +81,24 @@ class TestBatched:
         r_uks = scf_batched(rad, jnp.stack([cl]), PBE(), spin=rad.spin, grid=GRID)
         assert len(r_auto.nocc) == 2
         assert abs(float(r_auto.e_tot[0]) - float(r_uks.e_tot[0])) < 1e-12
+
+    def test_df_where_screening_switches_on(self, monkeypatch):
+        import dftax.ks.terms as terms
+
+        mol = Molecule.from_xyz(
+            "N 0 0 0; H 0 0.94 0.38; H 0.81 -0.47 0.38; H -0.81 -0.47 0.38",
+            "sto-3g")
+        monkeypatch.setattr(terms, "DF_SCREEN_AUTO_MIN_ATOMS", 1)
+        rb = scf_batched(mol, jnp.asarray(mol.atom_coords())[None], PBE(),
+                         grid=GRID, coulomb=df())
+        es = scf(KS(mol, PBE(), grid=GRID, coulomb=df())).e_tot
+        assert bool(rb.converged[0])
+        assert abs(float(rb.e_tot[0]) - es) < 1e-6
+
+    def test_forces_reject_streamed_long_range_hybrid(self):
+        from dftax.energy.xc import WB97
+
+        mol = Molecule.from_xyz("O 0 0 0; H 0.76 0 0.50; H 0.76 0 -0.50", "sto-3g")
+        with pytest.raises(ValueError, match="streamed hybrid"):
+            scf_batched(mol, jnp.asarray(mol.atom_coords())[None], WB97(),
+                        grid=GRID, coulomb=df(chunk=64), forces=True)

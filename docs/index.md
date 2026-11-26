@@ -37,7 +37,8 @@ not shipped with dftax).
   exchange runs on all DF backends.
 - Dispersion as a value: `d3bj()` (with an optional ATM three-body term)
   and the charge-dependent `d4()` (differentiable EEQ charges), matched to
-  their reference implementations at machine precision.
+  their reference implementations at machine precision. The reference D4
+  includes the three-body term: use `d4(atm=True)` to reproduce it.
 - Analytic forces (Pulay terms included, and Mermin forces under smearing),
   implicit-diff SCF response (CPHF), dipole, polarizability, Hessian,
   frequencies, IR/Raman, and alchemical derivatives.

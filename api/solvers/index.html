@@ -1892,8 +1892,9 @@ orthonormal basis (removes linear dependencies).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>shift (Ha) added to the virtual orbital energies; damps
-oscillations at the cost of slower convergence.</p>
+                <p>shift (Ha) added to the virtual orbital energies during
+the iterations; damps oscillations at the cost of slower
+convergence. The returned <code>mo_energy</code> are unshifted.</p>
               </div>
             </td>
             <td>
@@ -2025,6 +2026,16 @@ the lowest orbitals.</p>
                 <p><code>smearing</code> with a hybrid on the streamed
 density-fitting backend (use <code>coulomb=df(chunk=None)</code>), or
 <code>guess</code>, <code>accel</code> or <code>level_shift</code> with k-points.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>smearing</code> with <code>level_shift</code>.</p>
               </div>
             </td>
           </tr>

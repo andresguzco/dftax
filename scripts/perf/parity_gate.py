@@ -41,20 +41,6 @@ BASELINE = os.path.join(HERE, "parity_baseline.json")
 WATER = "O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043"
 CH3 = "C 0 0 0; H 1.079 0 0; H -0.5395 0.9345 0; H -0.5395 -0.9345 0"
 
-# name -> (kwargs, tolerances)
-#
-# tolerances: ``e`` on the fixed-density total energy (absolute, Ha), ``f`` on
-# the fixed-density forces (absolute, Ha/Bohr), ``conv`` on the converged
-# energy when --converged is given. The exact-ERI cases are tight because
-# nothing amplifies there; the DF cases carry the metric pseudo-inverse's
-# documented ~1e7 amplification of last-bit changes.
-#
-# The DF ``e`` tolerances are 1e-9, not 1e-11, because a density-fitted energy
-# does not reproduce to 1e-11 across machines: two A100 nodes shift every DF
-# case by ~3e-10 with the library untouched, while the exact-ERI cases stay
-# bit-identical. The exact cases are the sharp instrument; 1e-9 still catches
-# anything meaningful, since the changes this gate guards move DF energies by
-# 1e-12 or not at all.
 CASES = {
     "lda_exact": (dict(atom=WATER, basis="sto-3g", xc="LDA", backend="exact"),
                   dict(e=1e-11, f=1e-10, conv=1e-10)),
@@ -67,25 +53,14 @@ CASES = {
     "uks_pbe_df": (dict(atom=CH3, basis="def2-svp", xc="PBE", backend="df",
                         spin=1),
                    dict(e=1e-9, f=None, conv=1e-8)),
-    # def2-svp, and the basis matters: sto-3g is l<=1, so cart2sph is None
-    # and the case cannot tell the cartesian and spherical AO spans apart.
     "rik_stream": (dict(atom=WATER, basis="def2-svp", xc="PBE0", backend="df",
                         df_chunk=64),
                    dict(e=1e-9, f=None, conv=1e-8)),
     "r2scan_df": (dict(atom=WATER, basis="def2-svp", xc="R2SCAN",
                        backend="df"),
                   dict(e=1e-9, f=None, conv=1e-8)),
-    # One density-fitted forces case, at the smallest basis that exercises
-    # the path; the def2-svp ones cost 444 s each and say the same thing.
-    # The force tolerance is 1e-6 because terms._metric_pinv documents ~5e-7
-    # for water with the overcomplete jkfit metric, so any change that
-    # reorders a contraction moves this by a few 1e-7 without regressing.
     "forces_df": (dict(atom=WATER, basis="sto-3g", xc="PBE", backend="df"),
                   dict(e=1e-9, f=1e-6, conv=None)),
-    # VV10's pair quadrature is O(ng^2), so this case gets its own coarse
-    # grid: at the gate's usual (50, 194) it is 8.5e8 point pairs and runs
-    # for tens of minutes, which is not what a per-phase gate is for. The
-    # point is to notice if the nonlocal-correlation path moves at all.
     "wb97xv_df": (dict(atom=WATER, basis="def2-svp", xc="WB97XV",
                        backend="df", screen=0.0, level=(20, 50)),
                   dict(e=1e-9, f=None, conv=None)),
@@ -110,12 +85,6 @@ def _build(atom, basis, xc, backend, spin=None, df_chunk="auto", screen=1e-10,
 
 
 def fixed_orbitals(S, nocc, seed: int = 0):
-    """S-orthonormal occupied coefficients from a fixed normal draw.
-
-    Deterministic given ``S`` and the seed, so the reference is independent of
-    the initial-guess code and of the solver. ``Cᵀ S C = I`` by construction,
-    so ``P = w C Cᵀ`` is PSD with the right trace.
-    """
     import jax
     import jax.numpy as jnp
 
@@ -162,11 +131,6 @@ def run_case(name: str, converged: bool) -> dict:
         nelec_check=float(jnp.einsum("smn,mn->", P0, ks.S)),
     )
 
-    # Self-consistency, not a baseline comparison: KS.energy_and_fock is the
-    # single-traversal route the SCF takes and must agree with the ordinary
-    # total() / grad(electronic()) pair above. An invariant of the code, so it
-    # is checked here rather than against the baseline, and it catches a broken
-    # fast path even on the first --write.
     e_fast, F_fast = ks.energy_and_fock(P0)
     rec["fast_de"] = abs(float(e_fast) - e_fixed)
     rec["fast_dF"] = float(jnp.abs(F_fast - F).max())
@@ -188,9 +152,6 @@ def run_case(name: str, converged: bool) -> dict:
     return rec
 
 
-# How far KS.energy_and_fock may sit from total()/grad(electronic()). It is
-# the same quantity by a different contraction order, so this is rounding,
-# not approximation.
 FAST_E_TOL = 1e-9
 FAST_F_TOL = 1e-10
 
@@ -243,9 +204,6 @@ def main():
     names = args.case or list(CASES)
     results = {}
     for name in names:
-        # Newline, not end="": stdout is a pipe under `tee`, which holds a
-        # partial line until one arrives, so a run looked hung for 40 minutes
-        # when it was working through its first case normally.
         print(f"  {name:12s} ...", flush=True)
         try:
             r = run_case(name, args.converged)

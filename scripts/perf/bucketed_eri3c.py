@@ -21,16 +21,7 @@ from dftax.energy.boys import boys
 from dftax.utils.vmap import vmap as chunked_vmap
 
 
-# ---------------------------------------------------------------------------
-# Eager shell tables (numpy, KS.__init__-time per the traced-vs-eager rule)
-# ---------------------------------------------------------------------------
-
 def shell_table(basis):
-    """Group flat cartesian rows into shells.
-
-    Returns a list of dicts: l, row0 (first cartesian row), ncomp, center
-    (3,), exps (nprim, trimmed), coeffs (ncomp, nprim), ang (ncomp, 3).
-    """
     cen = np.asarray(basis.centers)
     ex = np.asarray(basis.exponents)
     co = np.asarray(basis.coefficients)
@@ -54,10 +45,6 @@ def shell_table(basis):
 
 
 def bucket_triples(bra_shells, aux_shells):
-    """Group (bra_pair, aux_shell) triples by (la, lb, lc); i <= j bra pairs.
-
-    Returns {class_key: dict of stacked numpy arrays + static metadata}.
-    """
     buckets = defaultdict(lambda: defaultdict(list))
     for ia, sa in enumerate(bra_shells):
         for sb in bra_shells[ia:]:
@@ -96,12 +83,7 @@ def bucket_triples(bra_shells, aux_shells):
     return out
 
 
-# ---------------------------------------------------------------------------
-# Right-sized table builders (mirror eri3c.py's recursions, return tables)
-# ---------------------------------------------------------------------------
-
 def _bump(row, X, i2g, mt):
-    """One MD E-recursion step on a length-mt row (trace-time unrolled)."""
     left = jnp.concatenate([jnp.zeros(1), row[:-1]])
     right = jnp.concatenate([row[1:], jnp.zeros(1)])
     t_idx = jnp.arange(mt)
@@ -110,28 +92,22 @@ def _bump(row, X, i2g, mt):
 
 
 def _E_table(la, lb, alpha, beta, XAB, mt):
-    """Full (la+1, lb+1, mt) two-center E table, recursion unrolled at trace
-    time: the trip counts are tiny static ints, and unrolling lets XLA fuse
-    the whole table into one kernel instead of ~la*lb sequential launches
-    (the launch latency dominated the fori_loop version by ~100x)."""
     gamma = alpha + beta
     safe_gamma = jnp.where(gamma == 0.0, 1.0, gamma)
     i2g = 0.5 / safe_gamma
     XPA = -beta * XAB / safe_gamma
     XPB = alpha * XAB / safe_gamma
-    col = [jnp.zeros(mt).at[0].set(1.0)]           # E[i, 0] rows
+    col = [jnp.zeros(mt).at[0].set(1.0)]
     for _ in range(la):
         col.append(_bump(col[-1], XPA, i2g, mt))
-    rows = [col]                                    # rows[j][i]
+    rows = [col]
     for _ in range(lb):
         rows.append([_bump(r, XPB, i2g, mt) for r in rows[-1]])
-    # stack to (la+1, lb+1, mt)
     return jnp.stack([jnp.stack([rows[j][i] for j in range(lb + 1)])
                       for i in range(la + 1)])
 
 
 def _Ec_table(lc, gamma, mt):
-    """(lc+1, mt) single-center E table, unrolled at trace time."""
     safe_gamma = jnp.where(gamma == 0.0, 1.0, gamma)
     i2g = 0.5 / safe_gamma
     rows = [jnp.zeros(mt).at[0].set(1.0)]
@@ -141,13 +117,6 @@ def _Ec_table(lc, gamma, mt):
 
 
 def _hermite_table(rho, RPC, mt, omega=None):
-    """(mt, mt, mt) Hermite Coulomb integrals R^0_{t,u,v}.
-
-    Same m-ladder as dftax.integrals.eri3c._hermite_coulomb, unrolled over m
-    at trace time with each level's t/u/v sweeps as vectorized slice updates:
-    every entry of level m reads only level m+1, so each sweep is one shifted
-    multiply-add (the scalar-dict formulation traced ~mt^3/6 Python ops per
-    class and dominated first-call latency)."""
     T = rho * jnp.sum(RPC ** 2)
     neg2rho = -2.0 * rho
     if omega is None:
@@ -155,22 +124,19 @@ def _hermite_table(rho, RPC, mt, omega=None):
     else:
         s = (omega * omega) / (omega * omega + rho)
         base = [s ** (m + 0.5) * boys(m, s * T) for m in range(mt)]
-    idx = jnp.arange(mt - 1, dtype=jnp.float64)      # t/u/v factor 0..mt-2
+    idx = jnp.arange(mt - 1, dtype=jnp.float64)
     zrow = jnp.zeros((1,))
 
     Rp = jnp.zeros((mt, mt, mt)).at[0, 0, 0].set(
         neg2rho ** (mt - 1) * base[mt - 1])
     for m in range(mt - 2, -1, -1):
         R = jnp.zeros((mt, mt, mt)).at[0, 0, 0].set(neg2rho ** m * base[m])
-        # t sweep on the (t, 0, 0) row of level m+1
         row = Rp[:, 0, 0]
         shifted = jnp.concatenate([zrow, row[:-2]])
         R = R.at[1:, 0, 0].set(RPC[0] * row[:-1] + idx * shifted)
-        # u sweep on the (t, u, 0) plane of level m+1
         plane = Rp[:, :-1, 0]
         pshift = jnp.concatenate([jnp.zeros((mt, 1)), Rp[:, :-2, 0]], axis=1)
         R = R.at[:, 1:, 0].set(RPC[1] * plane + idx[None, :] * pshift)
-        # v sweep on the full (t, u, v) cube of level m+1
         cube = Rp[:, :, :-1]
         cshift = jnp.concatenate([jnp.zeros((mt, mt, 1)), Rp[:, :, :-2]],
                                  axis=2)
@@ -179,20 +145,8 @@ def _hermite_table(rho, RPC, mt, omega=None):
     return Rp
 
 
-# ---------------------------------------------------------------------------
-# The per-class kernel
-# ---------------------------------------------------------------------------
-
 def make_class_kernel(la, lb, lc, anga, angb, angc, omega=None):
-    """Jitted kernel for one (la, lb, lc) class.
-
-    anga/angb/angc: static (ncomp, 3) integer component tables.
-    Returns fn(triple_data) -> (nca, ncb, ncc) for one triple.
-    """
-    # class-sized recursions; floor 2 because _hermite_coulomb's vectorized
-    # t/u/v build assumes at least one off-origin Hermite index
     mt = max(la + lb + lc + 1, 2)
-    # static one-hot s = t + tau convolution tensor and component indices
     conv = np.zeros((mt, mt, mt))
     for t in range(mt):
         for tau in range(mt - t):
@@ -220,10 +174,8 @@ def make_class_kernel(la, lb, lc, anga, angb, angc, omega=None):
                         / (safe * safec * jnp.sqrt(safe + safec)))
                 R = _hermite_table(rho, P - C, mt, omega)
                 Ec = [_Ec_table(lc, ga, mt) * sign for _ in range(3)]
-                # G[x][i', j', k', s] = sum_tau Et[i',j',t] Ec[k',tau] conv
                 G = [jnp.einsum("ijt,ku,tus->ijks", Et[x], Ec[x], conv)
                      for x in range(3)]
-                # gather components statically -> (nca, ncb, ncc, mt)
                 GX = G[0][ia[0][:, None, None], jb[0][None, :, None],
                           kc[0][None, None, :], :]
                 GY = G[1][ia[1][:, None, None], jb[1][None, :, None],
@@ -233,10 +185,9 @@ def make_class_kernel(la, lb, lc, anga, angb, angc, omega=None):
                 return pref * jnp.einsum("abcs,abcr,abcq,srq->abc",
                                          GX, GY, GZ, R)
 
-            return jax.vmap(per_c)(ec)          # (npc, nca, ncb, ncc)
+            return jax.vmap(per_c)(ec)
 
         vals = jax.vmap(jax.vmap(per_ab, (None, 0)), (0, None))(ea, eb)
-        # vals: (npa, npb, npc, nca, ncb, ncc); contract coefficients
         return jnp.einsum("ijkabc,ai,bj,ck->abc", vals, ca, cb, cc)
 
     return one_triple
@@ -244,18 +195,9 @@ def make_class_kernel(la, lb, lc, anga, angb, angc, omega=None):
 
 @lru_cache(maxsize=4096)
 def _compiled_class_kernel(la, lb, lc, anga, angb, angc, omega, chunk_size):
-    """Jitted, cached batch kernel for one class.
-
-    Without this cache every bucketed_eri3c call re-traces the unrolled
-    graphs through Python; the tracing, not the GPU, was ~100% of the
-    measured wall (69 s ethanol). ang tuples are hashable static metadata;
-    jit keys the shapes, so repeat builds hit the compiled executable.
-    """
     kern = make_class_kernel(la, lb, lc,
                              np.asarray(anga), np.asarray(angb),
                              np.asarray(angc), omega)
-    # explicit in_axes: the utility's chunked path only batches the
-    # arguments named by in_axes, and a bare 0 covers just the first
     return jax.jit(chunked_vmap(kern, in_axes=(0,) * 9,
                                 chunk_size=chunk_size))
 
@@ -265,8 +207,6 @@ def _hashable_ang(a):
 
 
 def bucketed_eri3c(basis, aux_basis, omega=None, chunk=4096):
-    """Full (nao, nao, naux) tensor via class buckets, then the same
-    cart2sph transforms as eri3c_matrix."""
     bra = shell_table(basis)
     aux = shell_table(aux_basis)
     buckets = bucket_triples(bra, aux)
@@ -282,7 +222,7 @@ def bucketed_eri3c(basis, aux_basis, omega=None, chunk=4096):
             jnp.asarray(b["A"]), jnp.asarray(b["B"]), jnp.asarray(b["C"]),
             jnp.asarray(b["ea"]), jnp.asarray(b["eb"]), jnp.asarray(b["ec"]),
             jnp.asarray(b["ca"]), jnp.asarray(b["cb"]), jnp.asarray(b["cc"]),
-        )   # (ntrip, nca, ncb, ncc)
+        )
         nca, ncb, ncc = vals.shape[1:]
         r = b["rows"]
         i_idx = (r[:, 0, None, None, None] + np.arange(nca)[:, None, None])
@@ -292,9 +232,6 @@ def bucketed_eri3c(basis, aux_basis, omega=None, chunk=4096):
                                for x in (i_idx, j_idx, k_idx))
         out = out.at[i_idx.ravel(), j_idx.ravel(), k_idx.ravel()].set(
             vals.reshape(-1))
-        # bra symmetry: writing vals[t,a,b,c] at (j0+b, i0+a, k0+c) IS the
-        # transpose; swap the index arrays and keep the value order (a value
-        # transpose here would double-transpose against the (a,b) ravel).
         out = out.at[j_idx.ravel(), i_idx.ravel(), k_idx.ravel()].set(
             vals.reshape(-1))
     if basis.cart2sph is not None:

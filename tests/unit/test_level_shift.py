@@ -1,12 +1,3 @@
-"""Level-shifting preserves the SCF fixed point (RKS + UKS).
-
-Level shifting raises virtual orbital energies to damp *oscillatory* SCF; it must
-not move the converged density/energy. (It does NOT lower a convergence floor set
-by grid/functional noise; e.g. OH/PBE floors on the spin-GGA commutator and is
-not rescued by a shift. So the feature is validated by this fixed-point invariant,
-not by converging a noise-floored case.)
-"""
-
 import jax.numpy as jnp
 import pytest
 
@@ -25,8 +16,6 @@ def test_rks_level_shift_invariant(water_mol):
     mf.verbose = 0
     mf.kernel()
     grid = (jnp.asarray(mf.grids.coords), jnp.asarray(mf.grids.weights))
-    # exact(): the invariance bound compares two separately converged runs
-    # at 1e-9, below the DF stopping-tolerance flap through the RI metric.
     ks = KS(water_mol, LDA(), grid=(grid[0], grid[1]), coulomb=exact())
     r0 = scf(ks, level_shift=0.0)
     r1 = scf(ks, level_shift=0.5)

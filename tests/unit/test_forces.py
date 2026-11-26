@@ -1,9 +1,3 @@
-"""Analytic nuclear forces: finite-difference consistency and stationarity.
-
-Uses small grids; the analytic-vs-FD check is grid-independent (both use the
-same grid), and the stationarity guard needs no accuracy.
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -21,11 +15,6 @@ NR, LEB = 35, 50
 @pytest.mark.float64
 class TestForces:
     def test_forces_use_density_not_coefficient_packing(self):
-        """Contract (audit finding 4): from a KSResult, forces must freeze the
-        density the solver actually returned (result.P) — not whatever the
-        mo_coeff packing implies. minimize's aufbau-ordered canonical orbitals
-        need not span P when unconverged or at a degenerate frontier, so
-        scrambling mo_coeff must not change the forces."""
         import dataclasses
 
         xc = LDA()
@@ -40,9 +29,6 @@ class TestForces:
         assert float(jnp.max(jnp.abs(F - F2))) < 1e-12
 
     def test_forces_honor_grid_chunk(self, monkeypatch):
-        """Regression (audit finding 6): becke(chunk=...) must stream the XC
-        grid inside the force rebuild — not be silently dropped — and the
-        streamed geometry gradient must match the materialized one."""
         import dftax.ks.terms as terms
 
         calls = []
@@ -55,9 +41,9 @@ class TestForces:
         mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.85", "sto-3g")
         res = scf(KS(mol, xc, grid=becke(NR, LEB)), e_tol=1e-10, d_tol=1e-8)
         F_mat = forces(mol, xc, res, grid=becke(NR, LEB))
-        assert not calls                                  # materialized path
+        assert not calls
         F_str = forces(mol, xc, res, grid=becke(NR, LEB, chunk=500))
-        assert calls                                      # streamed path taken
+        assert calls
         assert float(jnp.max(jnp.abs(F_str - F_mat))) < 1e-9
 
     def test_h2_force_matches_finite_difference(self):
@@ -76,7 +62,6 @@ class TestForces:
         res = scf(KS(mol, xc, grid=(gc, gw)), e_tol=1e-10, d_tol=1e-8)
         F = forces(mol, xc, (res.mo_coeff[0][:, :1],), grid=becke(NR, LEB))
 
-        # Translational invariance: net force vanishes.
         assert float(np.abs(np.asarray(F.sum(axis=0))).max()) < 1e-8
 
         eps = 1e-3
@@ -87,13 +72,6 @@ class TestForces:
         assert abs(float(F[1, 2]) - fd) < 1e-4, f"F={float(F[1,2])} fd={fd}"
 
     def test_smeared_force_matches_finite_difference(self):
-        """Mermin force under Fermi smearing: the analytic force (frozen
-        fractional natural-orbital density) must match the finite difference of
-        the re-converged free energy. C2 at 1.3 A has a near-degenerate
-        frontier, so smearing gives genuinely fractional occupations (ts > 0),
-        exercising the natural-orbital force path rather than the integer
-        projector.
-        """
         xc = LDA()
         c0 = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.3]])
         sig = 0.02
@@ -110,7 +88,7 @@ class TestForces:
         res = scf(KS(mol, xc, grid=(gc, gw), coulomb=exact()),
                   smearing=fermi(sigma=sig), e_tol=1e-11, d_tol=1e-9,
                   max_iter=300)
-        assert res.converged and float(res.ts) > 1e-6   # fractional path active
+        assert res.converged and float(res.ts) > 1e-6
 
         F = forces(mol, xc, res, grid=becke(NR, LEB), coulomb=exact())
         eps = 1e-3
@@ -121,8 +99,6 @@ class TestForces:
         assert abs(float(F[1, 2]) - fd) < 1e-4, f"F={float(F[1, 2])} fd={fd}"
 
     def test_stationarity_multiple_occupied(self):
-        # Guards the degenerate-eigh fix: at the converged density of a system
-        # with nocc > 1, dE/dZ through the (solve-based) density must vanish.
         mol = Molecule.from_xyz("O 0 0 0; H 0.96 0 0; H -0.24 0.93 0", "sto-3g")
         gc, gw = becke_grid(mol.symbols, mol.atom_coords(), 30, 50)
         ks = KS(mol, LDA(), grid=(gc, gw))
@@ -137,14 +113,10 @@ class TestDensityFittingForces:
     AUX = "def2-universal-jkfit"
 
     def test_metric_pinv_degenerate_derivative(self):
-        # The RI Coulomb metric has *exactly* degenerate eigenvalues on symmetric
-        # molecules (Td/Oh). There the plain eigh pseudo-inverse derivative is wrong
-        # (finite-but-incorrect on CPU, NaN on GPU/cuSolver, so DF forces broke). The
-        # custom_jvp must return the exact d(V⁺) = -V⁺ dV V⁺, finite and correct.
         from dftax.ks.energy import _metric_pinv
 
         Q, _ = jnp.linalg.qr(jnp.asarray(np.arange(16.0).reshape(4, 4) + np.eye(4)))
-        V = Q @ jnp.diag(jnp.array([2.0, 2.0, 5.0, 7.0])) @ Q.T   # eigenvalue 2 is doubled
+        V = Q @ jnp.diag(jnp.array([2.0, 2.0, 5.0, 7.0])) @ Q.T
         V = 0.5 * (V + V.T)
         dV = jnp.asarray(np.random.default_rng(0).standard_normal((4, 4)))
         dV = 0.5 * (dV + dV.T)
@@ -187,15 +159,10 @@ class TestDensityFittingForces:
         assert abs(float(F[1, 2]) - fd) < 1e-4, f"F={float(F[1,2])} fd={fd}"
 
     def test_materialized_df_forces_take_the_packed_path(self, monkeypatch):
-        """Materialized DF forces build the packed tensor at the traced
-        coordinates (with frozen-orbital exchange), not the square one; a
-        hybrid's packed forces match the streamed frozen-orbital forces to
-        machine precision on a well-conditioned auxiliary metric."""
         import importlib
 
         from dftax.energy.xc import PBE0
 
-        # the module, not the re-exported forces() function of the same name
         forces_mod = importlib.import_module("dftax.ks.forces")
 
         calls = []
@@ -216,10 +183,6 @@ class TestDensityFittingForces:
         assert float(jnp.max(jnp.abs(Fp - Fs))) < 1e-12
 
     def test_streamed_df_forces_match_materialized(self):
-        """The streamed DF force path (aux-slabbed, 3-center recomputed; the
-        forces-OOM fix) must reproduce the materialized-tensor forces.
-        ``spherical=False`` puts the materialized side in the streamed path's
-        cartesian fit space, so the comparison is contraction order only."""
         xc = LDA()
         mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.85", "sto-3g")
         res = scf(
@@ -231,15 +194,9 @@ class TestDensityFittingForces:
                     coulomb=df(self.AUX, chunk=None, spherical=False))
         Fs = forces(mol, xc, Zs, grid=becke(NR, LEB),
                     coulomb=df(self.AUX, chunk=4))
-        # 1e-8, as for the hybrid below: the jkfit metric's pseudo-inverse
-        # amplifies rounding by ~1e7, and on an A100 this gap moves between
-        # 1e-11 and 4e-9 with the radial shell count alone.
         assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-8
 
     def test_streamed_df_forces_hybrid(self):
-        """Hybrid streamed forces route exchange through the frozen-orbital
-        RI-K (``_streamed_df_rik_frozen``): its occupied-pair reduction must
-        equal the materialized exchange quadratic at the projector density."""
         from dftax.energy.xc import PBE0
 
         xc = PBE0()
@@ -253,17 +210,9 @@ class TestDensityFittingForces:
                     coulomb=df(self.AUX, chunk=None, spherical=False))
         Fs = forces(mol, xc, Zs, grid=becke(NR, LEB),
                     coulomb=df(self.AUX, chunk=4))
-        # 1e-8, not 1e-9: the two exchange contraction orders round
-        # differently through the pseudo-inverted RI metric, whose kept
-        # 1e-7-cutoff band amplifies rounding by ~1e7 (see _metric_pinv).
         assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-8
 
     def test_streamed_df_forces_uks_hybrid(self):
-        """Open-shell frozen RI-K parity (per-spin channels, unequal nocc).
-        A well-conditioned (sto-3g) auxiliary metric makes the parity
-        machine-precision; with a jkfit metric the two contraction orders
-        round differently through the 1e-7-cutoff pseudo-inverse band,
-        which would mask a real defect."""
         from dftax.energy.xc import PBE0
 
         xc = PBE0()
@@ -282,10 +231,6 @@ class TestDensityFittingForces:
         assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-12
 
     def test_streamed_df_forces_rsh(self):
-        """Range-separated streamed forces: both frozen RI-K channels (the
-        Coulomb-metric exchange and the per-slab-rebuilt attenuated LR
-        exchange with its own metric) must match the materialized RSH force.
-        A well-conditioned (sto-3g) auxiliary keeps the parity sharp."""
         from dftax.energy.xc import CAMB3LYP
 
         xc = CAMB3LYP()
@@ -302,10 +247,6 @@ class TestDensityFittingForces:
         assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-12
 
     def test_forces_auto_chunk_streams_past_budget(self, monkeypatch):
-        """``df()`` (chunk="auto") must resolve to the streamed geometry
-        gradient once the 3-center tensor exceeds the memory budget, and the
-        streamed result must match the materialized one (compared in the
-        streamed path's cartesian fit space)."""
         import dftax.ks.energy as energy_mod
         import dftax.ks.terms as terms
 
@@ -325,21 +266,12 @@ class TestDensityFittingForces:
             terms, "_streamed_df_rij_slabs",
             lambda *a, **k: (calls.append(1), orig(*a, **k))[1],
         )
-        # Patch the budget function the "auto" policy calls, not the
-        # _DF_BUDGET floor: on a GPU the budget is a fraction of the device's
-        # memory pool (_df_materialize_budget), so a zero floor never forced
-        # streaming there and the test only passed on CPU.
         monkeypatch.setattr(energy_mod, "_df_materialize_budget", lambda: 16)
         F_auto = forces(mol, xc, Zs, grid=becke(NR, LEB), coulomb=df(self.AUX))
-        assert calls                                      # streamed path taken
-        # 1e-8: the jkfit pseudo-inverse rounding band, as above.
+        assert calls
         assert float(jnp.max(jnp.abs(F_auto - F_mat))) < 1e-8
 
     def test_streamed_screened_forces_match_dense(self):
-        """Plan-level Schwarz screening composes with streamed forces: the
-        shell-pair keep-set is frozen at the reference geometry and baked into
-        the slab plans. An H6 chain drops its end-to-end pairs; the screened
-        force must match the dense streamed force to the screening scale."""
         xc = LDA()
         atoms = "; ".join(f"H 0 0 {i * 1.4:.3f}" for i in range(6))
         mol = Molecule.from_xyz(atoms, "sto-3g")
@@ -355,10 +287,6 @@ class TestDensityFittingForces:
         assert float(jnp.max(jnp.abs(Fd - Fs))) < 1e-8
 
     def test_streamed_smeared_forces(self):
-        """A smeared (fractionally occupied) result streams pure-DF forces
-        (RI-J takes the traced fractional density directly) but must reject
-        the streamed hybrid path, whose frozen-orbital exchange assumes an
-        integer projector."""
         from dftax.energy.xc import PBE0
 
         xc = LDA()
@@ -374,10 +302,6 @@ class TestDensityFittingForces:
                     coulomb=df("sto-3g", chunk=None, spherical=False))
         Fs = forces(mol, xc, res, grid=becke(NR, LEB),
                     coulomb=df("sto-3g", chunk=6))
-        # 1e-8, as for the integer-occupation streamed/materialized checks
-        # above: the two backends contract in different orders, which on CPU
-        # agree to ~1e-12 but on an A100 to 9.7e-10 (the cross-backend
-        # rounding band of density-fitted forces, see _metric_pinv).
         assert float(jnp.max(jnp.abs(Fm - Fs))) < 1e-8
 
         with pytest.raises(NotImplementedError, match="smeared"):

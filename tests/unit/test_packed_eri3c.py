@@ -1,11 +1,3 @@
-"""The packed 3-center tensor: ``(naux, npair)`` over kept bra shell pairs.
-
-:func:`~dftax.integrals.eri3c_bucketed.eri3c_packed` runs the square build's
-class kernels and writes each block once; :func:`packed_layout` says where.
-Unpacked through ``pos`` it must be the square tensor exactly, and the
-weighted packed density must give the square contraction.
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -34,7 +26,6 @@ def _bases(spherical):
 @pytest.mark.float64
 @pytest.mark.parametrize("spherical, screen", [
     (True, 1e-3),
-    # PR tier: test_bucketed_build checks the cartesian packed tensor
     pytest.param(False, None, marks=pytest.mark.slow),
 ])
 def test_packed_unpacks_to_the_square_tensor(spherical, screen):
@@ -49,7 +40,6 @@ def test_packed_unpacks_to_the_square_tensor(spherical, screen):
     Tz = jnp.concatenate([Tp, jnp.zeros((Tp.shape[0], 1))], axis=1)
     U = Tz[:, lay.pos]
     np.testing.assert_array_equal(U, U.transpose(0, 2, 1))
-    # the square build's diagonal shell blocks are symmetric only to rounding
     np.testing.assert_allclose(U, T.transpose(2, 0, 1), rtol=1e-12, atol=1e-14)
     P = np.random.default_rng(0).normal(size=T.shape[:2])
     P = P + P.T
@@ -59,9 +49,6 @@ def test_packed_unpacks_to_the_square_tensor(spherical, screen):
 
 
 def test_layout_covers_each_kept_pair_once():
-    """Every kept (m, n) maps to one packed entry holding (m, n) or (n, m),
-    symmetrically; each unordered pair is weighed exactly twice over, or once
-    on the diagonal; screened pairs map to the zero slot."""
     basis, _ = _bases(True)
     aux = basis
     keep = _shell_pair_keep(basis, 1e-3)

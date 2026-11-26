@@ -69,7 +69,7 @@ def child(mol_name, basis, xc_name, whiten, repeat):
     P = jnp.asarray(r.P)
     fock = eqx.filter_jit(lambda k, P: k.energy_and_fock(P))
     t_fock = _median(lambda: fock(ks, P), repeat)
-    C = jnp.asarray(r.mo_coeff)                     # (nspin, nao, nmo)
+    C = jnp.asarray(r.mo_coeff)
     Cs = tuple(C[s, :, :n] for s, n in enumerate(ks.nocc))
     orb = eqx.filter_jit(lambda k, Cs: k.energy_and_grad_orbitals(Cs))
     t_orb = _median(lambda: orb(ks, Cs), repeat)

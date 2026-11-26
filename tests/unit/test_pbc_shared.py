@@ -1,10 +1,3 @@
-"""The shared periodic layer against PySCF's ``pbc`` module: lattice geometry,
-the Ewald energy, the GTH tables and local potential, the FFT Hartree energy.
-
-One small triclinic cell with two elements exercises every convention (a
-cubic, one-element cell would hide a transposed lattice or a swapped axis).
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -16,8 +9,8 @@ from dftax.pbc import (
 )
 from dftax.pbc.gth import local_parameters
 
-A = np.array([[9.0, 0.0, 0.0], [2.0, 8.5, 0.0], [1.0, -1.5, 10.0]])   # Bohr
-ATOMS = "Si 0.5 0.4 0.3; O 3.4 1.1 0.9; O 1.0 4.2 5.6"                # Bohr
+A = np.array([[9.0, 0.0, 0.0], [2.0, 8.5, 0.0], [1.0, -1.5, 10.0]])
+ATOMS = "Si 0.5 0.4 0.3; O 3.4 1.1 0.9; O 1.0 4.2 5.6"
 MESH = (9, 10, 12)
 
 
@@ -34,7 +27,7 @@ def pcell():
     c.atom, c.a, c.unit = ATOMS, A, "B"
     c.basis, c.pseudo = "gth-szv", "gth-pade"
     c.mesh = list(MESH)
-    c.precision = 1e-12          # PySCF's Ewald sum converges to this
+    c.precision = 1e-12
     c.verbose = 0
     c.build()
     return c
@@ -56,8 +49,6 @@ def test_ewald_matches_pyscf(cell, pcell):
     np.testing.assert_allclose(ewald_energy(coords, Z, a), pcell.ewald(),
                                atol=1e-10)
 
-    # differentiable in the coordinates (the zero-distance self term masked)
-    # and in the lattice, with the plan frozen at the reference geometry
     plan = plan_ewald(cell.a, cell.atom_coords())
     g = jax.grad(lambda x: ewald_energy(x, Z, a, plan))(coords)
     assert np.all(np.isfinite(g))
@@ -99,7 +90,7 @@ def test_local_potential_matches_pyscf(cell, pcell):
     from pyscf.pbc.gto import pseudo as ppseudo
 
     Gv = pcell.get_Gv(list(MESH))
-    ref_G = ppseudo.get_vlocG(pcell, Gv)                  # (natm, N), sign flipped
+    ref_G = ppseudo.get_vlocG(pcell, Gv)
     zion, rloc, cloc = map(jnp.asarray, local_parameters(cell.potentials))
     G2 = jnp.sum(jnp.asarray(Gv) ** 2, axis=-1)
     ours = jax.vmap(lambda z, r, c: vloc_G(G2, z, r, c))(zion, rloc, cloc)

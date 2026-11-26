@@ -1,10 +1,3 @@
-"""Pure-JAX one-electron integral matrix builders for KS-DFT.
-
-Provides analytical overlap (S), kinetic (T), nuclear attraction (V),
-and nuclear repulsion (V_nn) integrals via Obara-Saika recurrence,
-fully differentiable and compatible with jit/vmap.
-"""
-
 from dftax.integrals.overlap import (
     overlap_matrix,
     cross_overlap_matrix,

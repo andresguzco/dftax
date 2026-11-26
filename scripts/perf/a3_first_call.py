@@ -38,12 +38,11 @@ sym = [mol.atom_symbol(i) for i in range(mol.natm)]
 aux = build_basis_data(sym, mol.atom_coords(), "def2-universal-jkfit",
                        spherical=True)
 
-# Distinct class counts (each -> one jitted kernel = one trace + one compile).
 p3 = plan_eri3c(orb, aux)
 pp = plan_pairs(orb)
 pa = plan_pairs(aux)
-n_eri3c = len(p3[2])   # plan_eri3c -> (nao, naux, classes)
-n_pairs = len(pp[1])   # plan_pairs -> (nao, classes)
+n_eri3c = len(p3[2])
+n_pairs = len(pp[1])
 n_aux = len(pa[1])
 print(f"[{basis_name}] orbital max_l={int(orb.max_l)}  nao={orb.centers.shape[0]}")
 print(f"  distinct kernels: eri3c={n_eri3c}  pairs(S/T/V)={n_pairs}  eri2c-aux={n_aux}")

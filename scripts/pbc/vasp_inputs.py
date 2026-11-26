@@ -43,8 +43,6 @@ LCHARG = .FALSE.
 
 
 def poscar(spec) -> str:
-    """POSCAR in direct coordinates, atoms grouped by element in the order
-    the elements first appear."""
     elements = list(dict.fromkeys(spec.symbols))
     lines = [spec.name, "1.0"]
     lines += ["  ".join(f"{x:20.14f}" for x in row) for row in spec.a]
@@ -63,8 +61,6 @@ def write(spec, directory, encut, kmesh, smearing):
     with open(os.path.join(directory, "POSCAR"), "w") as f:
         f.write(poscar(spec))
     with open(os.path.join(directory, "INCAR"), "w") as f:
-        # Fermi-Dirac (-1) at the requested width for a metal; Gaussian (0)
-        # with a negligible width for an insulator
         f.write(INCAR.format(
             name=spec.name, encut=encut,
             ismear=-1 if smearing else 0,

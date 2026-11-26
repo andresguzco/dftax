@@ -1,21 +1,3 @@
-"""Molecular response properties for restricted Kohn-Sham DFT.
-
-A maintained, PySCF-runtime-free property layer on top of the dftax engine:
-
-- :func:`dipole`: permanent electric dipole ``μ = Σ_A Z_A R_A − Tr(P r)``.
-- :func:`polarizability`: dipole polarizability ``α_ij = −∂²E/∂E_i∂E_j`` by finite
-  field (central difference of the dipole under a uniform external field).
-- :func:`hessian` / :func:`vibrations` / :func:`ir_spectrum` / :func:`raman_spectrum`:
-  nuclear Hessian by finite difference of the analytic forces, then harmonic
-  frequencies, normal modes, and IR / Raman activities.
-- :func:`alchemical_deriv`: ``∂E/∂Z_A`` (alchemical / chemical-space gradient).
-
-These ship finite-difference-first; the exact analytic versions (CPHF orbital response)
-arrive with the implicit-differentiation layer (P4) and slot in behind the same API.
-External fields couple through the dipole integrals as ``h ← h + Σ_i E_i ⟨μ|r_i|ν⟩``
-(plus the nuclear ``−E·μ_nuc`` constant), so ``μ = −∂E/∂E`` holds and is the FD anchor.
-"""
-
 from __future__ import annotations
 
 import dataclasses
@@ -37,16 +19,13 @@ from dftax.ks.forces import forces
 from dftax.ks.terms import DFSpec, ExactSpec, exact
 from dftax.system.molecule import Molecule
 
-# atomic-unit dipole (e·a0) to Debye
 AU_TO_DEBYE = 2.5417464519
-AMU_TO_ME = 1822.888486209          # atomic mass unit -> electron mass
-HARTREE_TO_CM = 219474.6313632      # sqrt(Eh/(a0² me)) angular freq -> wavenumber
-# (dμ/dQ)² in a.u. -> IR intensity in km/mol
+AMU_TO_ME = 1822.888486209
+HARTREE_TO_CM = 219474.6313632
 IR_AU_TO_KM_MOL = 974.8801118
 
 
 def nuclear_dipole(mol, origin=(0.0, 0.0, 0.0)) -> Float[Array, "3"]:
-    """Nuclear contribution ``Σ_A Z_A (R_A − origin)`` (atomic units)."""
     Z = jnp.asarray(mol.atom_charges(), dtype=jnp.float64)
     R = jnp.asarray(mol.atom_coords(), dtype=jnp.float64)
     return jnp.einsum("a,ax->x", Z, R - jnp.asarray(origin, dtype=jnp.float64))
@@ -76,7 +55,6 @@ class RamanSpectrum(NamedTuple):
 
 
 def _becke_spec(grid) -> Becke:
-    """Validate/default the grid spec without building any points."""
     g = becke() if grid is None else grid
     if not isinstance(g, Becke):
         raise ValueError("properties rebuild their own grids: pass becke(...).")
@@ -91,9 +69,6 @@ def _grid(mol, grid):
 
 def _solve_field(mol, xc, gc, gw, *, chunk=None, field=None,
                  origin=(0.0, 0.0, 0.0), coulomb=None, **scf_kw):
-    """Run KS, optionally under a uniform external field. Returns ``(P, e, basis)``
-    where the energy includes the nuclear ``−E·μ_nuc`` term so ``e`` is the full
-    field-dependent total energy (``μ = −de/dfield``)."""
     ks = KS(mol, xc, grid=points(gc, gw, chunk=chunk), coulomb=coulomb)
     basis = ks.basis
     e_nuc_field = 0.0
@@ -103,9 +78,6 @@ def _solve_field(mol, xc, gc, gw, *, chunk=None, field=None,
         ks = eqx.tree_at(lambda k: k.hcore, ks, ks.hcore + jnp.einsum("i,ipq->pq", field, D))
         e_nuc_field = -jnp.dot(field, nuclear_dipole(mol, origin))
     res = scf(ks, **scf_kw)
-    # Total density: sum the spin channels (a closed shell is the single
-    # channel; a spin-polarized system needs α+β; P[0] alone silently drops
-    # every β electron from Tr(D·P)).
     return jnp.sum(res.P, axis=0), float(res.e_tot) + float(e_nuc_field), basis
 
 
@@ -169,12 +141,7 @@ def polarizability(
     return 0.5 * (alpha + alpha.T)
 
 
-# ---------------------------------------------------------------------------
-# Geometric derivatives: Hessian, vibrations, IR / Raman (finite difference)
-# ---------------------------------------------------------------------------
-
 def _atomic_masses(symbols) -> np.ndarray:
-    """Standard atomic weights (amu) from periodictable."""
     import periodictable
     return np.array(
         [periodictable.elements.symbol(s.strip().capitalize()).mass for s in symbols]
@@ -182,9 +149,6 @@ def _atomic_masses(symbols) -> np.ndarray:
 
 
 def _displaced(mol, coords) -> Molecule:
-    """The molecule at a displaced geometry, keeping the same electronic system: charge,
-    spin, and AO convention must all survive the rebuild (dropping charge/spin
-    evaluates a different molecule at every displacement)."""
     return Molecule(
         mol.symbols, np.asarray(coords), mol.basis,
         charge=getattr(mol, "charge", 0), spin=getattr(mol, "spin", 0),
@@ -193,7 +157,6 @@ def _displaced(mol, coords) -> Molecule:
 
 
 def _eval_at(mol, xc, coords, origin, g, scf_kw, coulomb=None):
-    """Analytic forces ``(n_atom,3)`` and dipole ``(3,)`` at a geometry."""
     m = _displaced(mol, coords)
     gc, gw = becke_grid(m.symbols, m.atom_coords(), g.n_radial, g.lebedev,
                         g.prune, g.r_max, g.radial, g.radii_adjust, partition=g.partition)
@@ -207,8 +170,6 @@ def _eval_at(mol, xc, coords, origin, g, scf_kw, coulomb=None):
 
 
 def _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw, coulomb=None):
-    """Hessian ``H = -dF/dR`` ``(3N,3N)`` and dipole derivatives ``dμ/dR`` ``(3,3N)``
-    by central finite difference of the analytic forces / dipole."""
     coords0 = np.asarray(mol.atom_coords())
     N = len(coords0)
     n = 3 * N
@@ -227,21 +188,18 @@ def _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw, coulomb=None):
 
 
 def _trans_rot_basis(coords, m_at):
-    """Orthonormal mass-weighted translation + rotation vectors ``(3N, k)`` (k = 6,
-    or 5 for a linear molecule). Used to project the external modes out of the
-    Hessian (Eckart/Sayvetz), the standard step before a vibrational analysis."""
     N = len(m_at)
     sm = np.sqrt(m_at)
     com = (m_at[:, None] * coords).sum(0) / m_at.sum()
     P = coords - com
     raw = []
-    for j in range(3):                                   # translations
+    for j in range(3):
         t = np.zeros((N, 3)); t[:, j] = sm; raw.append(t.reshape(-1))
-    for j in range(3):                                   # rotations: √m (ê_j × r)
+    for j in range(3):
         e = np.zeros(3); e[j] = 1.0
         raw.append((sm[:, None] * np.cross(np.broadcast_to(e, (N, 3)), P)).reshape(-1))
     basis = []
-    for v in raw:                                        # Gram-Schmidt, drop null (linear)
+    for v in raw:
         for b in basis:
             v = v - (b @ v) * b
         nv = np.linalg.norm(v)
@@ -251,9 +209,6 @@ def _trans_rot_basis(coords, m_at):
 
 
 def _harmonic(H, mol):
-    """Mass-weighted harmonic analysis with translations/rotations projected out.
-    Returns ``(freq_cm, V, m3)`` where columns of ``V`` are the mass-weighted normal
-    modes and ``m3`` the per-DOF masses (m_e). Imaginary modes come back negative."""
     m_at = _atomic_masses(mol.symbols) * AMU_TO_ME
     m3 = np.repeat(m_at, 3)
     Hmw = H / np.sqrt(np.outer(m3, m3))
@@ -273,15 +228,14 @@ def hessian(mol, xc, *, method: str = "fd", step: float = 1e-3,
             **scf_kw) -> Float[Array, "n n"]:
     """Nuclear Hessian ``∂²E/∂R_A∂R_B`` (Ha/Bohr², shape ``(3N, 3N)``).
 
-    ``method="fd"`` (default): central finite difference of the analytic
-    Pulay-free forces (6N SCF solves). ``method="analytic"``: the exact
-    orbital-rotation Schur complement
-    ``H = E_RR − E_Rκ (E_κκ)⁻¹ E_κR`` at one tightly converged reference
-    (3N CG response solves; RKS and UKS, materialized Coulomb backends;
-    see :mod:`dftax.ks.hessian`). ``step`` applies to the FD path,
-    ``cg_iters`` to the analytic response solves.
+    ``method="fd"`` (default): central finite differences of the analytic
+    forces with displacement ``step`` (6N SCF solves). ``method="analytic"``:
+    coupled-perturbed response at one tightly converged density (3N
+    conjugate-gradient solves of up to ``cg_iters`` iterations); restricted
+    and unrestricted, with stored Coulomb integrals (``exact()`` or
+    ``df(chunk=None)``).
     """
-    g = _becke_spec(grid)   # spec only: both paths build their own per-geometry grids
+    g = _becke_spec(grid)
     if method == "analytic":
         from dftax.ks.hessian import _analytic_hessian
         from dftax.ks.newton import newton
@@ -292,14 +246,6 @@ def hessian(mol, xc, *, method: str = "fd", step: float = 1e-3,
         )
         ks = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
         res = scf(ks, **scf_kw)
-        # The Schur complement assumes a stationary reference (κ* = 0); a
-        # warm Newton polish reaches a tight orbital gradient even where
-        # DIIS grinds at its coarse-grid noise floor (quadratic cleanup,
-        # a few iterations from a converged density). e_tol 1e-11, not
-        # 1e-12: open-shell polishes on coarse grids sit at that energy
-        # noise floor with the orbital gradient (the criterion the Schur
-        # complement actually needs, guarded in _analytic_hessian) long
-        # converged.
         res = newton(ks, guess=res.P, g_tol=1e-8, e_tol=1e-11, max_iter=48)
         return _analytic_hessian(mol, xc, res, g, coulomb, None,
                                  cg_iters=cg_iters)
@@ -326,10 +272,10 @@ def ir_spectrum(mol, xc, *, step: float = 1e-3, origin=(0.0, 0.0, 0.0),
                 coulomb: ExactSpec | DFSpec | None = None,
                 **scf_kw) -> IRSpectrum:
     """Harmonic IR spectrum from ``A_k ∝ |dμ/dQ_k|²`` (see :class:`IRSpectrum`)."""
-    g = _becke_spec(grid)   # spec only: the FD legs build their own per-geometry grids
+    g = _becke_spec(grid)
     H, dmu = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw, coulomb=coulomb)
     freq, V, m3 = _harmonic(H, mol)
-    dmu_dQ = dmu @ (V / np.sqrt(m3)[:, None])            # (3, n_modes)
+    dmu_dQ = dmu @ (V / np.sqrt(m3)[:, None])
     intens = IR_AU_TO_KM_MOL * np.sum(dmu_dQ ** 2, axis=0)
     return IRSpectrum(frequencies=jnp.asarray(freq), intensities=jnp.asarray(intens))
 
@@ -343,7 +289,7 @@ def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
     at every ±Cartesian displacement (``O(N)`` Hessians' worth of work)."""
     coords0 = np.asarray(mol.atom_coords())
     N = len(coords0); n = 3 * N
-    g = _becke_spec(grid)   # spec only: the FD legs build their own per-geometry grids
+    g = _becke_spec(grid)
     H, _ = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw, coulomb=coulomb)
     freq, V, m3 = _harmonic(H, mol)
 
@@ -360,8 +306,8 @@ def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
                 grid=g, coulomb=coulomb, **scf_kw))
             dalpha[3 * a + k] = (ap - am) / (2.0 * step)
 
-    L = V / np.sqrt(m3)[:, None]                          # (n, n_modes)
-    dadq = np.einsum("cij,ck->kij", dalpha, L)            # (n_modes, 3, 3)
+    L = V / np.sqrt(m3)[:, None]
+    dadq = np.einsum("cij,ck->kij", dalpha, L)
     abar = np.trace(dadq, axis1=1, axis2=2) / 3.0
     g2 = 0.5 * (
         (dadq[:, 0, 0] - dadq[:, 1, 1]) ** 2
@@ -378,18 +324,12 @@ def alchemical_deriv(
     grid: Becke | None = None, coulomb: ExactSpec | DFSpec | None = None,
     **scf_kw,
 ) -> Float[Array, "n_atom"]:
-    """Alchemical gradient ``∂E/∂Z_A`` at fixed electron count (Ha per unit charge).
+    """Alchemical gradient ``∂E/∂Z_A`` at fixed electron count (Ha per unit
+    nuclear charge), from the converged density (Hellmann-Feynman).
 
-    Hellmann-Feynman: the converged density (every spin channel, held fixed via
-    its solve-based projector) and the energy is differentiated w.r.t. the
-    nuclear charges, which enter only the nuclear-attraction and
-    nuclear-repulsion terms.
-
-    ``coulomb=None`` resolves to :func:`~dftax.ks.terms.exact` here (not the
-    DF default) for backward compatibility, but ``df(...)`` works: the
-    auxiliary basis is resolved eagerly against the molecule (its centers are
-    geometry-fixed here; only the charges vary), so the raw-:class:`System`
-    charge closure and the outer solve share the same fitted backend."""
+    ``coulomb=None`` uses :func:`~dftax.ks.terms.exact`, not the density
+    fitting default; ``df(...)`` is also accepted.
+    """
     from dftax.basis.loader import build_basis_data
     from dftax.energy.gto import BasisData
 
@@ -403,11 +343,6 @@ def alchemical_deriv(
         coulomb = dataclasses.replace(coulomb, auxbasis=aux)
     ks = KS(mol, xc, grid=points(gc, gw, chunk=g.chunk), coulomb=coulomb)
     res = scf(ks, **scf_kw)
-    # Per-channel occupied coefficients spanning the converged density
-    # (closed shell: one doubly-occupied channel, w=2; polarized: unit w);
-    # slicing only the α channel to nelec//2 columns would evaluate the
-    # gradient at a density that is neither the converged one nor any valid
-    # closed-shell one.
     Zs = tuple(
         jax.lax.stop_gradient(res.mo_coeff[s][:, :n])
         for s, n in enumerate(res.nocc)

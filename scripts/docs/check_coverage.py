@@ -15,7 +15,6 @@ import sys
 
 import dftax
 
-# Not API: metadata and convenience re-exports documented as part of their owner.
 SKIP = {"__version__"}
 
 directives = set()

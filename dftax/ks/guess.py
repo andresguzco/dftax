@@ -1,52 +1,3 @@
-"""Initial-guess densities for the KS solvers.
-
-The solvers start the self-consistency iteration from an initial density
-``P0``. The guess only affects how many iterations the solve takes (and which
-stationary point a difficult case lands on), never the converged fixed point.
-:func:`minao` is the default, matching PySCF; the core-Hamiltonian guess
-ignores electron repulsion entirely and is the weakest standard choice, and it
-remains the fallback where element identities or a minimal basis are missing.
-The classic guesses are choices-as-values (Optax-style factories, like
-:func:`~dftax.ks.terms.exact` / :func:`~dftax.ks.terms.df`):
-
-- :func:`core`: occupied eigenvectors of the core Hamiltonian.
-- :func:`minao`: superposition of atomic densities *projected* from a minimal
-  basis; per element, the tabulated ground-state occupations are placed on the
-  minimal-basis AOs and projected onto the computational basis through the
-  cross overlap (block-diagonal per atom; PySCF's ``init_guess_by_minao``
-  analog).
-- :func:`sad`: superposition of atomic densities from *solved* atoms; per
-  element, a spherically-averaged (fractional-occupation) atomic Hartree-Fock
-  is converged in the molecule's own basis (PySCF's ``init_guess_by_atom``
-  analog). Better than the projection, at the cost of tiny per-element solves.
-- :func:`sap`: superposition of atomic potentials (Lehtola, JCTC 15, 1593,
-  2019). The guess Fock is ``F0 = T + V_SAP`` with
-  ``V_SAP(r) = Σ_A Σ_k c_k exp(-α_k |r-R_A|²)/|r-R_A|``, the Gaussian-fitted
-  screened effective potential of each atom (fits distributed via Basis Set
-  Exchange; the coefficients satisfy ``Σ_k c_k = -Z``). The potential matrix
-  is integrated on a Becke quadrature grid.
-
-Usage (the ``guess=`` argument of :func:`~dftax.ks.scf.scf`,
-:func:`~dftax.ks.minimize.minimize` and
-:func:`~dftax.ks.batched.scf_batched`)::
-
-    res = scf(ks, guess=sad())
-    res = scf(ks, guess=minao())          # same built KS, no integral rebuild
-    res = scf(ks, guess=sap())
-    res = scf(ks, guess=res_prev.P)       # warm restart from a density
-
-Resolution is two-phase, mirroring the Coulomb backends: ``_resolve_guess``
-runs eagerly on the host (Basis Set Exchange fetches, atomic HF solves) and
-returns a resolved value whose application ``_initial_density`` is pure JAX,
-so the batched solver can apply it per geometry under ``jit``/``vmap``. SAD
-and MinAO densities are block-diagonal per atom and geometry-independent; SAP
-depends on the geometry only through traced quadrature and distances.
-
-Guesses need element identities: a :class:`~dftax.ks.energy.KS` built from a
-raw :class:`~dftax.ks.energy.System` (``ks.symbols is None``) supports only
-``core()`` and explicit density arrays, and defaults to ``core()``.
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -72,59 +23,37 @@ from dftax.integrals.shell_pairs import N_CART
 from dftax.system.molecule import symbol_to_Z
 
 
-# ---------------------------------------------------------------------------
-# Guess specs: the user-facing currency for choosing an initial density
-# ---------------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class CoreSpec:
-    """Core-Hamiltonian guess (see :func:`core`)."""
-
-
+    ...
 @dataclass(frozen=True)
 class SADSpec:
-    """Superposition of solved atomic densities (see :func:`sad`)."""
-
-
+    ...
 @dataclass(frozen=True)
 class MinAOSpec:
-    """Projected minimal-basis atomic densities (see :func:`minao`).
-
-    ``valence`` is internal: ``(symbol, electrons)`` pairs for atoms whose
-    core a pseudopotential replaces (periodic cells), so only that many
-    outer electrons are placed.
-    """
-
     basis: str = "sto-3g"
     valence: tuple[tuple[str, int], ...] | None = None
 
 
 @dataclass(frozen=True)
 class SAPSpec:
-    """Superposition of atomic potentials (see :func:`sap`)."""
-
     fit: str = "sap_helfem_large"
     grid: Becke | None = None
 
 
 def core() -> CoreSpec:
-    """Core-Hamiltonian guess: aufbau fill of the ``hcore`` eigenvectors.
+    """Initial guess from the core Hamiltonian: the lowest eigenvectors of
+    ``hcore``, without electron repulsion.
 
-    The dftax default (``guess=None``); ignores electron repulsion, so it is
-    the weakest standard guess: fine for small closed-shell systems, slow to
-    converge (or saddle-prone under :func:`~dftax.ks.minimize.minimize`) for
-    larger ones.
+    The simplest and weakest guess; :func:`~dftax.ks.scf.scf` falls back to
+    it when the default :func:`minao` guess cannot be built.
     """
     return CoreSpec()
 
 
 def sad() -> SADSpec:
-    """Superposition of atomic densities from solved atoms.
-
-    Per unique element, a spherically-averaged (fractional-occupation) atomic
-    Hartree-Fock is converged in the molecule's own basis, and the atomic
-    densities are assembled block-diagonally. The strongest density-based
-    guess here; the per-element solves are tiny and cached.
+    """Superposition of atomic densities, each from a spherically averaged
+    atomic Hartree-Fock calculation in the molecule's basis.
     """
     return SADSpec()
 
@@ -145,15 +74,12 @@ def minao(basis: str = "sto-3g") -> MinAOSpec:
 
 
 def sap(fit: str = "sap_helfem_large", *, grid: Becke | None = None) -> SAPSpec:
-    """Superposition of atomic potentials: ``F0 = T + V_SAP``.
-
-    A potential-based guess (no density superposition): the screened effective
-    potential of each atom, Gaussian-fitted, summed over atoms and integrated
-    on a Becke grid. Robust and cheap; the only guess here whose quality does
-    not depend on a converged atomic density.
+    """Superposition of atomic potentials: the first Fock matrix is
+    ``T + Σ_A V_A`` with fitted atomic potentials ``V_A`` (S. Lehtola, J.
+    Chem. Theory Comput. 15, 1593 (2019)).
 
     Args:
-        fit: the Gaussian potential fit, a Basis Set Exchange name
+        fit: the potential fit, a Basis Set Exchange name
             (``"sap_helfem_large"``, ``"sap_helfem_small"``,
             ``"sap_grasp_large"``, ``"sap_grasp_small"``).
         grid: quadrature for the potential matrix, a
@@ -164,41 +90,27 @@ def sap(fit: str = "sap_helfem_large", *, grid: Becke | None = None) -> SAPSpec:
 
 _SPECS = (CoreSpec, SADSpec, MinAOSpec, SAPSpec)
 
-# Public union for solver signatures (`guess=` also accepts a raw density
-# array or None; see `density_from_guess`).
 GuessSpec = CoreSpec | SADSpec | MinAOSpec | SAPSpec
 
 
-# ---------------------------------------------------------------------------
-# Ground-state electron configurations (spherically averaged occupations)
-# ---------------------------------------------------------------------------
-
-# Madelung (n+l, n) filling order up to 5p, i.e. Z <= 54 (Xe), matching the
-# engine's Z cap. Each entry holds 2(2l+1) electrons.
 _MADELUNG = (
     (1, 0), (2, 0), (2, 1), (3, 0), (3, 1),
     (4, 0), (3, 2), (4, 1), (5, 0), (4, 2), (5, 1),
 )
 
-# Ground-state exceptions to plain aufbau for Z <= 54 (s->d promotions).
 _AUFBAU_EXCEPTIONS = {
-    24: {(4, 0): 1, (3, 2): 5},    # Cr
-    29: {(4, 0): 1, (3, 2): 10},   # Cu
-    41: {(5, 0): 1, (4, 2): 4},    # Nb
-    42: {(5, 0): 1, (4, 2): 5},    # Mo
-    44: {(5, 0): 1, (4, 2): 7},    # Ru
-    45: {(5, 0): 1, (4, 2): 8},    # Rh
-    46: {(5, 0): 0, (4, 2): 10},   # Pd
-    47: {(5, 0): 1, (4, 2): 10},   # Ag
+    24: {(4, 0): 1, (3, 2): 5},
+    29: {(4, 0): 1, (3, 2): 10},
+    41: {(5, 0): 1, (4, 2): 4},
+    42: {(5, 0): 1, (4, 2): 5},
+    44: {(5, 0): 1, (4, 2): 7},
+    45: {(5, 0): 1, (4, 2): 8},
+    46: {(5, 0): 0, (4, 2): 10},
+    47: {(5, 0): 1, (4, 2): 10},
 }
 
 
 def _ground_state_config(Z: int) -> tuple[tuple[int, int, int], ...]:
-    """Neutral-atom ground-state configuration as ``((n, l, count), ...)``.
-
-    Plain Madelung aufbau plus the experimental exceptions for Z <= 54. The
-    counts are what the guesses spherically average (``count/(2l+1)`` per m).
-    """
     if not 1 <= Z <= 54:
         raise ValueError(
             f"initial guesses support Z <= 54 (got Z={Z}), matching the "
@@ -216,14 +128,7 @@ def _ground_state_config(Z: int) -> tuple[tuple[int, int, int], ...]:
     return tuple((n, l, c) for (n, l), c in counts.items() if c > 0)
 
 
-# ---------------------------------------------------------------------------
-# Shell / atom structure of a built basis
-# ---------------------------------------------------------------------------
-
 def _shells(basis: BasisData) -> list[tuple[int, int]]:
-    """``(first_cart_ao, l)`` per contracted shell, recovered from ``angular``
-    (components of a shell are contiguous; same scan as the integral builders).
-    """
     ang = np.asarray(basis.angular)
     shells, i = [], 0
     while i < ang.shape[0]:
@@ -236,13 +141,6 @@ def _shells(basis: BasisData) -> list[tuple[int, int]]:
 def _atom_slices(
     basis: BasisData, atom_coords
 ) -> list[tuple[slice, slice]]:
-    """Per-atom ``(cartesian_slice, final_ao_slice)`` into a built basis.
-
-    Shells are matched to atoms by their center coordinate (AO centers are
-    exact copies of the atom coordinates in both loaders) and must be
-    contiguous per atom, which both loaders guarantee (atoms are built in
-    order). The final-AO slice is spherical when ``cart2sph`` is present.
-    """
     centers = np.asarray(basis.centers)
     coords = np.asarray(atom_coords).reshape(-1, 3)
     shells = _shells(basis)
@@ -277,11 +175,6 @@ def _atom_slices(
 
 
 def _atom_subbasis(basis: BasisData, cart_sl: slice, fin_sl: slice) -> BasisData:
-    """One atom's basis functions as a standalone :class:`BasisData`.
-
-    Valid because ``cart2sph`` is block-diagonal per shell and an atom's
-    shells are contiguous, so the ``[cart rows, sph cols]`` block is exact.
-    """
     ang = basis.angular[cart_sl]
     return BasisData(
         centers=basis.centers[cart_sl],
@@ -295,23 +188,8 @@ def _atom_subbasis(basis: BasisData, cart_sl: slice, fin_sl: slice) -> BasisData
     )
 
 
-# ---------------------------------------------------------------------------
-# MinAO: minimal-basis occupations projected onto the computational basis
-# ---------------------------------------------------------------------------
-
 def _minimal_occupations(Z: int, minb: BasisData, name: str,
                          nvalence: int | None = None) -> Array:
-    """Spherically-averaged ground-state occupations on the minimal-basis AOs.
-
-    Per angular momentum, the configuration's shell counts (in n order) are
-    assigned to the minimal basis's l-shells in build order (loaders emit
-    same-l shells core-first), ``count/(2l+1)`` per m component.
-
-    ``nvalence`` keeps only that many outer electrons: the core a
-    pseudopotential replaces is the innermost shells in ``(n, l)`` order
-    (so a 3d shell goes before 4s), and the minimal basis then holds the
-    valence shells alone.
-    """
     config = sorted(_ground_state_config(Z))
     if nvalence is not None:
         drop, kept = Z - int(nvalence), []
@@ -337,18 +215,12 @@ def _minimal_occupations(Z: int, minb: BasisData, name: str,
     return jnp.asarray(occ)
 
 
-# The block's functions and the minimal basis it projects onto all sit on one
-# center, so the overlaps are translation invariant and the block depends on
-# the basis parameters alone. Memoized because each miss re-traces and
-# recompiles the two small overlap builds.
 _MINAO_CACHE: dict = {}
 _MINAO_CACHE_MAX = 64
 
 
 def _minao_block(symbol: str, sub_basis: BasisData, min_name: str,
                  nvalence: int | None = None) -> Array:
-    """One atom's density block: minimal-basis occupations projected through
-    the cross overlap, ``P_A = C f Cᵀ`` with ``C = S_AA⁻¹ S_AM``."""
     key = (symbol, min_name, nvalence, static_fingerprint(sub_basis))
     hit = _MINAO_CACHE.get(key)
     if hit is not None:
@@ -366,8 +238,6 @@ def _minao_block_uncached(symbol: str, sub_basis: BasisData,
 
     Z = symbol_to_Z(symbol)
     center = np.asarray(sub_basis.centers[0]).reshape(1, 3)
-    # Spherical always: the diagonal per-m occupations assume pure-l AOs,
-    # which cartesian d+ components are not.
     minb = build_basis_data([symbol], center, min_name, spherical=True)
     f = _minimal_occupations(Z, minb, min_name, nvalence)
     S_aa = overlap_matrix(sub_basis)
@@ -376,12 +246,7 @@ def _minao_block_uncached(symbol: str, sub_basis: BasisData,
     return (C * f[None, :]) @ C.T
 
 
-# ---------------------------------------------------------------------------
-# SAD: spherically-averaged atomic HF in the molecule's own basis
-# ---------------------------------------------------------------------------
-
 def _final_ao_l(basis: BasisData) -> list[int]:
-    """Angular momentum of each final AO (spherical when ``cart2sph`` is set)."""
     sph = basis.cart2sph is not None
     out: list[int] = []
     for _, l in _shells(basis):
@@ -390,19 +255,10 @@ def _final_ao_l(basis: BasisData) -> list[int]:
 
 
 def _config_occupations(C, S, ao_l, Z) -> np.ndarray:
-    """Occupations per MO from the tabulated ground-state configuration.
-
-    MOs are classified by their dominant l channel (Mulliken partition of the
-    S-orthonormal coefficients; exact for a spherical atom, where every MO has
-    definite l), and each channel's shells are filled in energy order as
-    (2l+1)-fold multiplets sharing ``count/(2l+1)``. Fixing the occupations by
-    configuration, not by aufbau on the eigenvalues, keeps near-degenerate
-    cases (4s/3d) from flapping between orderings across iterations.
-    """
     per_l: dict[int, list[float]] = {}
     for _, l, c in _ground_state_config(Z):
         per_l.setdefault(l, []).append(float(c))
-    contrib = C * (S @ C)                      # (nao, nmo); columns sum to 1
+    contrib = C * (S @ C)
     nmo = C.shape[1]
     wl = np.zeros((max(ao_l) + 1, nmo))
     for mu, l in enumerate(ao_l):
@@ -410,7 +266,7 @@ def _config_occupations(C, S, ao_l, Z) -> np.ndarray:
     dom = wl.argmax(axis=0)
     occ = np.zeros(nmo)
     for l, counts in per_l.items():
-        mos = np.where(dom == l)[0]            # ascending in energy (eigh order)
+        mos = np.where(dom == l)[0]
         deg = 2 * l + 1
         if len(mos) < len(counts) * deg:
             raise ValueError(
@@ -426,16 +282,6 @@ def _atomic_hf_density(
     symbol: str, sub_basis: BasisData,
     *, max_iter: int = 300, tol: float = 1e-8, mix: float = 0.5,
 ) -> tuple[np.ndarray, float]:
-    """Occupation-averaged atomic RHF density (and energy) in ``sub_basis``.
-
-    A damped fixed-point loop on ``F = h + J(P) - ½K(P)`` with the
-    spherically-averaged configuration occupations (see
-    :func:`_config_occupations`); plain numpy on the host (the systems are
-    tiny and the occupation assignment is data-dependent). One-electron atoms
-    are solved exactly on the core Hamiltonian (no self-interaction). Returns
-    the converged ``(P, E_HF)``; a non-converged atom warns but is still
-    used (it is only a guess).
-    """
     Z = symbol_to_Z(symbol)
     center = jnp.asarray(sub_basis.centers[0:1])
     charges = jnp.asarray([float(Z)])
@@ -449,13 +295,11 @@ def _atomic_hf_density(
     keep = s > 1e-9
     X = U[:, keep] / np.sqrt(s[keep])[None, :]
 
-    if Z == 1:                                 # exact one-electron solve
+    if Z == 1:
         e, Cp = np.linalg.eigh(X.T @ h @ X)
         c = X @ Cp[:, 0]
         return np.outer(c, c), float(e[0])
 
-    # Jit the builder: eager eri4c dispatches each op unfused (~2x slower,
-    # worse for d shells; see the note on ks.energy._build_integrals).
     eri = np.asarray(
         eqx.filter_jit(eri4c_matrix)(sub_basis, plan=plan_eri4c(sub_basis))
     )
@@ -489,18 +333,8 @@ def _atomic_hf_density(
     return P, float(0.5 * np.sum(P * (h + F)))
 
 
-# ---------------------------------------------------------------------------
-# SAP: Gaussian-fitted atomic potentials on a quadrature grid
-# ---------------------------------------------------------------------------
-
 @lru_cache(maxsize=None)
 def _sap_fit(fit_name: str, symbol: str) -> tuple[np.ndarray, np.ndarray]:
-    """``(exponents, coefficients)`` of an element's SAP potential fit.
-
-    The fit satisfies ``Σ_k c_k = -Z`` and represents the screened effective
-    charge ``Z_eff(r) = -Σ_k c_k exp(-α_k r²)`` (monotone Z -> 0), i.e. the
-    potential ``V(r) = Σ_k c_k exp(-α_k r²)/r``.
-    """
     import basis_set_exchange as bse
 
     Z = symbol_to_Z(symbol)
@@ -526,42 +360,24 @@ def _sap_fit(fit_name: str, symbol: str) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _sap_matrix(basis, atom_coords, exps, coefs, grid_coords, weights):
-    """``V_μν = Σ_g w_g φ_μ(r_g) φ_ν(r_g) V_SAP(r_g)`` (pure JAX, traced).
-
-    ``exps``/``coefs`` are ``(natom, kmax)`` zero-coefficient-padded fit
-    tables. The 1/r singularity sits on the nuclei, which carry no quadrature
-    points; the floor only guards pathological point placements.
-    """
     def v_point(r):
         d = jnp.maximum(
             jnp.linalg.norm(r[None, :] - atom_coords, axis=1), 1e-12
-        )                                                       # (natom,)
+        )
         return jnp.sum(coefs * jnp.exp(-exps * (d ** 2)[:, None]) / d[:, None])
 
-    ao = jax.vmap(lambda r: eval_gto(basis, r))(grid_coords)    # (ng, nao)
-    v = jax.vmap(v_point)(grid_coords) * weights                # (ng,)
+    ao = jax.vmap(lambda r: eval_gto(basis, r))(grid_coords)
+    v = jax.vmap(v_point)(grid_coords) * weights
     return jnp.einsum("g,gm,gn->mn", v, ao, ao)
 
 
-# ---------------------------------------------------------------------------
-# Resolution (eager, host) and application (pure JAX)
-# ---------------------------------------------------------------------------
-
 class CoreGuess(eqx.Module):
-    """Resolved :func:`core`: nothing to carry."""
-
-
+    ...
 class DensityGuess(eqx.Module):
-    """Resolved :func:`sad`/:func:`minao`: a geometry-independent total
-    density (block-diagonal per atom in the AO basis)."""
-
     P: Float[Array, "nao nao"]
 
 
 class SAPGuess(eqx.Module):
-    """Resolved :func:`sap`: per-atom padded potential-fit tables plus the
-    quadrature spec; applied traced (per geometry under the batched solver)."""
-
     exps: Float[Array, "natom kmax"]
     coefs: Float[Array, "natom kmax"]
     symbols: tuple[str, ...] = eqx.field(static=True)
@@ -574,20 +390,11 @@ class SAPGuess(eqx.Module):
     partition: str = eqx.field(static=True, default="becke")
 
 
-# Assembled superposition densities, keyed on the element sequence and the
-# basis structure. The block-diagonal P depends on neither the geometry nor
-# anything else, yet assembling it costs host work per call (shell-to-atom
-# matching, sub-basis slicing, transfers): 5.7 ms a small molecule, the
-# largest part of setting up a batched gdm once its padding was compiled. A
-# trajectory or a conformer set asks for the same one every time.
 _SUPERPOSITION_CACHE: dict = {}
 _SUPERPOSITION_CACHE_MAX = 256
 
 
 def _superposition_density(symbols, basis, atom_coords, block_fn, key=None):
-    """Assemble the block-diagonal ``P_tot`` from per-element density blocks
-    (``block_fn(symbol, sub_basis)``), computed once per unique element, and
-    memoized on ``key`` (with the symbols and the basis structure) when given."""
     if key is not None:
         key = (key, tuple(symbols), static_fingerprint(basis))
         hit = _SUPERPOSITION_CACHE.get(key)
@@ -613,9 +420,6 @@ def _superposition_density(symbols, basis, atom_coords, block_fn, key=None):
 
 
 def _resolve_guess(spec, symbols, basis, atom_coords):
-    """Eagerly resolve a guess spec against a built system (host-side: BSE
-    fetches, atomic solves). Returns a resolved value for ``_initial_density``.
-    """
     if isinstance(spec, CoreSpec):
         return CoreGuess()
     if symbols is None:
@@ -658,8 +462,6 @@ def _resolve_guess(spec, symbols, basis, atom_coords):
 
 
 def _aufbau_density(F, X, nocc):
-    """Spin-stacked aufbau density from a (shared or stacked) Fock matrix,
-    the same fill as the SCF loop's ``make_density``."""
     nspin = len(nocc)
     Fs = jnp.broadcast_to(F, (nspin, *F.shape)) if F.ndim == 2 else F
     _, Cp = jnp.linalg.eigh(X.T @ Fs @ X)
@@ -672,14 +474,10 @@ def _aufbau_density(F, X, nocc):
 
 
 def _initial_density(resolved, ks, X):
-    """Apply a resolved guess: the spin-stacked ``P0`` (pure JAX, traced)."""
     nspin = len(ks.nocc)
     if isinstance(resolved, CoreGuess):
         return _aufbau_density(ks.hcore, X, ks.nocc)
     if isinstance(resolved, DensityGuess):
-        # Renormalize Tr(P S) to the electron count (charged systems; the
-        # atomic blocks integrate to the neutral atoms), then split channels
-        # in proportion to the occupations.
         P = resolved.P * (ks.nelec / jnp.sum(resolved.P * ks.S))
         if nspin == 1:
             return P[None]
@@ -699,15 +497,6 @@ def _initial_density(resolved, ks, X):
 
 
 def resolve_guess_or_default(guess, symbols, basis, atom_coords):
-    """Resolve a guess spec, applying the default-guess policy for ``None``.
-
-    The default is :func:`minao`, and the core Hamiltonian is its fallback:
-    a raw :class:`~dftax.ks.energy.System` has no element identities to
-    project atomic densities from, and the minimal basis (or the ground-state
-    configuration table) does not reach every element. The fallback is
-    announced, and it applies only when the caller passed no guess at all; an
-    explicit ``guess=minao()`` raises whatever went wrong.
-    """
     if guess is not None:
         return _resolve_guess(guess, symbols, basis, atom_coords)
     if symbols is None:
@@ -726,27 +515,7 @@ def resolve_guess_or_default(guess, symbols, basis, atom_coords):
 
 
 def density_from_guess(ks, guess, X):
-    """Initial spin-stacked density for a solver.
-
-    ``guess`` is ``None`` (:func:`minao`, falling back to :func:`core`), a spec
-    from :func:`core` / :func:`sad` / :func:`minao` / :func:`sap`, or an
-    explicit density array of shape ``(nspin, nao, nao)`` (e.g. a previous
-    :class:`KSResult`'s ``P``, for warm restarts).
-
-    The default is the projected minimal-basis superposition, which costs one
-    cross-overlap solve per element and starts the SCF much closer than the
-    core Hamiltonian (measured on cubane/def2-svp: 30 iterations against 75).
-    Two things it needs and the core guess does not are element identities and
-    a minimal basis covering them, so a raw :class:`~dftax.ks.energy.System`
-    falls back to the core Hamiltonian, as does any element the minimal basis
-    or the configuration table does not reach. That fallback applies only to
-    the default; an explicit ``guess=minao()`` raises instead.
-    """
     if guess is None and getattr(ks.coulomb, "periodic", False):
-        # A cell's electrons are the valence ones of its pseudopotential:
-        # the same projected superposition, from the valence minimal basis
-        # (gth-szv) with the valence occupations. Core Hamiltonian where
-        # that cannot be built, announced like the molecular fallback.
         spec = MinAOSpec(basis="gth-szv", valence=tuple(sorted(set(
             zip(ks.symbols, ks.coulomb.ion_charges)))))
         try:

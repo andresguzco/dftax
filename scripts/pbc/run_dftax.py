@@ -26,7 +26,6 @@ import numpy as np  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from systems import ANGSTROM_TO_BOHR, systems  # noqa: E402
 
-# the functional names of the references (PySCF spelling) in dftax's
 XC = {"lda,vwn": "lda", "lda": "lda", "pbe": "pbe"}
 HARTREE_EV = 27.211386245988
 
@@ -58,9 +57,6 @@ def run(args) -> dict:
     res = scf(ks, e_tol=args.e_tol, d_tol=args.d_tol, max_iter=200)
     t_scf = time.perf_counter() - t0
     P = res.P
-    # the streamed grid path takes the Hartree and local-pseudopotential
-    # energies with the XC energy, so only the held path splits the terms
-    # the way the references do
     summary = {"nuc": float(ks.e_nn)}
     if type(ks.xc_term).__name__ != "StreamedCellXC":
         summary.update(
@@ -96,7 +92,6 @@ def run(args) -> dict:
         "converged": bool(res.converged),
         "n_iter": int(res.n_iter),
         "e_tot": float(res.e_tot),
-        # band edges at Gamma (the only k-point): HOMO and LUMO
         "vbm": float(res.mo_energy[0][res.nocc[0] - 1]),
         "cbm": float(res.mo_energy[0][res.nocc[0]]),
         "summary": summary,
@@ -106,7 +101,6 @@ def run(args) -> dict:
 
 
 def run_k(args, cell) -> dict:
-    """A k-mesh (and smearing): the k-point engine."""
     import dftax
     from dftax.energy.xc import functional
     from dftax.pbc import uniform
@@ -130,7 +124,6 @@ def run_k(args, cell) -> dict:
         "mesh": [int(n) for n in args.mesh], "nao": int(ks.S.shape[-1]),
         "nelectron": int(ks.nelec), "converged": bool(res.converged),
         "n_iter": int(res.n_iter),
-        # e_tot is the internal energy (PySCF's e_tot), e_free the free one
         "e_tot": float(res.energy), "e_free": float(res.e_tot),
         "vbm": float(eps[occ > 1.0].max()), "cbm": float(eps[occ < 1.0].min()),
         "summary": {"nuc": float(ks.e_nn)},

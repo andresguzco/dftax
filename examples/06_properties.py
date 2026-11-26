@@ -14,16 +14,16 @@ mol = Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043", "sto-3
 mu = np.asarray(dipole(mol, PBE(), debye=True))
 print(f"dipole moment: {np.linalg.norm(mu):.4f} Debye  {np.round(mu, 4)}")
 
-alpha = np.asarray(polarizability(mol, PBE()))                    # finite field
+alpha = np.asarray(polarizability(mol, PBE()))
 print(f"isotropic polarizability (FD):       {np.trace(alpha) / 3:.4f} a.u.")
-alpha_a = np.asarray(polarizability(mol, PBE(), method="analytic"))  # implicit-diff CPHF
+alpha_a = np.asarray(polarizability(mol, PBE(), method="analytic"))
 print(f"isotropic polarizability (analytic): {np.trace(alpha_a) / 3:.4f} a.u.")
 
 ir = ir_spectrum(mol, PBE(), grid=becke(60, 194))
 freq = np.asarray(ir.frequencies); inten = np.asarray(ir.intensities)
 print("\nIR-active modes (vibrational):")
 for f, a in sorted(zip(freq, inten)):
-    if f > 100:  # skip the ~0 translations/rotations
+    if f > 100:
         print(f"  {f:8.1f} cm^-1   {a:7.2f} km/mol")
 
 dEdZ = np.asarray(alchemical_deriv(mol, PBE()))

@@ -28,12 +28,12 @@ import jax.numpy as jnp
 from jax import lax
 import numpy as np
 
-BOHR = 0.52917721092                        # PySCF's, so both codes see one geometry
+BOHR = 0.52917721092
 SIZE = dict(n_radial="pyscf", lebedev="pyscf", radial="treutler")
 SPEC = dict(SIZE, radii_adjust="treutler")
-UNION = (64, 128, 256, 512, 1024)           # chunk sizes (points)
-DECIDERS = (1, 4, 16)                        # nearest atoms that can zero a candidate
-TIERS = (0, 8, 32, 128)                      # candidates per point
+UNION = (64, 128, 256, 512, 1024)
+DECIDERS = (1, 4, 16)
+TIERS = (0, 8, 32, 128)
 MOLECULES = {
     "water": "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692",
     "benzene": "; ".join(
@@ -44,7 +44,6 @@ MOLECULES = {
 
 
 def geometry(name):
-    """(symbols, coordinates in Bohr) of a named molecule or an xyz file."""
     if name in MOLECULES:
         rows = [a.split() for a in MOLECULES[name].split(";")]
     else:
@@ -72,14 +71,14 @@ def speed(args):
     else:
         f = lambda X: becke_grid(syms, X, partition=p, **SPEC)
     t_compile = None
-    if args.jit:                 # the atom templates become constants XLA folds
+    if args.jit:
         t = time.perf_counter()
         f = jax.jit(f).lower(X).compile()
         t_compile = round(time.perf_counter() - t, 2)
-    runs = []                    # eager (as KS builds it): the first call compiles
+    runs = []
     for i in range(2):
         t = time.perf_counter()
-        if i and args.profile:   # the second call's device time by kernel
+        if i and args.profile:
             with jax.profiler.trace(args.profile, create_perfetto_trace=True):
                 out = jax.block_until_ready(f(X))
         else:
@@ -98,7 +97,6 @@ def speed(args):
 
 
 def kernels(trace_dir, top=25):
-    """The device kernels of a perfetto trace under ``trace_dir``, by total time."""
     import glob
     import gzip
     from collections import Counter
@@ -117,17 +115,13 @@ def kernels(trace_dir, top=25):
 
 
 def count(args):
-    """SSF's candidate cells per point where the owner's cell is nonzero:
-    ``|ν_OA| < a``, and of those the cells none of the point's ``K`` nearest
-    atoms zeroes (``ν_AN < a``). Quantiles per point, and how many chunks of
-    points have at most each of ``TIERS`` candidates in every point."""
     from dftax.grid import becke_grid, becke_grid_size
     from dftax.grid.becke import SSF_A, bragg_radius, size_adjustment, stratmann
     from dftax.system.molecule import symbol_to_Z
 
     syms, X = geometry(args.geom)
     X = jnp.asarray(X)
-    pts = becke_grid(syms, X, partition="stratmann", **SPEC)[0]      # the same points
+    pts = becke_grid(syms, X, partition="stratmann", **SPEC)[0]
     own = jnp.asarray(np.repeat(np.arange(len(syms)),
                                 [becke_grid_size([s], **SIZE) for s in syms]))
     n_atom = len(syms)
@@ -144,13 +138,13 @@ def count(args):
         live = jnp.prod(jnp.where(off, 0.5 * (1.0 - stratmann(nu)), 1.0), axis=1) > 0
         cand = off & (jnp.abs(nu) < SSF_A) & live[:, None]
         out = [jnp.where(live, jnp.sum(cand, axis=1), -1)]
-        N = lax.top_k(-r, max(DECIDERS))[1]                          # nearest atoms
+        N = lax.top_k(-r, max(DECIDERS))[1]
         dead = jnp.zeros_like(cand)
         k0 = 0
         for K in DECIDERS:
             for j in range(k0, K):
                 Nj = N[:, j]
-                m = (r - jnp.take_along_axis(r, Nj[:, None], 1)) / RAB[Nj]   # μ_AN
+                m = (r - jnp.take_along_axis(r, Nj[:, None], 1)) / RAB[Nj]
                 dead = dead | ((m - a[Nj] * (1.0 - m * m) >= SSF_A) & (cols != Nj[:, None]))
             k0 = K
             out.append(jnp.where(live, jnp.sum(cand & ~dead, axis=1), -1))
@@ -186,7 +180,7 @@ def pyscf_mode(args):
     mol = gto.M(atom=atom, unit="Bohr", basis=args.basis, verbose=0)
     schemes = {"becke": gen_grid.original_becke, "stratmann": gen_grid.stratmann}
     out = {}
-    for p, scheme in schemes.items():                     # the grids, and PySCF's SCF
+    for p, scheme in schemes.items():
         g = gen_grid.Grids(mol)
         g.alignment = 0
         g.becke_scheme = scheme
@@ -195,7 +189,7 @@ def pyscf_mode(args):
         dist, idx = cKDTree(pc).query(g.coords)
         dw = np.abs(pw[idx] - g.weights)
         mf = dft.RKS(mol, xc="pbe")
-        if args.df:                                       # both codes fit with one set
+        if args.df:
             mf = mf.density_fit(auxbasis=args.df)
         mf.grids.becke_scheme = scheme
         mf.small_rho_cutoff = 0.0
@@ -218,9 +212,9 @@ def pyscf_mode(args):
              dexc_same_dm=float(exc1 - exc0), dnelec_same_dm=float(n1 - n0))
     shift(args.geom, "pyscf", out, "e_ref", "f_ref")
     xc = functional("pbe")
-    m = Molecule.from_xyz(atom, args.basis, unit="bohr", spherical=True)    # as PySCF
+    m = Molecule.from_xyz(atom, args.basis, unit="bohr", spherical=True)
     coul = df(args.df, screen=None) if args.df else exact()
-    for p in schemes:                                     # dftax's SCF and forces
+    for p in schemes:
         spec = becke(partition=p, **SPEC)
         res = scf(KS(m, xc, grid=spec, coulomb=coul), e_tol=1e-12, d_tol=1e-10)
         f = np.asarray(forces(m, xc, res, grid=spec, coulomb=coul))
@@ -234,7 +228,6 @@ def pyscf_mode(args):
 
 
 def shift(geom, code, out, e, f):
-    """Becke's partition to SSF's: the energy and the forces."""
     b, s = out["becke"], out["stratmann"]
     dF = s[f] - b[f]
     emit(geom=geom, shift=code, dE=s[e] - b[e], max_dF=float(np.abs(dF).max()),

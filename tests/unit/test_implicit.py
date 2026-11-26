@@ -1,12 +1,3 @@
-"""Implicit-differentiation SCF response (CPHF).
-
-Three checks: (1) the stable occ-virt projector JVP vs finite difference; (2) the
-energy gradient *through* the implicit fixed point equals the analytic Pulay-free
-force (and FD), i.e. the adjoint/CPHF solve is correct; (3) the analytic
-polarizability (one ``jax.jacobian`` through ``implicit_density``) equals the
-finite-field polarizability.
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -34,7 +25,7 @@ class TestImplicit:
         P, dP = jax.jvp(lambda F: _proj_from_fock(F, nocc), (Ft,), (dFt,))
         h = 1e-6
         fd = (_proj_from_fock(Ft + h * dFt, nocc) - _proj_from_fock(Ft - h * dFt, nocc)) / (2 * h)
-        assert abs(float(jnp.trace(P)) - 2 * nocc) < 1e-10           # electron count
+        assert abs(float(jnp.trace(P)) - 2 * nocc) < 1e-10
         assert float(jnp.max(jnp.abs(dP - fd))) < 1e-7
 
     def test_implicit_forward_matches_scf(self):
@@ -66,9 +57,6 @@ class TestImplicit:
 
         F_impl = -jax.grad(energy)(coords0)
         gc, gw = becke_grid(mol.symbols, mol.atom_coords(), NR, LEB)
-        # coulomb=exact() on both sides: the implicit path goes through a raw
-        # System (no symbols, exact fallback), so the analytic reference must
-        # not pick up the DF default.
         ks0 = KS(mol, PBE(), grid=(gc, gw), coulomb=exact())
         C = scf(ks0, e_tol=1e-10, d_tol=1e-9).mo_coeff[0][:, :nocc]
         F_ana = forces(mol, PBE(), (C,), grid=becke(NR, LEB), coulomb=exact())

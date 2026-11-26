@@ -40,7 +40,7 @@ for key, bk in sorted(buckets.items()):
                  ("A", "B", "C", "ea", "eb", "ec", "ca", "cb", "cc"))
     fn = chunked_vmap(kern, in_axes=(0,) * 9,
                       chunk_size=min(4096, bk["A"].shape[0]))
-    jax.block_until_ready(fn(*args))          # compile
+    jax.block_until_ready(fn(*args))
     t0 = time.perf_counter()
     jax.block_until_ready(fn(*args))
     dt = time.perf_counter() - t0

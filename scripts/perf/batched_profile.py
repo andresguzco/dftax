@@ -56,7 +56,7 @@ def main():
     b = bucket_for(kss)
     stacked = jax.tree.map(lambda *xs: jnp.stack(xs),
                            *[pad_ks(ks, b) for ks in kss])
-    B, nao, no = len(kss), b.nao, b.nocc[0]     # closed shells: one channel
+    B, nao, no = len(kss), b.nao, b.nocc[0]
     nv = nao - no
     m = 20
     key = jax.random.PRNGKey(0)
@@ -89,12 +89,11 @@ def main():
     t_loop = timed(two_loop, k, hist, hist)
     t_rot = timed(rotate, Co, Cv, k)
     t_one = timed(one, ks0, C0[:, :ks0.nocc[0]])
-    gdm_batched(kss)                                    # compile
+    gdm_batched(kss)
     t0 = time.perf_counter()
     res = gdm_batched(kss)
     t_solve = (time.perf_counter() - t0) * 1e3
 
-    # gdm_batched's setup, stage by stage (warm)
     from dftax.ks.batched_gdm import _block, _solve_batch
     from dftax.ks.guess import density_from_guess
     from dftax.ks.scf import canonical_orthonormalizer

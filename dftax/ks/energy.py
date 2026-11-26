@@ -1,44 +1,3 @@
-"""Differentiable Kohn-Sham total energy as a function of the density matrix.
-
-The :class:`KS` module is built directly from a system + functional +
-choices-as-values:
-
-    ks = KS(mol, PBE0(),
-            grid    = becke(n_radial=75, lebedev=302),
-            coulomb = df("def2-universal-jkfit"))
-
-It precomputes the one-electron Hamiltonian and the nuclear repulsion, and
-holds one Coulomb term and one XC term (see :mod:`dftax.ks.terms`) that carry
-exactly the integral arrays their backend needs. It exposes ``electronic(P)``
-/ ``total(P)``, a single, ``jit``/``grad``-friendly energy functional of the
-**spin-stacked** density ``P`` of shape ``(nspin, nao, nao)`` (see the
-convention in :mod:`dftax.ks.terms`). The KS Fock matrices are obtained
-downstream as ``F_σ = sym(∂E/∂P_σ)`` (see :mod:`dftax.ks.scf`), so no
-exchange-correlation potential matrix is hand-coded.
-
-``system`` may be a native :class:`~dftax.system.molecule.Molecule` (fully
-PySCF-free), a PySCF ``Mole`` (setup only; nothing PySCF enters the compute
-path), or a raw :class:`System` bundle of already-built basis + geometry (the
-low-level path used by forces, where the basis centers are traced). The spin
-structure is the static tuple ``nocc`` of per-channel occupied counts:
-``(nelec//2,)`` for a closed shell, ``(nα, nβ)`` for a spin-polarized system.
-``spin=None`` infers from the system (closed shell → restricted); an explicit
-``spin`` (= 2S, including 0) requests spin-polarized channels.
-
-The Coulomb/exchange backend is a value from :func:`~dftax.ks.terms.exact` /
-:func:`~dftax.ks.terms.df`:
-
-- **density fitting** (default; ``df()`` = ``def2-universal-jkfit`` with the
-  ``chunk="auto"`` memory policy): RI-J / RI-K via 3- and 2-center integrals,
-  O(N³) memory (streamed to O(N²) past a budget). The fit is the robust
-  Dunlap (Coulomb-metric) form; the RI error vs the exact path is sub-mHa
-  with the JK-fitting auxiliary set.
-- **exact** (``exact()``): the full 4-center ERI tensor (``eri4c``), tight
-  against PySCF, but O(N⁴) memory: small systems and reference comparisons.
-  Also the fallback for a raw :class:`System` (no element symbols to resolve
-  an auxiliary basis name).
-"""
-
 from __future__ import annotations
 
 import dataclasses
@@ -102,7 +61,6 @@ from dftax.system.molecule import Molecule
 
 
 def _spin_counts(nelec: int, spin: int) -> tuple[int, int]:
-    """(nα, nβ) from electron count and ``spin = 2S = nα - nβ``."""
     if (nelec + spin) % 2 != 0:
         raise ValueError(
             f"Inconsistent (nelec={nelec}, spin={spin}): nelec+spin must be even."
@@ -116,13 +74,16 @@ def _spin_counts(nelec: int, spin: int) -> tuple[int, int]:
 
 @dataclass(frozen=True)
 class System:
-    """A raw, already-built system: basis + geometry + electron/spin counts.
+    """A system given by its built basis, for callers that construct the
+    basis themselves.
 
-    The low-level :class:`KS` input for callers that construct the basis
-    themselves, e.g. forces, which rebuild the energy as a function of traced
-    nuclear coordinates via a ``tree_at``-recentered basis template. ``spin``
-    (= 2S) is the system's default spin; the :class:`KS` builder's ``spin``
-    argument overrides it.
+    Attributes:
+        basis: the orbital basis.
+        coords: nuclear coordinates (Bohr), ``(natom, 3)``.
+        charges: nuclear charges, ``(natom,)``.
+        nelec: number of electrons.
+        spin: number of unpaired electrons, ``2S``; the ``spin`` argument of
+            :class:`KS` overrides it.
     """
 
     basis: BasisData
@@ -133,12 +94,6 @@ class System:
 
 
 def _resolve_system(system):
-    """Normalize a system input to ``(basis, coords, charges, nelec, spin, symbols)``.
-
-    ``symbols`` is None for a raw :class:`System` (no element identities), which
-    forecloses the conveniences that need them (Becke grid construction,
-    auxiliary-basis resolution by name).
-    """
     if isinstance(system, System):
         return (
             system.basis, system.coords, system.charges,
@@ -155,7 +110,7 @@ def _resolve_system(system):
             basis, system.atom_coords(), system.atom_charges(),
             int(system.nelectron), int(system.spin), list(system.symbols),
         )
-    if hasattr(system, "atom_symbol"):  # a PySCF Mole (setup only)
+    if hasattr(system, "atom_symbol"):
         basis = extract_basis_data(system)
         symbols = [system.atom_symbol(i) for i in range(system.natm)]
         return (
@@ -167,44 +122,15 @@ def _resolve_system(system):
     )
 
 
-# Element budget for the materialized AO grid values, ao (ng, nao) plus dao
-# (ng, nao, 3), i.e. 4·ng·nao doubles (~1 GiB at 2^27). Above it the
-# ``chunk="auto"`` policy streams the XC integral instead of materializing.
-# The fixed value is the CPU / unknown-device fallback and a floor; on a GPU
-# ``_ao_grid_budget`` sizes it to the device pool, like the DF tensor's.
 _AO_GRID_BUDGET = 2**27
-# Fraction of the device pool the stored AO values may claim. Streaming
-# re-evaluates every basis function at every point on every Fock build, which
-# measured as ~98% of a PBE iteration on cubane; storing them costs memory
-# once per geometry. The XC backward holds about as much again in
-# temporaries, so an eighth of the pool for the values leaves the DF
-# tensor's quarter (_DF_POOL_FRACTION) and room for both.
 _AO_POOL_FRACTION = 0.125
-# Per-chunk element budget when streaming (~32 MiB of AO values per chunk).
 _AO_CHUNK_BUDGET = 2**22
-# Element budget for the materialized DF 3-center tensor (nao², naux). The
-# fixed value (~2 GiB in float64) is the CPU / unknown-device fallback and a
-# floor; on a GPU ``_df_materialize_budget`` sizes it to the device pool
-# instead (see there). Above the resolved budget ``df(chunk="auto")`` streams
-# RI-J/RI-K over auxiliary chunks sized to keep ~_DF_CHUNK_BUDGET in flight.
 _DF_BUDGET = 2**28
 _DF_CHUNK_BUDGET = 2**24
-# Fraction of the device memory pool the materialized 3-center tensor may
-# claim. The RI-K exchange intermediates (~tensor/10) and the AO grid sit
-# alongside it, so a quarter of the pool keeps the materialized peak well
-# under capacity while still materializing far larger systems than the fixed
-# 2 GiB floor did (an A100's ~68 GiB pool -> ~17 GiB, ~8x more headroom).
 _DF_POOL_FRACTION = 0.25
 
 
 def _df_materialize_budget() -> int:
-    """Element budget (float64) for materializing the DF 3-center tensor.
-
-    Sized to the default device's memory pool on a GPU; falls back to the
-    fixed ``_DF_BUDGET`` on CPU or when the device does not report a limit.
-    Always at least ``_DF_BUDGET`` so the GPU never streams a system the CPU
-    fallback would have materialized.
-    """
     try:
         stats = jax.local_devices()[0].memory_stats()
         limit = stats.get("bytes_limit") if stats else None
@@ -217,16 +143,6 @@ def _df_materialize_budget() -> int:
 
 def _resolve_df_chunk(chunk, nao: int, naux: int, sharded: bool,
                       packed: bool = False):
-    """Resolve a DF spec's chunk policy to a concrete value.
-
-    ``"auto"``: materialize the (nao², naux) tensor when it fits the
-    device-aware budget (:func:`_df_materialize_budget`) or when the
-    calculation is mesh-sharded (the aux-sharded backend holds per-device
-    slabs, which is already the capacity path); otherwise stream over
-    auxiliary chunks. ``None`` forces materialized; an int streams with
-    exactly that chunk. ``packed`` prices the packed tensor (one triangle of
-    the pairs, before screening) instead of the square one.
-    """
     if chunk != "auto":
         return chunk
     npair = nao * (nao + 1) // 2 if packed else nao * nao
@@ -236,9 +152,6 @@ def _resolve_df_chunk(chunk, nao: int, naux: int, sharded: bool,
 
 
 def _ao_grid_budget() -> int:
-    """Element budget for the materialized AO grid values: a fraction of the
-    default device's memory pool, never less than ``_AO_GRID_BUDGET`` (see
-    :func:`_df_materialize_budget`, the same policy for the DF tensor)."""
     try:
         stats = jax.local_devices()[0].memory_stats()
         limit = stats.get("bytes_limit") if stats else None
@@ -250,13 +163,6 @@ def _ao_grid_budget() -> int:
 
 
 def _resolve_chunk(chunk, ng: int, nao: int):
-    """Resolve a spec's chunk policy to a concrete value.
-
-    ``"auto"`` materializes the AO grid when it fits the device-aware budget
-    (:func:`_ao_grid_budget`) and otherwise streams with a budget-derived
-    chunk; ``None`` forces the materialized grid; an int streams with exactly
-    that chunk.
-    """
     if chunk == "auto":
         if 4 * ng * nao <= _ao_grid_budget():
             return None
@@ -265,17 +171,6 @@ def _resolve_chunk(chunk, ng: int, nao: int):
 
 
 def _resolve_screen(screen, n_atom: int) -> float | None:
-    """Resolve a grid spec's ``screen`` against the molecule's size.
-
-    ``n_atom`` must come from ``coords.shape``, never from
-    ``np.asarray(coords)``: ``forces`` rebuilds the energy with *traced*
-    nuclear coordinates, and converting a tracer raises. A shape is static
-    even when its contents are not.
-
-    ``"auto"`` is a size gate because per-block screening is a loss on small
-    molecules and a growing win on large ones; see :func:`~dftax.grid.becke`.
-    An explicit float or ``None`` is honored as given.
-    """
     from dftax.grid.grid import SCREEN_AUTO_CUTOFF, SCREEN_AUTO_MIN_ATOMS
 
     if screen == "auto":
@@ -284,13 +179,6 @@ def _resolve_screen(screen, n_atom: int) -> float | None:
 
 
 def _resolve_grid(grid, symbols, coords):
-    """Resolve a grid input to ``(coords, weights, chunk)``.
-
-    Accepts a :class:`~dftax.grid.Becke` spec (default), an explicit
-    ``(coords, weights)`` tuple, or a :class:`~dftax.grid.Points` spec (an
-    explicit grid with a streaming chunk). For a Becke spec, quadrature
-    weights below ``spec.cutoff`` are set to zero and their points kept.
-    """
     if grid is None:
         grid = becke()
     if isinstance(grid, Becke):
@@ -304,31 +192,15 @@ def _resolve_grid(grid, symbols, coords):
             grid.radial, grid.radii_adjust, partition=grid.partition,
         )
         if grid.cutoff is not None:
-            # Zero the negligible weights; do not drop their points. Which
-            # points fall below the cutoff depends on the geometry, so
-            # dropping them made the point count, and every grid-shaped array
-            # downstream, a function of the coordinates: each new geometry of
-            # the same molecule recompiled the whole build (12 programs, 50 s
-            # for water/6-31g, against milliseconds for a cache hit). Kept,
-            # the count depends on the elements and the spec alone, at the
-            # price of evaluating ~8% more points that contribute exactly 0.
             gw = jnp.where(jnp.abs(gw) > grid.cutoff, gw, 0.0)
         return gc, gw, grid.chunk
     if isinstance(grid, Points):
         return grid.coords, grid.weights, grid.chunk
-    gc, gw = grid                                   # explicit (coords, weights)
+    gc, gw = grid
     return gc, gw, None
 
 
 def _resolve_coulomb(spec, symbols):
-    """Default and validate the Coulomb spec (the aux basis builds later).
-
-    ``None`` defaults to density fitting (O(N³) memory, sub-mHa RI error);
-    a raw :class:`System` carries no element symbols to resolve an auxiliary
-    basis name, so it falls back to the exact 4-center path. The auxiliary
-    basis itself is built by :func:`_resolve_aux`, once the span (spherical
-    vs cartesian) is known.
-    """
     if spec is None:
         spec = df() if symbols is not None else exact()
     if (isinstance(spec, DFSpec)
@@ -343,18 +215,6 @@ def _resolve_coulomb(spec, symbols):
 
 def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
                  sharded: bool, lr_fold: int = 1) -> DFSpec:
-    """Pick the auxiliary span, build the basis once, resolve the policy.
-
-    The materialized paths (single-device and mesh-sharded) use spherical
-    harmonics: the redundant cartesian contaminants drop out of the fit space
-    (~15% fewer auxiliary functions), tightening the RI fit and improving the
-    metric conditioning (the near-null directions that map density error into
-    density-fitted derivatives shrink to the set intrinsic to the JK-fitting
-    basis). Only the streamed backend contracts cartesian auxiliary elements
-    on the fly and needs the cartesian span. The ``"auto"`` memory
-    policy prices the intended span; only when it falls back to streaming is
-    the basis rebuilt (and the chunk re-priced) cartesian.
-    """
     from dftax.basis.loader import build_basis_data
 
     aux = spec.auxbasis
@@ -366,9 +226,6 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
             "streamed path contracts cartesian auxiliary elements on the "
             "fly."
         )
-    # Spherical harmonics on the materialized paths, including the
-    # mesh-sharded one (its slabs are shell-aligned, so the block-diagonal
-    # cart2sph slices per slab); the streamed path keeps the cartesian span.
     want_sph = spec.spherical is not False and not streamed
     if not prebuilt:
         aux = build_basis_data(symbols, coords, spec.auxbasis,
@@ -377,13 +234,10 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
             else aux.centers.shape[0])
     chunk = spec.chunk
     packed = spec.packed
-    # lr_fold: a range-separated hybrid materializes a second, attenuated
-    # tensor beside the first, so the budget prices both
     if chunk == "auto" and packed == "auto":
         chunk = _resolve_df_chunk(chunk, nao, naux * lr_fold, sharded, False)
         if chunk is not None and not sharded and _resolve_df_chunk(
                 "auto", nao, naux * lr_fold, sharded, True) is None:
-            # the square tensor misses the budget, the packed one fits
             chunk, packed = None, True
     elif chunk == "auto":
         chunk = _resolve_df_chunk(chunk, nao, naux * lr_fold, sharded,
@@ -394,8 +248,6 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
                 "streamed density fitting needs a cartesian auxiliary "
                 "basis; this prebuilt BasisData is spherical."
             )
-        # "auto" fell back to streaming: rebuild and re-price for the
-        # (larger) cartesian span.
         aux = build_basis_data(symbols, coords, spec.auxbasis)
         chunk = _resolve_df_chunk("auto", nao, aux.centers.shape[0] * lr_fold,
                                   sharded)
@@ -408,14 +260,6 @@ def _resolve_aux(spec: DFSpec, symbols, coords, nao: int,
 
 
 def _resolve_screening(spec, basis):
-    """Eager Cauchy-Schwarz resolution for a Coulomb spec.
-
-    Returns ``(quartets, qof, pairs)``: a pre-screened exact-ERI quartet list +
-    orbit map (materialized exact path), or the significant Schwarz bra pairs
-    (screened streamed RI-J). Screening depends on concrete integral values, so
-    it is resolved here in the eager constructors (the basis is materialised)
-    rather than inside the jitted ``_build_integrals``.
-    """
     if isinstance(spec, DFSpec):
         if spec.screen is not None and spec.chunk is not None:
             return None, None, significant_pairs(basis, float(spec.screen))
@@ -430,10 +274,6 @@ def ao_on_grid(
     basis: BasisData,
     coords: Float[Array, "ng 3"],
 ) -> tuple[Float[Array, "ng nao"], Float[Array, "ng nao 3"]]:
-    """Atomic-orbital values and spatial gradients at grid points (pure JAX).
-
-    One pass, not two: see :func:`~dftax.energy.gto.eval_gto_and_grad`.
-    """
     return jax.vmap(lambda r: eval_gto_and_grad(basis, r))(coords)
 
 
@@ -445,12 +285,6 @@ _jit_ao_on_grid = jax.jit(lambda basis, coords: ao_on_grid(basis, coords))
 
 def _build_integrals_shared(basis, coords, charges, grid_coords, aux_basis,
                             materialize_ao, keep_pairs, omega, packed=False):
-    """:func:`_build_integrals`'s outputs for an eager whitened square build,
-    from shared class programs (:mod:`dftax.integrals.bucketed`): the
-    one-electron integrals, the metric and the 3-center tensor are assembled
-    from per-class programs that recur across molecules, so none of them is
-    compiled per molecule. Only the AO grid, the metric factor and the
-    whitening are small per-molecule programs."""
     from dftax.integrals.bucketed import (
         class_jobs, eri3c_host_packed, eri3c_square, pair_jobs, pairs_host,
         warm,
@@ -460,7 +294,6 @@ def _build_integrals_shared(basis, coords, charges, grid_coords, aux_basis,
     pp = plan_pairs(basis, tol=0.0)
     ap = plan_pairs(aux_basis, tol=0.0)
     plan0 = plan_eri3c(basis, aux_basis, keep_pairs=keep_pairs, tol=0.0)
-    # every program this build runs, compiled side by side up front
     oms = (None,) if omega is None else (None, omega)
     warm(pair_jobs("st", pp) + pair_jobs("nuc", pp)
          + [j for om in oms for j in pair_jobs("eri2c", ap, om)
@@ -485,14 +318,6 @@ def _build_integrals_shared(basis, coords, charges, grid_coords, aux_basis,
     return (S, T + V, ao, dao, e_nn, None, int3c, None, None, int3c_lr, None)
 
 
-# The hybrid (see _build_integrals_shared): a structure's builds in a process
-# run the shared class programs, which need no per-molecule compile; from its
-# second build on (a repeat: an optimization, a scan, a trajectory), its fused
-# _build_integrals compiles on a background thread, and once that is done the
-# later builds take the fused program, which is about twice as fast warm
-# (cubane: 59 against 117 ms for the 3-center tensor). A new process repeats the background compile, but the fused XLA
-# executable is then a persistent-cache hit, so only its tracing is paid, off
-# the critical path.
 _FUSED_BUILDS: dict = {}
 _FUSED_POOL = None
 _SEEN: set = set()
@@ -504,11 +329,6 @@ def _fused_ready(key):
 
 
 def _schedule_fused(key, call):
-    """Compile (and run once) the fused build for ``key`` in the background,
-    on the structure's second build: a structure built once (each molecule of
-    a dataset) never pays for it. One compile at a time, none queued (a
-    pending compile would hold up interpreter exit): while one runs, a later
-    build of another structure tries again."""
     global _FUSED_POOL
     if key in _FUSED_BUILDS:
         return
@@ -523,8 +343,6 @@ def _schedule_fused(key, call):
         _FUSED_POOL = ThreadPoolExecutor(max_workers=1,
                                          thread_name_prefix="dftax-fused")
     def compile_once():
-        # run it once so its executable is compiled and cached; keep nothing,
-        # the outputs are a whole integral build (S, the AO grid, the DF tensor)
         jax.block_until_ready(call())
 
     _FUSED_BUILDS[key] = _FUSED_POOL.submit(compile_once)
@@ -537,23 +355,6 @@ def _build_integrals(
     eri3c_plan=None, pair_plan=None, aux_pair_plan=None, eri4c_plan=None,
     whiten=False, packed=False,
 ):
-    """Build all integral arrays in one jitted pass.
-
-    Jitting fuses the builders (eager mode dispatches each op unfused, e.g.
-    eri4c is ~2x slower eager than jitted). ``aux_basis is None`` selects the
-    exact 4-center ERI; otherwise RI-J/RI-K density-fitting tensors. When
-    ``materialize_ao`` is False the AO grid values/gradients are not precomputed
-    (the XC grid is streamed instead; see ``terms._streamed_e_xc``). ``eri_quartets``/
-    ``eri_qof`` optionally supply a pre-screened (Cauchy-Schwarz) quartet list +
-    orbit map for the exact ERI. Composes with grad (used by forces), where jit
-    is traced inline. ``whiten`` (static, materialized DF only) returns the
-    whitened ``B = Lᵀ T`` tensors in the 3-center slots and ``None`` for the
-    metric inverses (see :class:`~dftax.ks.terms.WhitenedDFCoulomb`); with
-    ``packed`` too, they are packed ``(naux, npair)`` over the plan's kept
-    shell pairs (:class:`~dftax.ks.terms.PackedDFCoulomb`).
-    """
-    # One bucketed pass builds both (shared OS tables per shell pair); the
-    # public overlap_matrix / kinetic_matrix wrappers stay for direct users.
     S, T = overlap_kinetic_bucketed(basis, plan=pair_plan)
     V = nuclear_attraction_matrix(basis, coords, charges, plan=pair_plan)
     ao, dao = ao_on_grid(basis, grid_coords) if materialize_ao else (None, None)
@@ -563,33 +364,23 @@ def _build_integrals(
     int3c_lr = None
     int2c_inv_lr = None
     if aux_basis is None:
-        # stream_exact: skip the O(N⁴) tensor; J/K are contracted on the fly
-        # in StreamedExactCoulomb (coulomb_j_4c / exchange_k_4c).
         eri = (None if stream_exact
                else eri4c_matrix(basis, quartets=eri_quartets, qof=eri_qof,
                                  plan=eri4c_plan))
         int3c = None
         int2c_inv = None
         if omega is not None:
-            # Long-range erf(ω·r₁₂)/r₁₂ tensor for range-separated hybrids.
             eri_lr = eri4c_matrix(
                 basis, quartets=eri_quartets, qof=eri_qof, omega=omega,
                 plan=eri4c_plan,
             )
     else:
-        # int3c (nao²×naux) is the big DF tensor; skip it when streaming RI-J.
         build3 = ((lambda **kw: eri3c_packed(basis, aux_basis, **kw))
                   if packed else
                   (lambda **kw: eri3c_matrix(basis, aux_basis, **kw)))
         whiten3 = _whiten_packed if packed else _whiten
         int3c = build3(plan=eri3c_plan) if materialize_int3c else None
-        int2c = eri2c_matrix(aux_basis, plan=aux_pair_plan)  # (naux, naux)
-        # Symmetric pseudo-inverse of the Coulomb metric, dropping near-null
-        # directions (both aux spans; see the measured studies in the
-        # _metric_pinv docstring, including the rejected spherical-metric
-        # Cholesky). Standard JK-fitting sets are near-redundant even in
-        # spherical form; the 1e-7 relative cutoff keeps the inverse
-        # well-conditioned at sub-mHa RI cost.
+        int2c = eri2c_matrix(aux_basis, plan=aux_pair_plan)
         if whiten:
             int3c = whiten3(int3c, _metric_factor(int2c))
             int2c_inv = None
@@ -597,15 +388,6 @@ def _build_integrals(
             int2c_inv = _metric_pinv(int2c)
         eri = None
         if omega is not None:
-            # The RI treatment of the long-range operator attenuates both the
-            # 3-center integrals and the metric (standard, as in PySCF's
-            # range-separated DF). The attenuated metric is numerically
-            # singular for either aux span: erf(wr)/r crushes tight auxiliary
-            # functions toward zero norm (condition ~1e16, smallest
-            # eigenvalues negative at machine precision).
-            # The attenuated 3-center is only materialized alongside the
-            # full-range one; the streamed backend recomputes its elements on
-            # the fly and needs just the (small) attenuated metric inverse.
             int3c_lr = (build3(omega=omega, plan=eri3c_plan)
                         if materialize_int3c else None)
             int2c_lr = eri2c_matrix(aux_basis, omega=omega, plan=aux_pair_plan)
@@ -619,13 +401,11 @@ def _build_integrals(
 
 
 class KS(eqx.Module):
-    """Spin-stacked KS total energy as a differentiable function of ``P``.
+    """The Kohn-Sham total energy as a differentiable function of the density
+    matrix.
 
-    Built directly from a system + functional + backend/grid values (see the
-    module docstring). ``P`` has shape ``(nspin, nao, nao)`` with
-    ``nspin = len(self.nocc)``: one doubly-occupied channel (``P[0] = 2ΣCCᵀ``)
-    for a closed shell, two unit-occupation channels (``P[σ] = ΣC_σC_σᵀ``) for
-    a spin-polarized system.
+    ``P`` has shape ``(nspin, nao, nao)``: one channel holding the total
+    density for a closed shell, α and β channels for a spin-polarized system.
     """
 
     S: Float[Array, "nao nao"]
@@ -635,9 +415,6 @@ class KS(eqx.Module):
     basis: BasisData
     coulomb: CoulombTerm
     xc_term: XCTerm
-    # System metadata for the solver-side initial guesses (dftax.ks.guess):
-    # element symbols (None when built from a raw System, which carries no
-    # identities) and the nuclear coordinates in Bohr.
     atom_coords: Float[Array, "natom 3"]
     nelec: int = eqx.field(static=True)
     nocc: tuple[int, ...] = eqx.field(static=True)
@@ -658,33 +435,33 @@ class KS(eqx.Module):
 
         Args:
             system: a :class:`~dftax.system.molecule.Molecule`, a PySCF
-                ``Mole`` (setup only), or a raw :class:`System`.
-            xc: the exchange-correlation functional (e.g. ``PBE()``).
-            grid: quadrature choice, a :func:`~dftax.grid.becke` spec
-                (default), an explicit ``(coords, weights)`` tuple, or a
-                :func:`~dftax.grid.points` spec (explicit grid + streaming
-                chunk).
-            coulomb: Coulomb/exchange backend, :func:`~dftax.ks.terms.df`
-                (default: ``def2-universal-jkfit``, auto materialize/stream)
-                or :func:`~dftax.ks.terms.exact` (O(N⁴); also the raw-System
-                fallback).
-            spin: ``None`` infers from the system (closed shell → restricted);
-                an explicit ``spin`` (= 2S, including 0) requests
-                spin-polarized α/β channels.
-            mesh: a :func:`~dftax.ks.shard.mesh` spec to shard the calculation
-                across a device mesh (the XC quadrature and the DF 3-center
-                tensor; the dense nao² matrices stay replicated).
-                ``None`` = single device.
-            dispersion: a :func:`~dftax.energy.d3.d3bj` spec adds the two-body
-                D3(BJ) correction to ``total()`` (P-independent, so the SCF is
-                untouched; forces get its gradient by autodiff). Parameters
-                resolve from the functional's name unless given explicitly.
+                ``Mole``, a :class:`System`, or a periodic
+                :class:`~dftax.pbc.cell.Cell`.
+            xc: the exchange-correlation functional, e.g. ``PBE()``.
+            grid: the quadrature: a :func:`~dftax.grid.becke` spec (the
+                default), a ``(coords, weights)`` tuple, or a
+                :func:`~dftax.grid.points` spec. A Cell takes
+                :func:`~dftax.pbc.build.uniform`.
+            coulomb: :func:`~dftax.ks.terms.df` (the default) or
+                :func:`~dftax.ks.terms.exact`; a :class:`System` defaults to
+                ``exact()``.
+            spin: number of unpaired electrons, ``2S``. ``None`` takes the
+                system's value and solves a closed shell restricted; an
+                explicit value, 0 included, solves spin-polarized.
+            mesh: a :func:`~dftax.ks.shard.mesh` spec to divide the
+                quadrature and the density-fitting tensor over devices;
+                ``None`` runs on one device.
+            dispersion: a :func:`~dftax.energy.d3.d3bj` or
+                :func:`~dftax.energy.d4.d4` spec, added to the total energy.
+
+        Raises:
+            ValueError: ``spin`` inconsistent with the number of electrons.
+            NotImplementedError: ``coulomb``, ``mesh`` or ``dispersion`` with
+                a Cell.
 
         Example:
             ```python
-            ks = KS(mol, PBE0(),
-                    grid=becke(75, 302),
-                    coulomb=df("def2-universal-jkfit"))
+            ks = KS(mol, PBE0(), grid=becke(75, 302), coulomb=df(chunk=None))
             ```
         """
         if not jax.config.read("jax_enable_x64"):
@@ -698,8 +475,6 @@ class KS(eqx.Module):
         from dftax.pbc.cell import Cell
 
         if isinstance(system, CellAt):
-            # a planned cell at traced coordinates / lattice (the forces and
-            # the stress rebuild the energy this way)
             from dftax.pbc.build import cell_fields
 
             for name, value in cell_fields(system.plan, xc, system.coords,
@@ -707,9 +482,6 @@ class KS(eqx.Module):
                 setattr(self, name, value)
             return
         if isinstance(system, Cell):
-            # A periodic cell fills the same fields from its own builders
-            # (lattice-summed integrals, GTH pseudopotential, FFT Hartree
-            # term on the uniform grid; see dftax.pbc.build).
             if coulomb is not None or mesh is not None or dispersion is not None:
                 raise NotImplementedError(
                     "a Cell takes no coulomb=, mesh= or dispersion= yet: its "
@@ -738,10 +510,6 @@ class KS(eqx.Module):
 
         coords = jnp.asarray(coords)
         charges = jnp.asarray(charges, dtype=coords.dtype)
-        # The default spec, filled in here rather than only inside
-        # _resolve_grid: the XC backend choice below reads the spec's screen
-        # policy, and with grid=None it read None, so the default grid never
-        # took the per-block screening documented as on from 50 atoms.
         if grid is None and symbols is not None:
             grid = becke()
         grid_coords, grid_weights, grid_chunk = _resolve_grid(grid, symbols, coords)
@@ -749,9 +517,6 @@ class KS(eqx.Module):
         weights = jnp.asarray(grid_weights)
 
         devices = _resolve_mesh(mesh)
-        # Resolve the "auto" streaming policy against the per-device grid
-        # slice and the final AO count (the materialized AO grid is the
-        # dominant XC memory).
         nao_final = (
             basis.cart2sph.shape[1]
             if basis.cart2sph is not None
@@ -764,26 +529,16 @@ class KS(eqx.Module):
         is_df = isinstance(spec, DFSpec)
         shard_df = devices is not None and is_df
         if is_df:
-            # A range-separated hybrid materializes a second, attenuated
-            # 3-center tensor beside the first, so price both (as forces
-            # already does); the budget used to see only one.
             lr_fold = 2 if float(getattr(xc, "hf_coeff_lr", 0.0)) != 0.0 else 1
             spec = _resolve_aux(spec, symbols, coords, nao_final, shard_df,
                                 lr_fold)
-            # n_atom from the shape: static even at traced coordinates
             spec = dataclasses.replace(spec, screen=resolve_df_screen(
                 spec.screen, int(coords.shape[0])))
-            # packing pays where screening drops pairs (and where only the
-            # packed tensor fits, resolved with the budget above)
             if spec.packed == "auto":
                 spec = dataclasses.replace(spec,
                                            packed=spec.screen is not None)
         quartets, qof, pairs = _resolve_screening(spec, basis)
         aux_basis = spec.auxbasis if is_df else None
-        # Whitening folds the metric into the materialized tensor
-        # (WhitenedDFCoulomb). Its factor carries no geometry derivative, so a
-        # build at traced coordinates (forces, Hessians, scf_batched) keeps
-        # DFCoulomb, whose _metric_pinv jvp does.
         whiten = False
         if is_df:
             whitenable = (spec.chunk is None and not shard_df
@@ -795,10 +550,6 @@ class KS(eqx.Module):
                     "at concrete coordinates (chunk=None, no mesh, outside "
                     "grad/vmap); use whiten=None to whiten where it applies."
                 )
-        # Range-separated hybrids: build the erf(ω·r₁₂)/r₁₂ tensors alongside
-        # the Coulomb ones (memory doubles on the materialized backends; the
-        # streamed DF backend stores only the attenuated metric and recomputes
-        # the attenuated 3-center on the fly).
         hf_lr = float(getattr(xc, "hf_coeff_lr", 0.0))
         omega = float(getattr(xc, "omega", 0.0)) if hf_lr != 0.0 else 0.0
         if hf_lr != 0.0 and omega == 0.0:
@@ -812,13 +563,6 @@ class KS(eqx.Module):
                 "range-separated hybrids need a materialized backend: use "
                 "exact() or df(chunk=None), not exact(stream=True)."
             )
-        # The bucket plan reads static basis metadata and must be derived
-        # outside the jitted build (inside, every BasisData leaf is traced);
-        # same eager-vs-traced split as the Schwarz quartet list above.
-        # df(screen=...) on the materialized path is a shell-pair compact
-        # gather: the plan omits the Schwarz-negligible bra shell-pairs, which
-        # then stay exactly zero in the 3-center tensor (streamed df keeps the
-        # AO-level significant_pairs above).
         screen_keep = (
             _shell_pair_keep(basis, float(spec.screen))
             if is_df and spec.chunk is None and spec.screen is not None
@@ -828,8 +572,6 @@ class KS(eqx.Module):
             plan_eri3c(basis, aux_basis, keep_pairs=screen_keep)
             if aux_basis is not None else None
         )
-        # Shell-aligned auxiliary slabs for the streamed backend, built
-        # eagerly like the plans above.
         slab_plans = None
         if is_df and isinstance(spec.chunk, int):
             from dftax.integrals.eri3c_bucketed import plan_aux_slabs
@@ -844,25 +586,16 @@ class KS(eqx.Module):
         aux_pair_plan = (
             plan_pairs(aux_basis) if aux_basis is not None else None
         )
-        # The unscreened exact path runs bucketed; a Schwarz quartet list
-        # keeps the flat per-element route (the plan is unused there).
         eri4c_plan = (
             plan_eri4c(basis)
             if aux_basis is None and not spec.stream and quartets is None
             else None
         )
-        # Shared class programs (dftax.integrals.bucketed; DFTAX_BUCKETED=0
-        # turns them off): an eager whitened build takes its one-electron
-        # integrals, metric and 3-center tensor from per-class programs that
-        # every molecule with the same shell classes reuses, and skips the
-        # per-molecule _build_integrals program. Cubane, cold: 189 s either
-        # way; bicyclo[2.2.2]octane after it: 26 against 189 s; a new process
-        # on a warm cache: 12 against 50 s (the fused program is traced again).
         bucketed = (os.environ.get("DFTAX_BUCKETED", "1") != "0" and whiten
                     and devices is None)
         fused_args = (
             basis, coords, charges, grid_coords, aux_basis,
-            devices is None and grid_chunk is None,  # sharded AO grid below
+            devices is None and grid_chunk is None,
             (not shard_df) and not (is_df and spec.chunk is not None),
             quartets, qof, (not is_df) and spec.stream,
             (omega if hf_lr != 0.0
@@ -871,8 +604,6 @@ class KS(eqx.Module):
             whiten and spec.packed,
         )
         if bucketed:
-            # everything static in the fused call, so a hit means the fused
-            # program for exactly this structure is compiled
             key = (static_fingerprint(basis), static_fingerprint(aux_basis),
                    tuple(grid_coords.shape), int(coords.shape[0]),
                    eri3c_plan, pair_plan, aux_pair_plan, fused_args[5],
@@ -889,10 +620,6 @@ class KS(eqx.Module):
         else:
             (S, hcore, ao, dao, e_nn, eri, int3c, int2c_inv,
              eri_lr, int3c_lr, int2c_inv_lr) = _build_integrals(*fused_args)
-        # Dispersion is P-independent: a scalar of the (traced) coordinates,
-        # mirroring e_nn, so the rebuilt energies in forces/batched carry its
-        # gradient automatically. Atomic numbers come from the charges (works
-        # on the raw System path too).
         disp_fn = _resolve_dispersion(dispersion, xc, charges, nelec)
         self.e_disp = (
             disp_fn(coords) if disp_fn is not None else jnp.asarray(0.0)
@@ -901,17 +628,9 @@ class KS(eqx.Module):
         self.hcore = hcore
         self.e_nn = e_nn
         self.basis = basis
-        # A streamed spec shards inside its own term (it has no tensor to slab),
-        # so only the materialized sharded backend builds slabs here.
         if shard_df and spec.chunk is None:
-            # Built directly in per-device slabs: the capacity path; no
-            # device ever holds more than its naux/ndev slice of the
-            # O(nao²·naux) tensor. The metric inverse is zero-padded to the
-            # padded aux dimension (padded γ entries are exact zeros).
             int3c_s, nauxp, pos = _build_int3c_sharded(
                 basis, aux_basis, devices)
-            # Shell-aligned slabs pad interleaved, not at the tail: embed the
-            # metric inverse at the padded positions (padded rows/cols zero).
             vinv = (
                 jnp.zeros((nauxp, nauxp), int2c_inv.dtype)
                 .at[pos[:, None], pos[None, :]].set(int2c_inv)
@@ -919,8 +638,6 @@ class KS(eqx.Module):
             int3c_lr_s = None
             vinv_lr = None
             if hf_lr != 0.0:
-                # Attenuated slabs + padded attenuated metric for the
-                # long-range exchange rounds (same layout as the full-range).
                 int3c_lr_s, _, _ = _build_int3c_sharded(
                     basis, aux_basis, devices, omega=omega
                 )
@@ -942,9 +659,6 @@ class KS(eqx.Module):
                 slab_plans=slab_plans, packed_plan=eri3c_plan,
             )
         if devices is not None:
-            # Pad the quadrature to the mesh and lay it out sharded; the AO
-            # values are built under jit from the sharded coordinates, so each
-            # device only ever materializes its own O(ng/ndev · nao) slice.
             gc_s, gw_s = _pad_shard_grid(grid_coords, weights, devices)
             if grid_chunk is None:
                 ao_s, dao_s = jax.jit(ao_on_grid)(basis, gc_s)
@@ -957,9 +671,6 @@ class KS(eqx.Module):
             self.xc_term = ShardedGridXC(inner=inner, devices=devices)
         elif _resolve_screen(getattr(grid, "screen", None),
                              int(coords.shape[0])) is not None:
-            # Per-block basis screening: reorder the grid into compact blocks
-            # and give each only the shells that reach it. The plan is built
-            # eagerly (it reads concrete geometry), like the Schwarz screen.
             from dftax.grid.screen import plan_grid_screen
 
             plan = plan_grid_screen(
@@ -969,7 +680,7 @@ class KS(eqx.Module):
             )
             gc_o = jnp.asarray(np.asarray(grid_coords)[plan.order])
             gw_o = np.asarray(weights)[plan.order]
-            if plan.n_pad:                     # filler points carry no weight
+            if plan.n_pad:
                 gw_o = gw_o.copy()
                 gw_o[-plan.n_pad:] = 0.0
             self.xc_term = ScreenedGridXC(
@@ -998,11 +709,6 @@ class KS(eqx.Module):
         self.nocc = nocc
         self.symbols = tuple(symbols) if symbols is not None else None
         if devices is not None and jax.process_count() > 1:
-            # Multi-node: the replicated part of the build ran per process on
-            # its own default device, but a computation over the global mesh
-            # needs global inputs. The sharded leaves (the aux slabs, the
-            # grid, whatever jit made from them) already carry their mesh
-            # sharding and are left exactly as they are.
             for _name in ("S", "hcore", "e_nn", "e_disp", "basis", "coulomb",
                           "xc_term", "atom_coords"):
                 setattr(self, _name,
@@ -1025,21 +731,16 @@ class KS(eqx.Module):
     def energy_and_fock(
         self, P: Float[Array, "nspin nao nao"], idempotent: bool = True
     ) -> tuple[Scalar, Float[Array, "nspin nao nao"]]:
-        """``(E_total, F)`` for one density, sharing the work between them.
+        """Total energy and Fock matrix ``sym(∂E/∂P)`` for one density,
+        computed together at about the cost of one.
 
-        Computing the two separately walks the quadrature twice, because the
-        streaming backends checkpoint their grid blocks and ``grad``
-        rematerializes them. Each term is therefore asked for both at once
-        (:meth:`~dftax.ks.terms.XCTerm.energy_and_potential`,
-        :meth:`~dftax.ks.terms.CoulombTerm.energy_and_potential`).
+        Args:
+            P: density matrix, ``(nspin, nao, nao)``.
+            idempotent: whether ``P`` has integer occupations (``False``
+                under smearing).
 
-        ``idempotent`` says whether ``P`` is an integer-occupation projector:
-        true of an aufbau density, false under Fermi smearing. The Coulomb
-        term falls back to reverse mode when told otherwise.
-
-        The result is the same ``(total(P), sym(∂E/∂P))`` as the two separate
-        calls, which ``total`` / ``electronic`` still provide for every other
-        consumer (forces, the Hessian, Newton, direct minimization).
+        Returns:
+            ``(E, F)``, with ``F`` of the shape of ``P``.
         """
         e1, g1 = jax.value_and_grad(
             lambda Q: jnp.sum(jnp.sum(Q, axis=0) * self.hcore))(P)
@@ -1052,24 +753,23 @@ class KS(eqx.Module):
         return e_rest + e_xc + self.e_nn + self.e_disp, F
 
     def energy_and_grad_orbitals(self, Cs, idempotent: bool = True):
-        """``(E_total, ∂E/∂C_σ)`` for the occupied orbitals of each channel.
+        """Total energy and its gradient with respect to the occupied
+        orbitals.
 
-        The density is ``P_σ = C_σ diag(w_σ) C_σᵀ`` with the occupations of
-        :meth:`occupations` (``2`` closed shell, ``1`` per spin channel), so
-        ``∂E/∂C_σ = 2 F_σ C_σ diag(w_σ)`` with ``F = sym(∂E/∂P)``.
-        The one-electron and two-electron parts take that route, through
-        their (cheap) potentials; the XC part, almost all of an iteration,
-        comes straight from the orbitals
-        (:meth:`~dftax.ks.terms.XCTerm.energy_and_grad_orbitals`), which never
-        forms the ``nao x nao`` XC potential. What a direct minimizer
-        (:func:`~dftax.ks.gdm.gdm`) needs, and nothing more.
+        Args:
+            Cs (tuple[Array, ...]): occupied orbital coefficients per spin channel, each
+                ``(nao, nocc_σ)``.
+            idempotent: as in :meth:`energy_and_fock`.
+
+        Returns:
+            E (Array): the total energy (Hartree).
+            grads (tuple[Array, ...]): ``grads[σ] = ∂E/∂C_σ = 2 F_σ C_σ diag(w_σ)``, with
+                ``w`` from :meth:`occupations`.
         """
         ws = self.occupations()
         P = jnp.stack([(C * w) @ C.T for C, w in zip(Cs, ws)])
         e1 = jnp.sum(jnp.sum(P, axis=0) * self.hcore)
         if hasattr(self.coulomb, "energy_and_grad_orbitals"):
-            # the orbitals straight into the two-electron term: no orbital
-            # recovery from P for the exchange
             e_2e, g_2e = self.coulomb.energy_and_grad_orbitals(
                 Cs, ws, self.S, self.nocc)
         else:
@@ -1085,9 +785,8 @@ class KS(eqx.Module):
         return e1 + e_2e + e_xc + self.e_nn + self.e_disp, grads
 
     def occupations(self):
-        """Occupation of each channel's occupied orbitals: 2 each for a
-        closed shell, 1 each per spin channel. A padded system
-        (:mod:`dftax.ks.batched_gdm`) gives its padding slots 0."""
+        """Occupation numbers of the occupied orbitals per channel: 2 for a
+        closed shell, 1 per spin channel."""
         w = 2.0 if len(self.nocc) == 1 else 1.0
         return tuple(jnp.full((n,), w) for n in self.nocc)
 

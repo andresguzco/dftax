@@ -1,25 +1,3 @@
-"""Shell-class bucketing: contraction lengths belong in the key.
-
-``plan_pairs``/``plan_eri3c`` batch shells into classes that share one unrolled
-kernel, so every member of a class is padded to the class's primitive counts.
-Keying on the angular class alone made that padding global: in cc-pVDZ, sulfur
-is 12s8p1d against carbon's 9s4p1d, so a single S atom took the (s,s) class
-from 9x9 to 12x12 and (p,p) from 4x4 to 8x8 for *every* pair in the molecule --
-and the cost is pad x pair-count, paid overwhelmingly by the pairs with no
-sulfur in them. Measured on penicillin G (C16H18N2O4S) / cc-pVDZ / DF: 8x the
-padded primitive work in the 3-center build, and 20.3 GiB of build scratch
-against 12.4 GiB.
-
-Keying on the contraction lengths alone is the other extreme -- no padding, but
-one compiled kernel per (angular class x contraction combo), which triples the
-build's compile time and buys nothing on a molecule whose heavy atoms already
-share a contraction length. The planners key exactly and then merge back under
-a padded-work budget (``_PAD_TOL``), so these tests pin three things: the exact
-partition pads nothing, the merge stays inside its budget and is a no-op where
-padding was already free, and the whole repartitioning leaves the integrals
-alone.
-"""
-
 from collections import defaultdict
 
 import numpy as np
@@ -34,19 +12,14 @@ from dftax.integrals.eri3c_bucketed import (
 )
 from dftax.system.molecule import Molecule
 
-# Methanethiol: second row (S) next to first row (C, O-like valence) and H, the
-# smallest thing that reproduces the mixed-contraction-length case.
 THIOL = ("S 0.000 0.000 0.000; C 0.000 0.000 1.820; "
          "H 0.960 0.000 -0.190; H -0.510 0.890 2.070; "
          "H -0.510 -0.890 2.070; H 1.030 0.000 2.070")
-# P and Cl are both 12s8p1d in cc-pVDZ: an all-second-row molecule where the
-# angular class is already contraction-uniform, so the finer key must not split.
 PCL3 = ("P 0 0 0; Cl 1.4 1.4 0; Cl -1.4 1.4 0; Cl 0 -1.4 1.4")
 
 
 @pytest.fixture
 def exact_buckets(monkeypatch):
-    """Plan with no merging, so the padding claim can be checked directly."""
     monkeypatch.setattr(bucketed, "_PAD_TOL", 0.0)
 
 
@@ -59,14 +32,11 @@ def _basis(atom, name="cc-pvdz"):
 
 
 def _nprim_by_row(basis):
-    """Map each shell's starting row to its true primitive count."""
     shells, _ = _shells(basis.angular, basis.exponents)
     return {row0: npr for _l, row0, _nc, npr in shells}
 
 
 def _coarsen_pairs(plan):
-    """The previous planner, recovered: merge classes back onto (la, lb) and
-    take the elementwise max of the primitive counts."""
     nao, classes = plan
     m = defaultdict(lambda: [None, None, [], [], (0, 0)])
     for la, lb, anga, angb, ra, rb, npr in classes:
@@ -81,7 +51,6 @@ def _coarsen_pairs(plan):
 
 
 def _coarsen_eri3c(plan):
-    """Same for the 3-center plan, merging onto (la, lb, lc)."""
     nao, naux, nsph, nauxsph, classes = plan
     m = defaultdict(
         lambda: [None, None, None, [], [], [], (0, 0, 0), [], [], []])
@@ -103,8 +72,6 @@ def _coarsen_eri3c(plan):
 
 
 def _pair_work(classes):
-    """Sum over classes of npairs x prod(padded primitive counts): the
-    primitive work the unrolled kernels actually emit."""
     return sum(len(c[4]) * c[6][0] * c[6][1] for c in classes)
 
 
@@ -113,10 +80,6 @@ def _eri3c_work(classes):
 
 
 def test_pair_classes_do_not_pad_primitive_counts(exact_buckets):
-    """With merging off, no shell in a pair class is padded: every member
-    carries exactly the class's primitive counts. This is the property the old
-    angular-only key violated, and the floor the merge budget is measured
-    against."""
     basis = _basis(THIOL)
     npr = _nprim_by_row(basis)
     for la, lb, _anga, _angb, rows_a, rows_b, (npa, npb) in plan_pairs(basis)[1]:
@@ -125,7 +88,6 @@ def test_pair_classes_do_not_pad_primitive_counts(exact_buckets):
 
 
 def test_eri3c_classes_do_not_pad_primitive_counts(exact_buckets):
-    """Same for the 3-center plan, over both the orbital and auxiliary legs."""
     basis, aux = _basis(THIOL), _basis(THIOL, "def2-universal-jkfit")
     npr, npr_aux = _nprim_by_row(basis), _nprim_by_row(aux)
     for c in expand_eri3c(plan_eri3c(basis, aux))[4]:
@@ -136,15 +98,10 @@ def test_eri3c_classes_do_not_pad_primitive_counts(exact_buckets):
 
 
 def test_sulfur_does_not_resize_the_first_row_kernels():
-    """The regression, quantified, at the shipped merge budget. Bucketing
-    methanethiol on the angular class alone pads the whole molecule to sulfur's
-    contraction lengths; the shipped plan cuts the emitted primitive work
-    several-fold, which is what the build's peak scratch tracks."""
     basis, aux = _basis(THIOL), _basis(THIOL, "def2-universal-jkfit")
     pairs, three = plan_pairs(basis), expand_eri3c(plan_eri3c(basis, aux))
     old_pairs, old_three = _coarsen_pairs(pairs), _coarsen_eri3c(three)
 
-    # More classes, each sized nearer to its own members -- the trade.
     assert len(pairs[1]) > len(old_pairs[1])
     assert len(three[4]) > len(old_three[4])
     assert _pair_work(pairs[1]) * 2 < _pair_work(old_pairs[1])
@@ -152,9 +109,6 @@ def test_sulfur_does_not_resize_the_first_row_kernels():
 
 
 def test_merge_stays_inside_its_padding_budget(monkeypatch):
-    """Merging never carries the plan more than ``_PAD_TOL`` above the exact
-    partition's padded work -- the guarantee that lets the budget be raised for
-    compile time without silently reintroducing the sulfur blow-up."""
     basis, aux = _basis(THIOL), _basis(THIOL, "def2-universal-jkfit")
     shipped = (_pair_work(plan_pairs(basis)[1]),
                _eri3c_work(expand_eri3c(plan_eri3c(basis, aux))[4]))
@@ -166,10 +120,6 @@ def test_merge_stays_inside_its_padding_budget(monkeypatch):
 
 
 def test_uniform_contraction_lengths_leave_the_partition_alone():
-    """P and Cl are both 12s8p1d in cc-pVDZ, so PCl3's angular classes are
-    already contraction-uniform: the finer key never splits them, and the merge
-    has nothing to put back. Same classes, same work as the angular-only plan.
-    The fix costs kernels only where padding was real."""
     basis = _basis(PCL3)
     pairs = plan_pairs(basis)
     assert pairs == _coarsen_pairs(pairs)
@@ -186,11 +136,6 @@ def _agrees(build, new, old, tol=1e-11):
 @pytest.mark.float64
 @pytest.mark.slow
 def test_finer_pair_buckets_leave_the_integrals_alone():
-    """Splitting a class only repartitions the same shell pairs into more
-    kernels, so the assembled matrices are unchanged. Not bit-identical:
-    padded primitives contribute zero but still shift the summation order
-    inside a kernel, which lands at the 1e-14 level.
-    """
     basis = _basis(THIOL)
     mol = Molecule.from_xyz(THIOL, "cc-pvdz", spherical=True)
     xyz = np.asarray(mol.atom_coords())
@@ -206,15 +151,8 @@ def test_finer_pair_buckets_leave_the_integrals_alone():
 @pytest.mark.float64
 @pytest.mark.slow
 def test_finer_eri3c_buckets_leave_the_integrals_alone():
-    """Same claim for the 3-center build, whose class count grows fastest
-    (the l-triple times the contraction triple).
-
-    The orbital basis stands in for the auxiliary one: this is a statement
-    about partitioning, not about fitting, and a real JK-fitting set is a few
-    hundred extra shells of compile for no extra coverage.
-    """
     basis = _basis(THIOL)
-    three = plan_eri3c(basis, basis)       # factored; coarsened from rows
+    three = plan_eri3c(basis, basis)
     _agrees(lambda p: eri3c_matrix_bucketed(basis, basis, plan=p),
             three, _coarsen_eri3c(expand_eri3c(three)))
 
@@ -254,8 +192,8 @@ class TestAuxSlabs:
         slabs = plan_aux_slabs(basis, aux, 5)
         prev_c = prev_s = 0
         for (lo, hi, slo, shi, _plan) in slabs:
-            assert lo == prev_c and slo == prev_s      # contiguous cover
-            assert lo in starts                        # never cuts a shell
+            assert lo == prev_c and slo == prev_s
+            assert lo in starts
             assert hi > lo and shi > slo
             prev_c, prev_s = hi, shi
         assert prev_c == aux.centers.shape[0]
@@ -278,7 +216,7 @@ class TestBucketedEri4c:
         new = np.asarray(eri4c_matrix(b))
         assert np.abs(new - ref).max() < 1e-12
 
-    @pytest.mark.slow  # the flat REFERENCE engine is the slow side of the A/B
+    @pytest.mark.slow
     def test_matches_flat_spherical_d_shells_lr(self):
         import jax.numpy as jnp
 
@@ -298,14 +236,7 @@ class TestBucketedEri4c:
             assert np.abs(new - ref).max() < 1e-12
 
 
-# ---------------------------------------------------------------------------
-# Factored 3-center plans: a class is (bra pairs) x (aux shells)
-# ---------------------------------------------------------------------------
-
-
 def test_factored_plan_holds_every_triple_once():
-    """Expanded, the factored plan is every kept bra shell pair (canonically
-    oriented) times every aux shell, each exactly once."""
     basis, aux = _basis(THIOL), _basis(THIOL, "def2-universal-jkfit")
     bra, _ = _shells(basis.angular, basis.exponents)
     shells_aux, _ = _shells(aux.angular, aux.exponents)
@@ -319,10 +250,6 @@ def test_factored_plan_holds_every_triple_once():
 
 
 def test_factored_plan_is_linear_in_pairs_and_aux_shells():
-    """The plan stores pairs and aux shells, not their product: one row
-    literal per pair or aux shell of each class pairing, where the expanded
-    plan holds one per triple. The gap grows with the molecule (8x on this
-    six-atom one; 170x in planning time on coronene)."""
     basis, aux = _basis(THIOL), _basis(THIOL, "def2-universal-jkfit")
     plan = plan_eri3c(basis, aux)
 
@@ -338,8 +265,6 @@ def test_factored_plan_is_linear_in_pairs_and_aux_shells():
 
 @pytest.mark.float64
 def test_factored_build_is_the_expanded_build():
-    """Broadcasting the factors in the graph writes exactly the tensor the
-    triple-by-triple rows write: same triples, same order, bit for bit."""
     basis = _basis(THIOL, "sto-3g")
     aux = _basis(THIOL, "6-31g")
     plan = plan_eri3c(basis, aux)

@@ -1,25 +1,3 @@
-"""Second-order SCF: trust-region Newton on occupied-virtual rotations.
-
-The KS energy as a function of an orbital rotation ``C(kappa) = C exp(K)``,
-with ``K`` the antisymmetric matrix holding one occupied-virtual block
-``kappa_sigma`` per spin channel, has no gauge freedom left (occupied-occupied
-and virtual-virtual rotations leave the density invariant and are excluded),
-so its Hessian at a minimum is well conditioned and plain Newton converges
-quadratically where damped DIIS limit-cycles.
-
-The differentiable-programming payoff: the orbital gradient is ``jax.grad``
-of that energy and the Hessian-vector products that drive the CG solve for
-the Newton step are ``jax.jvp`` of the gradient. In conventional codes these
-are hundreds of lines of hand-derived coupled-perturbed equations; here the
-electronic-structure content is ~none. Rotations are pure matrix products of
-an S-orthonormal reference (no eigendecomposition anywhere differentiated,
-per the eigh-degeneracy rule; see :mod:`dftax.ks.minimize`).
-
-Each accepted step re-anchors the reference orbitals and restarts from
-``kappa = 0``, so ``exp(K)`` stays near the identity; a simple decrease-based
-trust region (halve on uphill, grow on success) globalizes the iteration.
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -37,38 +15,11 @@ from dftax.ks.scf import KSResult, _fock_stacked, canonical_orthonormalizer
 
 
 def _tdot(a, b):
-    """Inner product of two matching pytrees (sum over leaves)."""
     return sum(jnp.sum(x * y)
                for x, y in zip(jax.tree.leaves(a), jax.tree.leaves(b)))
 
 
 def _steihaug_cg(hvp, g, radius, maxiter, scale=None, forcing=None):
-    """Steihaug-Toint truncated CG for the trust-region Newton subproblem.
-
-    Approximately minimizes ``m(p) = <g,p> + 1/2 <p, H p>`` over ``||p|| <=
-    radius``. Plain CG assumes a positive-definite Hessian; at a saddle (or an
-    ill-conditioned point) ``H`` is indefinite and plain CG produces a poor or
-    uphill direction, which the decrease-only trust region then stalls on.
-    Truncated CG instead follows the first direction of negative curvature
-    (``<d, H d> <= 0``) to the trust boundary, and stops at the boundary when a
-    CG step would cross it -- so the step is always a genuine model decrease,
-    indefinite Hessian or not.
-
-    ``scale`` (a pytree like ``g``, positive) preconditions by a change of
-    variables ``p = scale * q``: CG runs on ``scale H scale`` and
-    ``scale * g``, and the trust region bounds ``||p / scale||``. With
-    ``scale = (D / mean D)^(-1/2)`` for a diagonal Hessian model ``D`` that
-    norm stays on the scale of the rotation itself.
-
-    ``forcing`` stops CG once the residual falls below ``forcing * ||g||``
-    (inexact Newton); every loop iteration is one Hessian-vector product, a
-    few Fock builds, so running all ``maxiter`` of them after the step has
-    converged was most of the cost of a Newton iteration. ``None`` keeps the
-    fixed-length solve.
-
-    ``hvp`` is the Hessian-vector product, ``g`` the gradient (a pytree). All
-    vectors are pytrees matching ``g``; returns the step ``p``.
-    """
     if scale is not None:
         inner = hvp
         hvp = lambda v: jax.tree.map(  # noqa: E731
@@ -77,7 +28,6 @@ def _steihaug_cg(hvp, g, radius, maxiter, scale=None, forcing=None):
         g = jax.tree.map(lambda a, b: a * b, scale, g)
 
     def to_boundary(z, d):
-        # largest tau >= 0 with ||z + tau d|| = radius (positive quadratic root)
         dd = _tdot(d, d)
         zd = _tdot(z, d)
         zz = _tdot(z, z)
@@ -89,10 +39,10 @@ def _steihaug_cg(hvp, g, radius, maxiter, scale=None, forcing=None):
         return jax.tree.map(lambda x, y: jnp.where(cond, x, y), a, b)
 
     z0 = jax.tree.map(jnp.zeros_like, g)
-    d0 = jax.tree.map(jnp.negative, g)                 # r0 = g (at z=0), d0 = -r0
+    d0 = jax.tree.map(jnp.negative, g)
     rr0 = _tdot(g, g)
     tol2 = (0.0 if forcing is None else (forcing * forcing) * rr0)
-    state = (0, z0, g, d0, rr0, jnp.array(False), z0)  # (k, z, r, d, rr, done, p)
+    state = (0, z0, g, d0, rr0, jnp.array(False), z0)
 
     def cond(st):
         k, _, _, _, rr, done, _ = st
@@ -105,7 +55,7 @@ def _steihaug_cg(hvp, g, radius, maxiter, scale=None, forcing=None):
         alpha = rr / jnp.where(dHd == 0.0, 1.0, dHd)
         z_next = jax.tree.map(lambda a, b: a + alpha * b, z, d)
         hit = (dHd <= 0.0) | (_tdot(z_next, z_next) >= radius * radius)
-        p_step = sel(hit, to_boundary(z, d), z_next)   # boundary if truncating
+        p_step = sel(hit, to_boundary(z, d), z_next)
         r_next = jax.tree.map(lambda r_, h_: r_ + alpha * h_, r, Hd)
         rr_next = _tdot(r_next, r_next)
         beta = rr_next / jnp.where(rr == 0.0, 1.0, rr)
@@ -119,18 +69,10 @@ def _steihaug_cg(hvp, g, radius, maxiter, scale=None, forcing=None):
 
 
 def _noise(e):
-    """The energy's floating-point floor, ``1e-10 |E| + 1e-12`` Ha: below it,
-    energy differences are rounding (grid sums, DF contractions, and the GEMM
-    algorithm XLA's autotuner picks), so no acceptance or convergence test may
-    resolve them. The same floor :func:`~dftax.ks.gdm.gdm` and
-    :func:`~dftax.ks.scf.scf` use."""
     return 1e-10 * jnp.abs(e) + 1e-12
 
 
 def _rotate(C, kappa, nocc):
-    """Apply ``C exp(K)`` per channel; K holds the occ-virt block of kappa.
-    Closed form (:func:`dftax.ks.gdm.rotate_full`), not ``expm``: the rotation
-    costs ``O(nao nocc nvir)`` and is exact at the trust radii used here."""
     out = []
     for Cs, k, no in zip(C, kappa, nocc):
         Co, Cv = rotate_full(Cs[:, :no], Cs[:, no:], k)
@@ -139,7 +81,6 @@ def _rotate(C, kappa, nocc):
 
 
 def _density(C, nocc, w):
-    """Spin-stacked density from S-orthonormal rotated orbitals."""
     return jnp.stack([w * (Cs[:, :n] @ Cs[:, :n].T)
                       for Cs, n in zip(C, nocc)])
 
@@ -147,8 +88,6 @@ def _density(C, nocc, w):
 @eqx.filter_jit
 def _newton_solve(ks: KS, C0, max_iter, g_tol, e_tol, cg_iters, trust0,
                   verbose):
-    """Trust-region Newton loop; C0 is a tuple of per-channel S-orthonormal
-    (nao, nmo) references. Returns (e, P, C_stacked, converged, n_iter)."""
     nocc = ks.nocc
     nspin = len(nocc)
     w = 2.0 if nspin == 1 else 1.0
@@ -162,8 +101,6 @@ def _newton_solve(ks: KS, C0, max_iter, g_tol, e_tol, cg_iters, trust0,
         return tuple(c[:, :n] for c, n in zip(_rotate(C, k, nocc), nocc))
 
     def step(C, radius):
-        # one evaluation gives the energy, and through F the gradient (VJP of
-        # 2 w F C_o through the rotation) and the preconditioner
         e0, F = ks.energy_and_fock(_density(C, nocc, w))
         Cos, vjp = jax.vjp(lambda k: occupied(C, k), kappa0)
         (g,) = vjp(tuple(2.0 * w * F[s] @ Cos[s] for s in range(nspin)))
@@ -180,10 +117,6 @@ def _newton_solve(ks: KS, C0, max_iter, g_tol, e_tol, cg_iters, trust0,
             return jax.jvp(jax.grad(lambda k: energy_at(C, k)),
                            (kappa0,), (v,))[1]
 
-        # Steihaug-Toint truncated CG: trust-region-bounded and robust to the
-        # indefinite Hessian at a saddle; preconditioned by the orbital-energy
-        # differences and stopped once the residual is a forcing fraction of
-        # the gradient (Eisenstat-Walker, min(0.5, sqrt|g|)).
         forcing = jnp.minimum(0.5, jnp.sqrt(gnorm))
         delta = _steihaug_cg(hvp, g, radius, cg_iters, scale=tuple(scale),
                              forcing=forcing)
@@ -197,13 +130,6 @@ def _newton_solve(ks: KS, C0, max_iter, g_tol, e_tol, cg_iters, trust0,
     def body(st):
         it, C, e_prev, radius, _ = st
         e0, gnorm, C_new, e_new = step(C, radius)
-        # Accept a step unless it raises the energy past the energy's own
-        # floating-point floor, and never ask the energy test for less than
-        # that floor (see _NOISE). A strict decrease test collapsed the trust
-        # region here: near convergence a Newton step lowers E by ~g^2/lambda,
-        # down at the rounding noise that GEMM autotuning moves from run to
-        # run, so steps were rejected at random, every rejection halved the
-        # radius, and the solve stalled at the answer.
         noise = _noise(e0)
         accept = e_new < e0 + noise
         C = jax.tree.map(lambda a, b: jnp.where(accept, b, a), C, C_new)
@@ -228,9 +154,6 @@ def _newton_solve(ks: KS, C0, max_iter, g_tol, e_tol, cg_iters, trust0,
 @eqx.filter_jit
 def _newton_solve_shared(ks: KS, C0, mask, max_iter, g_tol, e_tol, cg_iters,
                          trust0, verbose):
-    """Trust-region Newton over ONE shared orbital set (ROKS): both spin
-    channels' densities come from the same rotated C, and kappa is masked to
-    rotations that change the density (docc-socc, docc-virt, socc-virt)."""
     na, nb = ks.nocc
 
     def density(C):
@@ -260,12 +183,10 @@ def _newton_solve_shared(ks: KS, C0, mask, max_iter, g_tol, e_tol, cg_iters,
             return jax.jvp(jax.grad(lambda k: energy_at(C, k)),
                            (kappa0,), (v * mask,))[1] * mask
 
-        # Steihaug-Toint truncated CG (see _newton_solve): trust-bounded and
-        # saddle-robust; mask keeps the step in the density-changing subspace.
         delta = _steihaug_cg(hvp, g, radius, cg_iters) * mask
         C_new = rotate(C, delta)
         e_new = energy_at(C_new, kappa0)
-        noise = _noise(e0)                    # see _newton_solve
+        noise = _noise(e0)
         accept = e_new < e0 + noise
         C = jnp.where(accept, C_new, C)
         radius = jnp.where(accept, jnp.minimum(2.0 * radius, 1.0),
@@ -296,31 +217,32 @@ def roks(
     guess: GuessSpec | Array | None = None,
     verbose: bool = False,
 ) -> KSResult:
-    """Restricted open-shell KS via shared-orbital Newton.
+    """Restricted open-shell Kohn-Sham, solved by trust-region Newton.
 
-    One set of spatial orbitals for both spin channels (alpha fills the
-    first ``nocc[0]``, beta the first ``nocc[1]``), so the wavefunction is a
-    spin eigenfunction with none of UKS's spin contamination. Implemented as
-    :func:`newton` over rotations of the single shared orbital set: kappa is
-    masked to the doubly-occupied/singly-occupied/virtual inter-block
-    rotations that change the density, and the constraint that the beta
-    space sits inside the alpha space holds by construction. Requires a
-    spin-polarized ``ks`` (``spin != 0``).
+    Both spin channels share one set of spatial orbitals (α fills the first
+    ``nocc[0]``, β the first ``nocc[1]``), so the result has no spin
+    contamination. ``ks`` must be spin-polarized (``spin != 0``).
 
     Args:
-        ks: the built spin-polarized :class:`~dftax.ks.energy.KS`.
+        ks: a spin-polarized :class:`~dftax.ks.energy.KS`.
         max_iter: maximum Newton iterations.
         g_tol: convergence threshold on the orbital-gradient norm.
         e_tol: convergence threshold on the energy change (Ha).
-        cg_iters: CG iterations for the Newton step.
-        trust: initial trust radius on the rotation norm.
-        guess: initial density, same forms as :func:`~dftax.ks.scf.scf`.
-        verbose: print per-iteration energy / gradient norm.
+        cg_iters: conjugate-gradient iterations per Newton step.
+        trust: initial trust radius on the rotation norm (rad).
+        guess: initial density, as in :func:`~dftax.ks.scf.scf`.
+        verbose: print the energy and gradient norm at every iteration.
+
+    Returns:
+        A :class:`~dftax.ks.scf.KSResult` with the same orbitals in both
+        channels.
+
+    Raises:
+        ValueError: ``ks`` is not spin-polarized.
 
     Example:
         ```python
-        ks = KS(mol, PBE(), spin=2)              # triplet
-        res = roks(ks)                           # E >= UKS, no contamination
+        res = roks(KS(mol, PBE(), spin=2))       # triplet
         ```
     """
     if len(ks.nocc) != 2:
@@ -329,12 +251,9 @@ def roks(
     X = canonical_orthonormalizer(ks.S)
     P0 = density_from_guess(ks, guess, X)
     F = _fock_stacked(ks, P0)
-    # Shared reference orbitals from the spin-averaged Fock (values only).
     _, Cp = jnp.linalg.eigh(X.T @ (0.5 * (F[0] + F[1])) @ X)
     C0 = X @ Cp
     nmo = C0.shape[1]
-    # occupation classes: 2 = doubly occupied, 1 = singly, 0 = virtual;
-    # rotations within a class leave both densities invariant (gauge)
     cls = (jnp.arange(nmo) < nb).astype(int) + (jnp.arange(nmo) < na)
     mask = (cls[:, None] != cls[None, :]) & (jnp.arange(nmo)[:, None]
                                              < jnp.arange(nmo)[None, :])
@@ -406,8 +325,6 @@ def newton(
     """
     X = canonical_orthonormalizer(ks.S)
     P0 = density_from_guess(ks, guess, X)
-    # Reference orbitals: aufbau eigenvectors of the Fock at the guess
-    # density (values only; nothing here is differentiated through eigh).
     F = _fock_stacked(ks, P0)
     _, Cp = jnp.linalg.eigh(X.T @ F @ X)
     C0 = tuple((X @ Cp)[s] for s in range(len(ks.nocc)))
@@ -416,7 +333,6 @@ def newton(
         ks, C0, jnp.asarray(max_iter), jnp.asarray(g_tol),
         jnp.asarray(e_tol), cg_iters, trust, verbose,
     )
-    # Canonical orbital energies at the converged density (report only).
     F = _fock_stacked(ks, P)
     eps, Cp = jnp.linalg.eigh(X.T @ F @ X)
     result = KSResult(

@@ -1,22 +1,5 @@
-"""GTH pseudopotentials: the tables and the local part.
-
-The Goedecker-Teter-Hutter form (Phys. Rev. B 54, 1703 (1996); Hartwigsen,
-Goedecker and Hutter, Phys. Rev. B 58, 3641 (1998)) is analytic in both
-spaces, which is what makes it the natural pseudopotential for a Gaussian
-basis with the Hartree term on a uniform grid. The local part of one atom is
-
-    V_loc(r) = -Z_ion/r erf(r / (sqrt(2) r_loc))
-               + exp(-r^2 / (2 r_loc^2)) sum_k C_k (r / r_loc)^(2k - 2)
-
-and its Fourier transform, a function of G^2 alone, is :func:`vloc_G`.
-
-The tables (CP2K's potential and basis-set files, GPL-2.0) are not vendored
-with dftax (Apache-2.0). They are read from ``$DFTAX_GTH_DATA`` when it is
-set (a directory holding ``pseudo/<name>.dat`` and ``basis/<name>.dat``) and
-otherwise from the copies an installed PySCF carries (``pip install
-dftax[periodic]``); nothing of PySCF is imported.
-"""
-
+# The GTH tables (CP2K's potential and basis-set files, GPL-2.0) are not vendored with
+# dftax (Apache-2.0): they are read from $DFTAX_GTH_DATA or from an installed PySCF's copies.
 from __future__ import annotations
 
 import importlib.util
@@ -64,9 +47,6 @@ def _data_dir() -> Path:
 
 @lru_cache(maxsize=None)
 def _blocks(path: str) -> tuple[tuple[str, ...], ...]:
-    """The data blocks of a CP2K table: runs of lines between comment lines
-    (every block is preceded by a ``#PSEUDOPOTENTIAL`` / ``#BASIS SET``
-    marker)."""
     blocks, cur = [], []
     with open(path) as f:
         for line in f:
@@ -123,7 +103,7 @@ def _parse_potential(sym: str, block: tuple[str, ...]) -> GTHPotential:
         t = next(lines).split()
         r_l, n = float(t[0]), int(t[1])
         upper = [float(x) for x in t[2:]]
-        for _ in range(1, n):                      # rows 2..n of the triangle
+        for _ in range(1, n):
             upper += [float(x) for x in next(lines).split()]
         h = np.zeros((n, n))
         if n:
@@ -168,7 +148,6 @@ def load_basis_shells(name: str, symbol: str) -> list[dict]:
 
 
 def local_parameters(potentials) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(zion, rloc, cloc)`` arrays, one row per atom, for :func:`vloc_G`."""
     return (np.array([p.zion for p in potentials], dtype=np.float64),
             np.array([p.rloc for p in potentials], dtype=np.float64),
             np.array([p.cloc for p in potentials], dtype=np.float64))
@@ -195,7 +174,6 @@ def vloc_G(G2, zion, rloc, cloc):
 
 
 def _r2_power_terms(i: int):
-    """The monomials of ``(x^2 + y^2 + z^2)^i``: ``((2p, 2q, 2r), coefficient)``."""
     import math
 
     out = []
@@ -210,26 +188,6 @@ def _r2_power_terms(i: int):
 
 
 def projector_basis(potentials, coords):
-    """The nonlocal projectors of all atoms as a Gaussian basis, with their
-    coupling matrix: ``(BasisData, H)``, or ``None`` when no atom has any.
-
-    The GTH projectors are Gaussians times a power of ``r``,
-
-        p_i^{lm}(r) = sqrt(2) r^(l + 2(i-1)) exp(-r^2 / (2 r_l^2)) Y_lm
-                      / (r_l^(l + (4i-1)/2) sqrt(Γ(l + (4i-1)/2))) ,
-
-    so the first of a channel is exactly a normalized Gaussian shell of
-    exponent ``1 / (2 r_l^2)``, and the next ones are that shell times
-    ``r^2``, ``r^4`` (cartesian Gaussians of degree ``l + 2``, ``l + 4``)
-    with a ratio of normalizations. Written as a ``BasisData`` whose
-    ``cart2sph`` carries those combinations, their overlaps with the orbital
-    basis come from the same integral code as everything else, and
-
-        V_nl = B H Bᵀ ,   B = <orbital | projector> ,
-
-    with ``H`` block diagonal: ``h^l ⊗ 1`` over the ``m`` of each channel.
-    Functions are ordered (atom, l, i, m).
-    """
     import math
 
     from dftax.basis.loader import _block_diag, _cart2sph_blocks, gto_norm
@@ -245,8 +203,6 @@ def projector_basis(potentials, coords):
                 continue
             alpha = 0.5 / r_l ** 2
             comps = _CART_COMPONENTS[l]
-            # the cartesian coefficients of the normalized shell, as the
-            # basis loader builds them for a single primitive
             norm = gto_norm(l, alpha)
             k = [norm * (_contracted_norm(np.array([alpha]), np.array([norm]), c)
                          if l <= 1 else 1.0) for c in comps]

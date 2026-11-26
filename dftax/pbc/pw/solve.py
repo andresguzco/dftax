@@ -1,19 +1,3 @@
-"""The self-consistent field of the plane-wave engine.
-
-Each iteration takes the effective potential of the input density, improves
-the lowest ``nbands`` eigenvectors of every ``k`` by a few steps of a block
-eigensolver, occupies them, and mixes the output density with the earlier
-ones (Pulay, with Kerker's preconditioner on the residual). The energy is
-that of the orbitals themselves (:func:`~dftax.pbc.pw.energy.energy_terms`),
-not a Harris-Foulkes estimate, so at convergence it is variational.
-
-The eigensolver is LOBPCG with the Teter-Payne-Allan preconditioner: the
-trial space of each step is the current vectors, their preconditioned
-residuals and the previous step's direction, made orthonormal explicitly
-(two passes of projection and QR), so every step has one shape and a plain
-Hermitian Rayleigh-Ritz problem.
-"""
-
 from __future__ import annotations
 
 import time
@@ -38,7 +22,6 @@ from dftax.pbc.pw.energy import (
 
 
 def _teter(kin, X):
-    """Teter-Payne-Allan preconditioner for the bands ``X`` ``(npw, nb)``."""
     ekin = jnp.sum(kin[:, None] * (X * X.conj()).real, axis=0)
     x = kin[:, None] / (1.5 * jnp.maximum(ekin[None, :], 1e-3))
     num = 27.0 + 18.0 * x + 12.0 * x ** 2 + 8.0 * x ** 3
@@ -46,9 +29,6 @@ def _teter(kin, X):
 
 
 def _orthonormal_against(V, Q, mask):
-    """``V`` made orthonormal and orthogonal to the orthonormal ``Q``: two
-    passes of projection and QR, so even columns that were nearly in the
-    span of ``Q`` (converged bands) come out as clean directions."""
     for _ in range(2):
         V = (V - Q @ (Q.conj().T @ V)) * mask[:, None]
         V, _ = jnp.linalg.qr(V)
@@ -56,13 +36,6 @@ def _orthonormal_against(V, Q, mask):
 
 
 def lobpcg(X, kin, vr, fft_idx, mask, mesh, P, D, n_iter: int):
-    """``n_iter`` LOBPCG steps on one sphere. Returns the Ritz vectors
-    ``(npw, nb)`` (orthonormal), their values and residual norms.
-
-    The trial space of a step, ``[X, W, Pd]``, is made orthonormal
-    explicitly and the Hamiltonian applied to its new directions, so the
-    Rayleigh-Ritz problem is a plain Hermitian one at any conditioning.
-    """
     nb = X.shape[1]
     h = lambda V: apply_h(V, kin, vr, fft_idx, mask, mesh, P, D)
     HX = h(X)
@@ -79,7 +52,6 @@ def lobpcg(X, kin, vr, fft_idx, mask, mesh, P, D, n_iter: int):
         A = S.conj().T @ HS
         _, U = jnp.linalg.eigh(0.5 * (A + A.conj().T))
         U = U[:, :nb]
-        # the step's direction: the new vectors' parts outside the old ones
         return (S @ U, HS @ U, S[:, nb:] @ U[nb:]), None
 
     (X, HX, _), _ = jax.lax.scan(step, (X, HX, Pd), None, length=n_iter)
@@ -92,7 +64,6 @@ def lobpcg(X, kin, vr, fft_idx, mask, mesh, P, D, n_iter: int):
 
 @eqx.filter_jit
 def _eigensolve(model: PWModel, C, vr, coords, a, n_iter: int):
-    """LOBPCG on every k: ``(nk, npw, nb)`` vectors, values, residuals."""
     q = wavevectors(model, a)
     kin = 0.5 * jnp.sum(q * q, axis=-1) * model.mask
     P = projector_matrices(model, coords, a)
@@ -125,9 +96,6 @@ def _energy(model, C, occ, coords, a):
 
 
 class _Pulay:
-    """Pulay (DIIS) mixing of densities with Kerker's preconditioner,
-    ``G^2 / (G^2 + q0^2)``, on the residual (None: no preconditioner)."""
-
     def __init__(self, a, mesh, beta=0.5, history=8, q0=1.5):
         self.beta, self.history, self.mesh = beta, history, tuple(mesh)
         self.rho, self.res = [], []
@@ -162,15 +130,15 @@ class PWResult(NamedTuple):
 
     e_tot: float
     terms: dict
-    C: jax.Array               # (nk, npw, nbands) orbital coefficients
-    occ: jax.Array             # (nk, nbands) occupations
-    eps: jax.Array             # (nk, nbands) band energies
-    rho: jax.Array             # (N,) density on the mesh
+    C: jax.Array
+    occ: jax.Array
+    eps: jax.Array
+    rho: jax.Array
     converged: bool
     n_iter: int
     model: PWModel
-    ts: float = 0.0            # entropy term σS; e_tot is then E - TS
-    mu: float | None = None    # Fermi level under smearing
+    ts: float = 0.0
+    mu: float | None = None
 
 
 def scf_pw(cell: Cell, xc: XCFunctional, pw: PlaneWaves, *,
@@ -219,7 +187,6 @@ def scf_pw(cell: Cell, xc: XCFunctional, pw: PlaneWaves, *,
     N = int(np.prod(model.mesh))
     dv = float(volume(a)) / N
 
-    # random start, damped at high kinetic energy, orthonormal per k
     q = np.asarray(wavevectors(model, a))
     kin = 0.5 * np.sum(q * q, axis=-1)
     rng = np.random.default_rng(seed)

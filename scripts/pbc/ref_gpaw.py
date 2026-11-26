@@ -75,20 +75,16 @@ def run(args) -> dict:
         "kmesh": list(args.kmesh),
         "smearing": args.smearing,
         "nelectron": float(atoms.calc.get_number_of_electrons()),
-        # the free energy is the variational one (forces belong to it); the
-        # other is GPAW's extrapolation to zero width
         "e_free": float(e_free / Hartree),
         "e_extrapolated": float(atoms.get_potential_energy() / Hartree),
         "seconds_scf": time.perf_counter() - t0,
     }
-    # band edges over the k-mesh (by electron count, as GPAW takes them)
     homo, lumo = atoms.calc.get_homo_lumo()
     out["vbm"], out["cbm"] = float(homo / Hartree), float(lumo / Hartree)
     out["gap"] = out["cbm"] - out["vbm"]
     if args.forces:
         out["forces"] = (atoms.get_forces() * Bohr / Hartree).tolist()
     if args.stress:
-        # (1/V) dE/d(strain), the sign convention of ASE and of PySCF
         s = atoms.get_stress(voigt=False) * Bohr ** 3 / Hartree
         out["stress"] = np.asarray(s).tolist()
     return out
@@ -113,8 +109,6 @@ def main():
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     out = run(args)
-    # under MPI (srun -n N gpaw python ...) every rank holds the same result;
-    # one of them writes it
     from gpaw.mpi import world
 
     if world.rank == 0:

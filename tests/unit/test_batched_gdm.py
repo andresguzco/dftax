@@ -1,10 +1,3 @@
-"""gdm over a batch of different molecules, padded to common sizes.
-
-The padding (:mod:`dftax.ks.batched_gdm`) must be inert: a padded molecule is
-the same energy function on its real block, so the batched minimum is each
-molecule's own minimum, whatever it was batched with.
-"""
-
 import jax
 import numpy as np
 import pytest
@@ -30,7 +23,6 @@ def _ks(name, basis="6-31g", xc=PBE):
 @pytest.mark.float64
 @pytest.mark.slow
 def test_padding_is_inert():
-    """One molecule padded far past its sizes, against its own gdm."""
     ks = _ks("water")
     ref = gdm(ks)
     b0 = bucket_for([ks])
@@ -56,7 +48,6 @@ def test_batch_of_different_molecules_matches_scf():
 @pytest.mark.float64
 @pytest.mark.slow
 def test_batched_hybrid_matches_scf():
-    """Hybrid exchange sees the occupations, so padded slots stay empty."""
     kss = [_ks(n, xc=B3LYP) for n in ("water", "hf", "methane")]
     res = gdm_batched(kss)
     for i, ks in enumerate(kss):
@@ -81,9 +72,6 @@ def _radical(name, xc=PBE):
 @pytest.mark.float64
 @pytest.mark.slow
 def test_open_shells_and_mixed_batches_match_scf():
-    """Radicals and a triplet (different alpha/beta padding per channel),
-    mixed with closed shells: one batch per spin type, results in order."""
-    # no OH: its degenerate pi shell is a knife edge for the DIIS reference
     kss = [_radical("ch3"), _ks("water"), _radical("o2"), _ks("hf"),
            _radical("nh2"), _radical("nh2", xc=B3LYP)]
     res = gdm_batched(kss)
@@ -103,9 +91,6 @@ def test_rejects_what_it_does_not_pad_yet():
 @pytest.mark.float64
 @pytest.mark.slow
 def test_aufbau_check_flags_a_swapped_occupation():
-    """The post-loop check that sends a system back to single-molecule gdm:
-    zero on the ground state, about one electron's weight on a state with the
-    HOMO and LUMO swapped."""
     import jax.numpy as jnp
 
     from dftax.ks.batched_gdm import _aufbau_violation
@@ -116,7 +101,7 @@ def test_aufbau_check_flags_a_swapped_occupation():
     stacked = jax.tree.map(lambda x: x[None], pad_ks(ks, b))
     C = np.asarray(r.mo_coeff)[0]
     no = ks.nocc[0]
-    occ = list(range(no - 1)) + [no]                 # HOMO -> LUMO
+    occ = list(range(no - 1)) + [no]
     Cs = C[:, occ]
     P_ground = np.asarray(r.P)
     P_swapped = (2.0 * Cs @ Cs.T)[None]
@@ -129,8 +114,6 @@ def test_aufbau_check_flags_a_swapped_occupation():
 @pytest.mark.float64
 @pytest.mark.slow
 def test_unsettled_systems_fall_back_to_gdm():
-    """A batch stopped short leaves its systems unconverged; with the
-    fallback each is re-solved alone, as gdm would."""
     kss = [_ks("water"), _ks("hf")]
     raw = gdm_batched(kss, max_iter=2, fallback=False)
     assert not bool(np.any(raw.converged)) and not bool(np.any(raw.fallback))

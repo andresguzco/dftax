@@ -1,8 +1,3 @@
-"""Nuclear repulsion energy V_nn = Σ_{A<B} Z_A Z_B / |R_A - R_B|.
-
-Trivially differentiable w.r.t. nuclear coordinates via JAX autodiff.
-"""
-
 import jax.numpy as jnp
 from jaxtyping import Float, Array, Scalar
 
@@ -20,11 +15,10 @@ def nuclear_repulsion(
     Returns:
         Nuclear repulsion energy in Hartree (scalar).
     """
-    diff = coords[:, None, :] - coords[None, :, :]       # (n, n, 3)
-    r2 = jnp.sum(diff ** 2, axis=-1)                      # (n, n)
-    r = jnp.sqrt(r2 + 1e-30)                              # regularize diagonal
-    # Zero out diagonal (self-interaction) with large distance
+    diff = coords[:, None, :] - coords[None, :, :]
+    r2 = jnp.sum(diff ** 2, axis=-1)
+    r = jnp.sqrt(r2 + 1e-30)
     n = coords.shape[0]
     r = r + jnp.eye(n) * 1e20
-    ZZ = charges[:, None] * charges[None, :]               # (n, n)
+    ZZ = charges[:, None] * charges[None, :]
     return 0.5 * jnp.sum(ZZ / r)

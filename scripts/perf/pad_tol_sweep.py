@@ -34,7 +34,7 @@ def _rss_gb() -> float:
     try:
         with open("/proc/self/status") as fh:
             for line in fh:
-                if line.startswith("VmHWM:"):        # peak RSS, not current
+                if line.startswith("VmHWM:"):
                     return int(line.split()[1]) / (1024 ** 2)
     except OSError:
         pass
@@ -42,7 +42,6 @@ def _rss_gb() -> float:
 
 
 def run_one(tol: float, mol: str, basis: str, aux: str, repeat: int) -> dict:
-    """One tolerance, in this process. The caller gives each its own."""
     import jax
     import equinox as eqx
 
@@ -54,8 +53,6 @@ def run_one(tol: float, mol: str, basis: str, aux: str, repeat: int) -> dict:
     from profile_terms import read_xyz
     from dftax.system.molecule import Molecule
 
-    # The planners read the module constant as their default, so setting it
-    # here is what a rebuilt engine would see.
     bucket._PAD_TOL = tol
 
     m = Molecule.from_xyz(read_xyz(mol), basis, spherical=True)
@@ -68,8 +65,6 @@ def run_one(tol: float, mol: str, basis: str, aux: str, repeat: int) -> dict:
     plan = bucket.plan_eri3c(b, a)
     plan_s = time.perf_counter() - t0
     classes = len(plan[4])
-    # Padded primitive work the plan will actually do, which is the cost the
-    # tolerance is buying the class reduction with.
     padded = sum(len(c[6]) * c[9][0] * c[9][1] * c[9][2] for c in plan[4])
 
     fn = eqx.filter_jit(lambda bb, aa: eri3c_matrix(bb, aa, plan=plan))

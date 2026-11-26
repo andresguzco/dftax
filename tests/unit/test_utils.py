@@ -1,5 +1,3 @@
-"""Tests for utility functions (vmap)."""
-
 import jax
 import jax.numpy as jnp
 

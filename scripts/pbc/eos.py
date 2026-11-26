@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from run_dftax import XC  # noqa: E402
 from systems import ANGSTROM_TO_BOHR, EOS_VOLUME_FACTORS, systems  # noqa: E402
 
-GPA_PER_AU = 29421.02648438959          # Ha/Bohr^3 -> GPa
+GPA_PER_AU = 29421.02648438959
 
 
 def birch_murnaghan(V, E0, V0, B0, B1):
@@ -37,7 +37,6 @@ def birch_murnaghan(V, E0, V0, B0, B1):
 
 
 def bm_pressure(V, V0, B0, B1):
-    """-dE/dV of the third-order Birch-Murnaghan form."""
     x = (V0 / V) ** (1.0 / 3.0)
     return 1.5 * B0 * (x ** 7 - x ** 5) * (1.0 + 0.75 * (B1 - 4.0) * (x ** 2 - 1.0))
 
@@ -45,7 +44,7 @@ def bm_pressure(V, V0, B0, B1):
 def fit(V, E):
     from scipy.optimize import curve_fit
 
-    c = np.polyfit(V, E, 2)                       # a parabola for the start
+    c = np.polyfit(V, E, 2)
     V0 = -c[1] / (2 * c[0])
     p0 = (np.polyval(c, V0), V0, 2 * c[0] * V0, 4.0)
     p, _ = curve_fit(birch_murnaghan, V, E, p0=p0, maxfev=20000)
@@ -94,7 +93,6 @@ def main():
     E0, V0, B0, B1 = fit(V, E)
     ref = systems()[args.system]
     v_ref = ref.volume * ANGSTROM_TO_BOHR ** 3
-    # isotropic strain: every lattice length scales with (V0 / V_ref)^(1/3)
     lengths = np.linalg.norm(ref.a, axis=1) * (V0 / v_ref) ** (1.0 / 3.0)
     out = dict(system=args.system, mesh=list(args.mesh), basis=args.basis,
                pseudo=args.pseudo, xc=args.xc, points=rows,

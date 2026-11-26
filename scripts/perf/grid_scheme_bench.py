@@ -37,17 +37,13 @@ sys.path.insert(0, HERE)
 SCHEMES = {
     "becke": dict(radial="becke", radii_adjust="becke"),
     "treutler": dict(radial="treutler", radii_adjust="treutler"),
-    # One choice swapped, to tell a radial difference from a partition one.
     "treutler-radial": dict(radial="treutler", radii_adjust="becke"),
     "treutler-cells": dict(radial="becke", radii_adjust="treutler"),
 }
 
-# label -> becke() arguments besides the scheme. "converged" is the
-# reference each scheme's errors are measured from.
 GRIDS = {
     "75x302": dict(n_radial=75, lebedev=302, prune=None),
     "converged": dict(n_radial=200, lebedev=770, prune=None),
-    # Is "converged" converged? One more step in each direction.
     "300x770": dict(n_radial=300, lebedev=770, prune=None),
     "200x590": dict(n_radial=200, lebedev=590, prune=None),
     "default": dict(n_radial=75, lebedev=302, prune="nwchem"),

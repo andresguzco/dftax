@@ -1,32 +1,20 @@
-"""dftax: a self-contained, pure-JAX/Equinox Kohn-Sham DFT engine.
+"""Differentiable Kohn-Sham DFT in JAX.
 
-The package exposes a differentiable KS-DFT toolkit with no PySCF runtime
-dependency for the core compute path:
+Example::
 
-- ``dftax.integrals``: analytical one- and two-electron integral matrices
-  (overlap S, kinetic T, nuclear attraction V, nuclear repulsion, ERIs 2c/3c/4c)
-  via the Obara-Saika recurrence, all jit/vmap/grad-friendly.
-- ``dftax.energy``: GTO basis evaluation, the Boys function, density fitting,
-  Hartree and hybrid exchange, exchange-correlation functionals, real-space
-  grids, and pointwise potentials.
-- ``dftax.grid``: native Becke quadrature + grid specs (``becke``, ``points``).
-- ``dftax.utils``: chunked ``vmap`` helpers and shared types.
-- ``dftax.ks``: the KS energy functional and solvers.
-
-The canonical flow::
-
-    from dftax import KS, Molecule, becke, df, scf
+    import jax
+    jax.config.update("jax_enable_x64", True)
+    from dftax import KS, Molecule, becke, exact, scf
     from dftax.energy.xc import PBE
 
-    mol = Molecule.from_xyz("O 0 0 0; H ...", "sto-3g")
-    ks  = KS(mol, PBE())                        # DF Coulomb, pruned Becke grid
-    ks  = KS(mol, PBE(), grid=becke(75, 302),   # or: choices as values
-             coulomb=exact())                   # O(N^4) exact ERIs
-    res = scf(ks)                               # DIIS; res.e_tot, res.P, ...
-    res = scf(ks, guess=sad())                  # better start, fewer iterations
+    mol = Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043", "def2-svp")
+    res = scf(KS(mol, PBE()))
+    res = scf(KS(mol, PBE(), grid=becke(75, 302), coulomb=exact()))
+    print(res.e_tot)
 
-The most common entry points are re-exported here; import the submodules
-directly for the full surface.
+The common entry points are importable from ``dftax``; the rest of the API
+lives in ``dftax.integrals``, ``dftax.energy``, ``dftax.grid``, ``dftax.ks``
+and ``dftax.pbc``.
 """
 
 from dftax.energy.d3 import d3bj
@@ -57,33 +45,25 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 try:
     __version__ = _pkg_version("dftax")
-except PackageNotFoundError:  # running from a source tree without an install
+except PackageNotFoundError:
     __version__ = "0.0.0+local"
 del _pkg_version, PackageNotFoundError
 
 __all__ = [
     "__version__",
-    # build: system + choices-as-values
     "KS", "System", "Molecule", "exact", "df", "becke", "points", "mesh",
     "distributed", "is_coordinator", "barrier",
-    # initial guesses (the guess= argument of the solvers)
     "core", "sad", "minao", "sap",
-    # XC functionals by name
     "functional",
-    # dispersion (the dispersion= argument of KS)
     "d3bj",
     "d4",
-    # run: solver verbs + result
     "scf", "adiis", "fermi", "newton", "roks", "minimize", "gdm", "forces",
     "scf_batched",
     "KSResult",
     "BatchedResult",
-    # response properties
     "dipole", "polarizability", "hessian", "vibrations", "ir_spectrum",
     "raman_spectrum", "alchemical_deriv",
-    # implicit-differentiation SCF response
     "implicit_density",
-    # low-level building blocks
     "BasisData", "extract_basis_data", "eval_gto",
     "overlap_matrix", "kinetic_matrix", "nuclear_attraction_matrix",
     "nuclear_repulsion", "eri2c_matrix", "eri3c_matrix",

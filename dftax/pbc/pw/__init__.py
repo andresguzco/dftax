@@ -1,9 +1,3 @@
-"""The plane-wave engine: GTH pseudopotentials, the density on the uniform
-mesh, a block eigensolver and Pulay mixing with Fermi smearing.
-
-    res = scf_pw(cell, LDA(), planewaves(40.0), kpts=kmesh(2, 2, 2))
-"""
-
 from dftax.pbc.pw.basis import PlaneWaves, monkhorst_pack, planewaves
 from dftax.pbc.pw.energy import PWModel, build_model, energy_terms
 from dftax.pbc.pw.derivatives import pw_forces, pw_stress

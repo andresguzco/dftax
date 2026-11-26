@@ -1,11 +1,3 @@
-"""wB97M-V: range-separated hybrid meta-GGA + VV10.
-
-Oracles: libxc for the semilocal energy density (coefficients and term
-selection verbatim from ``HYB_MGGA_XC_WB97M_V``; note the B97M-V family is
-defined on libxc's *modified* PW92 constants, unlike the GGA B97s), and a
-full PySCF RKS solve on matched grids.
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -27,7 +19,6 @@ def _points(n=40, seed=3):
     gb = rng.normal(0, 0.4, (n, 3))
     gna = np.linalg.norm(ga, axis=1)
     gnb = np.linalg.norm(gb, axis=1)
-    # tau: von Weizsaecker floor plus slack so w spans both signs
     tau_a = gna**2 / (8 * rho_a) + rng.uniform(0.0, 3.0, n) * rho_a ** (5 / 3)
     tau_b = gnb**2 / (8 * rho_b) + rng.uniform(0.0, 3.0, n) * rho_b ** (5 / 3)
     return rho_a, rho_b, ga, gb, tau_a, tau_b
@@ -68,9 +59,6 @@ def test_pointwise_closed_vs_libxc():
 @pytest.mark.pyscf
 @pytest.mark.float64
 def test_scf_matches_pyscf():
-    """Full wB97M-V solve (RSH exchange + mGGA + VV10) vs PySCF on matched
-    grids and the exact Coulomb backend (isolates the functional; the DF
-    default adds only the usual RI error)."""
     mol = gto.M(atom=H2O, basis="sto-3g").build()
     mf = dft.RKS(mol)
     mf.xc = "wb97m-v"

@@ -1,20 +1,3 @@
-"""Multi-device execution: the mesh spec and grid-sharding helpers.
-
-Sharding is an execution policy chosen at build time, as a value:
-
-    ks = KS(mol, xc, coulomb=df("..."), mesh=mesh())      # all local devices
-
-and it lives *inside* the energy terms (see
-:class:`~dftax.ks.terms.ShardedGridXC`): each sharded term runs a
-``shard_map`` over the device mesh and ``psum``-reduces its partial energy,
-so everything above the terms (``KS.electronic``, the SCF loop, the
-minimizer, autodiff Fock matrices and geometry forces) is unchanged and
-differentiates through the collective natively. The dense nao² matrices
-(S, hcore, P, Fock) stay replicated; what shards is what actually scales:
-the quadrature grid and the DF 3-center tensor, whose per-device slabs are
-built here directly (never materialized whole on any one device).
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -47,9 +30,6 @@ def mesh(devices: tuple | list | None = None) -> MeshSpec:
 
 
 def _resolve_mesh(spec: MeshSpec | None):
-    """Concrete device tuple for a spec, or ``None`` for single-device
-    execution (including the degenerate one-device mesh, which would only
-    add collective overhead for identical numbers)."""
     if spec is None:
         return None
     devs = tuple(jax.devices()) if spec.devices is None else tuple(spec.devices)
@@ -57,23 +37,11 @@ def _resolve_mesh(spec: MeshSpec | None):
 
 
 def _addressable(devices):
-    """``(index, device)`` for the mesh devices this process owns.
-
-    All of them in a single-process run; under ``jax.distributed`` each
-    process may only place data on its local GPUs, and the remaining shards
-    of a global array are filled in by its peers.
-    """
     local = {d.id for d in jax.local_devices()}
     return [(i, d) for i, d in enumerate(devices) if d.id in local]
 
 
 def _shard_axis0(x, devices, axis_name):
-    """Lay ``x`` out along axis 0 over the mesh, one equal block per device.
-
-    Every process holds (and computes) the whole array, so each fills only
-    its own devices' blocks and the result is assembled as a global array;
-    single-process runs take the same path with every block local.
-    """
     import numpy as np
 
     jmesh = jax.sharding.Mesh(np.asarray(devices), (axis_name,))
@@ -87,13 +55,6 @@ def _shard_axis0(x, devices, axis_name):
 
 
 def _pad_shard_grid(coords, weights, devices):
-    """Pad the quadrature to a multiple of the device count and lay it out
-    sharded over the mesh.
-
-    Padding repeats the last grid point with zero weight: its contribution
-    ``w·ε_xc·ρ`` is exactly zero, and evaluating AOs at a real point keeps the
-    padded rows numerically benign (no far-field garbage).
-    """
     coords = jnp.asarray(coords)
     weights = jnp.asarray(weights)
     n = coords.shape[0]
@@ -106,13 +67,6 @@ def _pad_shard_grid(coords, weights, devices):
 
 
 def _replicate(x, devices):
-    """A globally replicated view of a value every process computed
-    identically (the dense nao² matrices, the metric inverse).
-
-    A no-op in a single-process run. Across processes a jitted computation
-    over the global mesh needs its replicated inputs to be global arrays too,
-    not per-process single-device ones.
-    """
     if jax.process_count() == 1 or x is None:
         return x
     import numpy as np
@@ -125,14 +79,6 @@ def _replicate(x, devices):
 
 
 def _replicate_tree(obj, devices):
-    """:func:`_replicate` every process-local array leaf of ``obj``.
-
-    Arrays that are already laid out over the mesh (the aux slabs, the
-    sharded grid, anything jit produced from them) carry a ``NamedSharding``
-    and are left alone; what this catches is the replicated build output
-    (S, hcore, the metric inverse, the basis leaves), which each process
-    computed on its own default device from identical inputs.
-    """
     if jax.process_count() == 1:
         return obj
 
@@ -146,10 +92,6 @@ def _replicate_tree(obj, devices):
 
 
 def _slice_basis(basis, lo, hi, sph_lo=None, sph_hi=None):
-    """A BasisData holding functions ``lo:hi`` (per-function arrays share
-    axis 0). For a spherical basis, ``sph_lo:sph_hi`` selects the matching
-    block of ``cart2sph`` columns; valid only when ``lo:hi`` covers whole
-    shells (the transform is block-diagonal per shell)."""
     import equinox as eqx
 
     out = eqx.tree_at(
@@ -168,14 +110,6 @@ def _slice_basis(basis, lo, hi, sph_lo=None, sph_hi=None):
 
 
 def _shell_slabs(aux_basis, ndev):
-    """Shell-aligned aux partition: per-device (row_lo, row_hi, fn_lo, fn_hi).
-
-    Shells stay whole (so slabs slice the block-diagonal ``cart2sph``
-    cleanly and the shell-class-bucketed engine applies per slab), with cut
-    points chosen greedily so per-device *function* counts stay balanced.
-    ``fn`` counts spherical functions when the basis carries ``cart2sph``,
-    cartesian rows otherwise.
-    """
     import numpy as np
 
     from dftax.integrals.eri3c_bucketed import _shells
@@ -202,22 +136,6 @@ def _shell_slabs(aux_basis, ndev):
 
 
 def _build_int3c_sharded(basis, aux_basis, devices, omega=None):
-    """Build the DF 3-center tensor directly in aux-axis shards, one slab per
-    device; no device ever materializes more than its (nao², ~naux/ndev)
-    slice, which is the whole capacity point.
-
-    Slabs are shell-aligned (see :func:`_shell_slabs`), so each builds on the
-    shell-class-bucketed engine and a spherical auxiliary basis slices
-    cleanly. Shell alignment makes the slabs unequal; every slab zero-pads to
-    the largest, giving interleaved padding, and the returned position map
-    sends each global aux function to its padded column (the caller embeds
-    the metric inverse with it; padded columns are exact zeros everywhere).
-
-    Returns ``(int3c, naux_pad, pos)``: the globally-sharded
-    ``(nao, nao, naux_pad)`` array, the padded aux dimension, and the
-    ``(naux,)`` int array of padded positions. ``omega`` builds the
-    erf-attenuated tensor instead.
-    """
     import numpy as np
 
     from dftax.integrals import eri3c_matrix
@@ -230,8 +148,6 @@ def _build_int3c_sharded(basis, aux_basis, devices, omega=None):
     for d, (_rl, _rh, fn_lo, fn_hi) in enumerate(slabs):
         pos[fn_lo:fn_hi] = d * slab_max + np.arange(fn_hi - fn_lo)
 
-    # Only this process's own slabs are built here; across processes the
-    # peers build theirs and the shards below assemble into one global array.
     shards = []
     for d, dev in _addressable(devices):
         row_lo, row_hi, fn_lo, fn_hi = slabs[d]
@@ -241,12 +157,6 @@ def _build_int3c_sharded(basis, aux_basis, devices, omega=None):
             if fn_hi - fn_lo < slab_max:
                 blk = jnp.pad(
                     blk, ((0, 0), (0, 0), (0, slab_max - (fn_hi - fn_lo))))
-            # Flattened to (nao², slab) at construction, not later: a 3-D
-            # sharded array keeps its 3-D sharding through a reshape, and
-            # jax 0.11 on GPU then attaches that to the 2-D bitcast every
-            # dot_general takes, which XLA rejects on rank. The auxiliary
-            # axis is the sharded one either way, so the layout is the same
-            # bytes; only the annotation differs.
             blk = blk.reshape(blk.shape[0] * blk.shape[1], blk.shape[2])
             blk.block_until_ready()
         shards.append(jax.device_put(blk, dev))

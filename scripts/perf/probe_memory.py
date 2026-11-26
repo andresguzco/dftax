@@ -34,7 +34,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def _rss_bytes() -> int:
-    """Resident set size of this process, from /proc (Linux)."""
     try:
         with open("/proc/self/status") as fh:
             for line in fh:
@@ -57,8 +56,6 @@ def _gpu_bytes() -> tuple[int, int]:
 
 
 class Sampler:
-    """Background RSS/device sampler with named phases."""
-
     def __init__(self, interval: float = 0.1):
         self.interval = interval
         self.phase = "init"

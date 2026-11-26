@@ -1,18 +1,3 @@
-"""Build :class:`~dftax.energy.gto.BasisData` from Basis Set Exchange data.
-
-This is the PySCF-free counterpart of ``extract_basis_data``: it fetches the
-contracted-GTO definition for each element from the ``basis_set_exchange``
-library and assembles the same normalized Cartesian-AO arrays the integral
-engine consumes. Normalization matches ``extract_basis_data`` exactly
-(primitive ``gto_norm`` times, for l<=1, a contracted norm; libcint's
-per-shell convention for l>=2).
-
-Emits Cartesian GTOs by default (``cart2sph=None``); with ``spherical=True`` it
-also builds the Cartesian->spherical transform (vendored per-l blocks under
-``data/cart2sph.npz``) so spherical d/f bases (cc-pVDZ, cc-pVTZ, def2-*) match a
-spherical PySCF reference. For l<=1 bases the two spans coincide.
-"""
-
 from __future__ import annotations
 
 import math
@@ -29,7 +14,6 @@ from dftax.system.molecule import symbol_to_Z
 
 @lru_cache(maxsize=1)
 def _cart2sph_blocks() -> dict[int, np.ndarray]:
-    """Vendored per-l Cartesian->spherical transform blocks (ncart x nsph)."""
     path = files("dftax.basis").joinpath("data", "cart2sph.npz")
     with path.open("rb") as fh:
         npz = np.load(fh)
@@ -37,7 +21,6 @@ def _cart2sph_blocks() -> dict[int, np.ndarray]:
 
 
 def _block_diag(blocks: list[np.ndarray]) -> np.ndarray:
-    """Assemble a block-diagonal matrix from a list of 2-D blocks (no SciPy)."""
     nr = sum(b.shape[0] for b in blocks)
     nc = sum(b.shape[1] for b in blocks)
     out = np.zeros((nr, nc), dtype=np.float64)
@@ -50,11 +33,6 @@ def _block_diag(blocks: list[np.ndarray]) -> np.ndarray:
 
 
 def gto_norm(l: int, alpha: float) -> float:
-    """Radial normalization of a primitive GTO (matches ``pyscf.gto.gto_norm``).
-
-    ``N`` such that the primitive ``N r^l e^{-alpha r^2}`` has unit self-overlap
-    in the radial/spherical sense.
-    """
     f = (
         2 ** (2 * l + 3)
         * math.factorial(l + 1)
@@ -65,13 +43,6 @@ def gto_norm(l: int, alpha: float) -> float:
 
 
 def _iter_contractions(shell):
-    """Yield ``(l, coeff_vector)`` for each contracted function in a BSE shell.
-
-    - single angular momentum: each coefficient block is an independent
-      (general) contraction of that L;
-    - multiple angular momenta (e.g. an ``sp`` shell): block ``i`` belongs to
-      ``angular_momentum[i]``.
-    """
     ams = shell["angular_momentum"]
     cblocks = shell["coefficients"]
     if len(ams) == 1:
@@ -90,26 +61,10 @@ def build_basis_data(
     spherical: bool = False,
     return_atom_index: bool = False,
 ):
-    """Assemble :class:`BasisData` for a molecule from a named basis set.
-
-    Args:
-        symbols: element symbols, one per atom.
-        coords_bohr: nuclear coordinates in Bohr, shape (n_atoms, 3).
-        basis_name: a Basis Set Exchange basis name (e.g. ``"sto-3g"``).
-        spherical: if True, attach the Cartesian->spherical transform so the
-            basis uses (2l+1) spherical harmonics (standard for cc-pVXZ/def2);
-            otherwise emit Cartesian GTOs (``cart2sph=None``). For l<=1 the two
-            coincide.
-        return_atom_index: if True, also return an int array mapping each
-            Cartesian AO to its owning atom (needed to rebuild differentiable
-            centers from nuclear coordinates, e.g. for forces).
-    """
     coords = np.asarray(coords_bohr, dtype=np.float64).reshape(-1, 3)
     Zs = [symbol_to_Z(s) for s in symbols]
     gth = basis_name.lower().startswith("gth-")
     if gth:
-        # The valence basis sets of the GTH pseudopotentials (periodic
-        # cells): CP2K tables, not on the Basis Set Exchange.
         from dftax.pbc.gth import load_basis_shells
 
         elements = {
@@ -120,7 +75,6 @@ def build_basis_data(
         bdata = bse.get_basis(basis_name, elements=sorted(set(Zs)), header=False)
         elements = bdata["elements"]
 
-    # Gather every contracted shell: (l, exponents, raw coefficients, center, atom).
     raw_shells: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, int]] = []
     for atom_idx, (Z, center) in enumerate(zip(Zs, coords)):
         shells = elements[str(Z)]["electron_shells"]
@@ -128,9 +82,6 @@ def build_basis_data(
             exps = np.asarray(shell["exponents"], dtype=np.float64)
             for l, c_raw in _iter_contractions(shell):
                 if gth and l >= 2 and np.count_nonzero(c_raw) > 1:
-                    # the tables' contraction coefficients are not
-                    # normalized, and only l <= 1 contractions are
-                    # renormalized below
                     raise NotImplementedError(
                         f"{basis_name!r} has a contracted l={l} shell; only "
                         f"single-primitive d and higher shells are supported "
@@ -161,7 +112,6 @@ def build_basis_data(
 
     cart2sph = None
     if spherical:
-        # One cart2sph(l) block per contracted shell, in build order.
         blocks = _cart2sph_blocks()
         cart2sph = jnp.asarray(
             _block_diag([blocks[l] for (l, _, _, _, _) in raw_shells])

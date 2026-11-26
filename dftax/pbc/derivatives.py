@@ -1,25 +1,3 @@
-"""Forces and stress of a periodic cell (Gaussian engine, Gamma point).
-
-Both are derivatives of the total energy rebuilt as a function of the atomic
-coordinates and the lattice (:func:`~dftax.pbc.build.cell_fields`), with the
-converged density held fixed through the projector parametrization of
-:mod:`dftax.ks.forces`. At the SCF stationary point the derivative with
-respect to the orbitals vanishes, so the total derivative is the explicit
-one, Pulay terms included: the basis functions and projectors follow their
-atoms, and under a strain the atoms, the lattice images and the grid points
-all follow the lattice.
-
-The screening plans and the mesh are those of the reference geometry: the
-derivative is that of the energy the SCF minimized, term for term. Under
-Fermi smearing the frozen quantity is the set of natural orbitals with their
-occupations, and the derivatives are those of the Mermin free energy.
-
-The stress is ``σ_ij = (1/Ω) ∂E/∂ε_ij`` for the homogeneous strain
-``r -> (1 + ε) r`` applied to the lattice vectors and the atoms, taken at
-``ε = 0`` and symmetrized. A negative diagonal means the cell would rather
-shrink.
-"""
-
 from __future__ import annotations
 
 import jax
@@ -40,8 +18,6 @@ if TYPE_CHECKING:
 
 
 def _frozen_density(result, S0):
-    """``S -> P``: the converged density of ``result`` as a function of the
-    (moving) overlap, re-orthonormalized at every geometry."""
     from dftax.ks.forces import (
         _density_frac, _natural_orbitals, _occupied_coefficients,
     )
@@ -60,8 +36,6 @@ def _frozen_density(result, S0):
 
 
 def _energy_of_geometry(cell, xc, result, grid, spin):
-    """``(E(coords, a), coords0, a0)``: the total energy at the frozen
-    density as a function of the atoms and the lattice."""
     from dftax.ks.energy import KS
 
     if not isinstance(grid, Uniform):
@@ -76,8 +50,6 @@ def _energy_of_geometry(cell, xc, result, grid, spin):
     density = _frozen_density(result, S0)
 
     def energy(coords, a):
-        # the derivatives always stream the grid: the held AO values would
-        # be kept with their cotangents
         ks = KS(CellAt(plan, coords, a, held=False), xc)
         return ks.total(density(ks.S))
 
@@ -85,9 +57,6 @@ def _energy_of_geometry(cell, xc, result, grid, spin):
 
 
 def _by_engine(kind, cell, xc, result, grid):
-    """The derivative of a k-point or a plane-wave result, which carries its
-    engine (and its k-points, and for plane waves its functional and basis);
-    ``None`` for the Gamma-point Gaussian engine."""
     from dftax.pbc.kpoints import KResult, kcell_forces, kcell_stress
     from dftax.pbc.pw import PWResult, pw_forces, pw_stress
 

@@ -1,11 +1,3 @@
-"""End-to-end RKS SCF validation against PySCF.
-
-The single most important engine-correctness test: run a full self-consistent
-KS-DFT calculation through the dftax stack (integrals + Coulomb + exact exchange
-+ XC on a grid + DIIS SCF) and compare the converged total energy to PySCF on
-the identical Becke grid.
-"""
-
 import jax
 import jax.numpy as jnp
 import pytest
@@ -16,7 +8,6 @@ from dftax.energy.xc import PBE, PBE0
 from dftax import KS, scf, exact
 from dftax.ks.scf import canonical_orthonormalizer
 
-# Functional under test paired with the matching PySCF xc string.
 FUNCTIONALS = {
     "pbe": (PBE(), "pbe"),
     "pbe0": (PBE0(), "pbe0"),
@@ -55,33 +46,23 @@ class TestRKSEnergyMatchesPyscf:
 @pytest.mark.pyscf
 @pytest.mark.float64
 class TestAutodiffFock:
-    """The KS Fock matrix is sym(∂E/∂P): verify against finite differences."""
-
     def test_fock_matches_fd(self, water_mol, key):
         xc_obj, _ = FUNCTIONALS["pbe"]
         _, grid = _pyscf_ref(water_mol, "pbe")
-        # coulomb=exact(): the FD reference resolves ~1e-10 energy differences,
-        # and the DF energy's metric-amplified cancellations carry evaluation
-        # noise of that size (the AD Fock is fine either way); the exact path
-        # keeps the FD reference meaningful.
         ks = KS(
             water_mol, xc_obj, grid=(jnp.asarray(grid[0]), jnp.asarray(grid[1])),
             coulomb=exact(),
         )
 
-        # A physically sensible density: core-Hamiltonian guess.
         X = canonical_orthonormalizer(ks.S)
         _, Cp = jnp.linalg.eigh(X.T @ ks.hcore @ X)
         C = X @ Cp
         nocc = ks.nelec // 2
-        P = (2.0 * C[:, :nocc] @ C[:, :nocc].T)[None]      # spin-stacked (1, nao, nao)
+        P = (2.0 * C[:, :nocc] @ C[:, :nocc].T)[None]
 
         g = jax.grad(ks.electronic)(P)
         F = 0.5 * (g + g.transpose(0, 2, 1))
 
-        # Symmetric unit-norm perturbation dP; check Tr(F dP) == central FD of
-        # E_elec (unit norm keeps the FD numerator scale, and so its roundoff
-        # floor, uniform across nao).
         nao = P.shape[-1]
         dP = jax.random.normal(key, (nao, nao))
         dP = 0.5 * (dP + dP.T)
@@ -92,7 +73,4 @@ class TestAutodiffFock:
             - float(ks.electronic(P - eps * dP[None]))
         ) / (2 * eps)
         ad = float(jnp.sum(F[0] * dP))
-        # 5e-6: the FD truncation runs through the XC nonlinearity at the
-        # eigh-derived guess density, which differs across backends at
-        # near-degeneracies; the AD Fock itself is backend-exact.
         assert abs(ad - fd) < 5e-6, f"Fock AD={ad} vs FD={fd}"

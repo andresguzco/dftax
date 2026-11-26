@@ -1,10 +1,3 @@
-"""PySCF-free pipeline: native Molecule + BSE basis + native Becke grid.
-
-Validates that a calculation built with zero PySCF objects (geometry, basis,
-and integration grid all native) reproduces a PySCF reference. PySCF appears
-only as the oracle.
-"""
-
 import jax.numpy as jnp
 import pytest
 
@@ -27,13 +20,11 @@ class TestNativeBasis:
         nmol = Molecule(["O", "H", "H"], pmol.atom_coords(), "sto-3g")
         basis = build_basis_data(nmol.symbols, nmol.atom_coords(), "sto-3g")
         S = overlap_matrix(basis)
-        assert S.shape[0] == pmol.nao  # l<=1: Cartesian == spherical count
-        # Each contracted AO is normalized: diag(S) == 1.
+        assert S.shape[0] == pmol.nao
         assert float(jnp.max(jnp.abs(jnp.diag(S) - 1.0))) < 1e-10
 
     @pytest.mark.float64
     def test_energy_matches_pyscf_on_pyscf_grid(self):
-        # Native basis, PySCF grid: isolates basis-loading correctness.
         pmol = gto.M(atom=H2O, basis="sto-3g").build()
         nmol = Molecule(["O", "H", "H"], pmol.atom_coords(), "sto-3g")
         for pyscf_xc, xc_obj in [("slater,vwn5", LDA()), ("b3lyp", B3LYP())]:
@@ -68,8 +59,6 @@ class TestNativeGrid:
 @pytest.mark.pyscf
 @pytest.mark.float64
 class TestFullyPyscfFree:
-    """Native geometry + native basis + native grid vs a PySCF reference."""
-
     @pytest.mark.parametrize("pyscf_xc,xc_cls", [("pbe", PBE)])
     def test_water(self, pyscf_xc, xc_cls):
         nmol = Molecule.from_xyz(H2O, "sto-3g")
@@ -92,4 +81,4 @@ def test_bragg_radius_beyond_xe_raises():
     with pytest.raises(ValueError, match="Xe"):
         bragg_radius(55)
     with pytest.raises(ValueError, match="Xe"):
-        bragg_radius(0)                                   # ghost placeholder
+        bragg_radius(0)

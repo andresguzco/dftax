@@ -21,11 +21,8 @@ import numpy as np
 
 ANGSTROM_TO_BOHR = 1.0 / 0.529177210903
 
-# Experimental lattice parameters (Angstrom). The references are generated at
-# these and at volumes scaled around them; nothing here is relaxed.
 A_SI = 5.431
 A_AL = 4.050
-# Levien, Prewitt and Weidner, Am. Mineral. 65, 920 (1980), ambient pressure.
 A_QUARTZ, C_QUARTZ = 4.916, 5.4054
 U_SI = 0.4697
 X_O, Y_O, Z_O = 0.4135, 0.2669, 0.1191
@@ -33,9 +30,6 @@ X_O, Y_O, Z_O = 0.4135, 0.2669, 0.1191
 
 @dataclass(frozen=True)
 class CellSpec:
-    """Atoms in a periodic cell: symbols, lattice rows ``a`` (Angstrom) and
-    fractional coordinates ``frac``."""
-
     name: str
     symbols: tuple[str, ...]
     a: np.ndarray
@@ -43,7 +37,6 @@ class CellSpec:
 
     @property
     def cart(self) -> np.ndarray:
-        """Cartesian coordinates in Angstrom, shape (natom, 3)."""
         return self.frac @ self.a
 
     @property
@@ -51,7 +44,6 @@ class CellSpec:
         return float(abs(np.linalg.det(self.a)))
 
     def repeat(self, n: tuple[int, int, int], name: str | None = None) -> "CellSpec":
-        """The ``n[0] x n[1] x n[2]`` supercell."""
         n = np.asarray(n, dtype=int)
         shifts = np.array([(i, j, k) for i in range(n[0])
                            for j in range(n[1]) for k in range(n[2])], float)
@@ -63,56 +55,40 @@ class CellSpec:
         )
 
     def scaled(self, volume_factor: float) -> "CellSpec":
-        """The cell at ``volume_factor`` times the volume, fractional
-        coordinates fixed (an isotropic strain, no relaxation)."""
         return replace(self, a=self.a * volume_factor ** (1.0 / 3.0))
 
     def rattled(self, amplitude: float = 0.05, seed: int = 0) -> "CellSpec":
-        """Every atom displaced by a fixed-seed normal draw of standard
-        deviation ``amplitude`` (Angstrom) per Cartesian component."""
         d = np.random.default_rng(seed).normal(scale=amplitude,
                                                size=self.frac.shape)
         return replace(self, frac=self.frac + d @ np.linalg.inv(self.a))
 
     def pyscf_atom(self) -> list:
-        """The ``atom`` argument of a PySCF ``Cell`` (Angstrom)."""
         return [[s, tuple(map(float, r))] for s, r in zip(self.symbols, self.cart)]
 
 
 def si2() -> CellSpec:
-    """Diamond silicon, primitive fcc cell (non-orthogonal)."""
     a = 0.5 * A_SI * np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
     return CellSpec("si2", ("Si", "Si"), a,
                     np.array([[0.0, 0.0, 0.0], [0.25, 0.25, 0.25]]))
 
 
 def si8() -> CellSpec:
-    """Diamond silicon, conventional cubic cell."""
     fcc = np.array([[0, 0, 0], [0, 0.5, 0.5], [0.5, 0, 0.5], [0.5, 0.5, 0]])
     frac = np.concatenate([fcc, fcc + 0.25])
     return CellSpec("si8", ("Si",) * 8, A_SI * np.eye(3), frac)
 
 
 def al1() -> CellSpec:
-    """fcc aluminium, primitive cell."""
     a = 0.5 * A_AL * np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
     return CellSpec("al1", ("Al",), a, np.zeros((1, 3)))
 
 
 def al4() -> CellSpec:
-    """fcc aluminium, conventional cubic cell."""
     frac = np.array([[0, 0, 0], [0, 0.5, 0.5], [0.5, 0, 0.5], [0.5, 0.5, 0]])
     return CellSpec("al4", ("Al",) * 4, A_AL * np.eye(3), frac)
 
 
 def quartz9() -> CellSpec:
-    """Alpha-quartz, 3 SiO2 per hexagonal cell.
-
-    Origin on the twofold axis through the first silicon. The three-fold
-    screw ``(x, y, z) -> (-y, x-y, z+2/3)`` generates the other two formula
-    units, the twofold ``(x, y, z) -> (x-y, -y, -z)`` the second oxygen of
-    each.
-    """
     a = np.array([[A_QUARTZ, 0.0, 0.0],
                   [-0.5 * A_QUARTZ, 0.5 * np.sqrt(3.0) * A_QUARTZ, 0.0],
                   [0.0, 0.0, C_QUARTZ]])
@@ -133,8 +109,6 @@ def quartz9() -> CellSpec:
 
 
 def _check_quartz(spec: CellSpec) -> None:
-    """Every silicon has exactly four oxygens at the quartz bond length; a
-    wrong symmetry operation would not survive this."""
     cart = spec.cart
     images = np.array([(i, j, k) for i in (-1, 0, 1) for j in (-1, 0, 1)
                        for k in (-1, 0, 1)], float) @ spec.a
@@ -148,7 +122,6 @@ def _check_quartz(spec: CellSpec) -> None:
 
 
 def systems() -> dict[str, CellSpec]:
-    """Every named cell: the small ones for tests, the baselines after."""
     return {
         "si2": si2(),
         "si8": si8(),
@@ -163,6 +136,4 @@ def systems() -> dict[str, CellSpec]:
 
 BASELINES = ("si64", "quartz72", "al32")
 
-# Volume factors of the equation-of-state points (relative energies against
-# GPAW and VASP): seven volumes, 94% to 106% of the experimental one.
 EOS_VOLUME_FACTORS = tuple(np.linspace(0.94, 1.06, 7))

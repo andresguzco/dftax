@@ -1,17 +1,3 @@
-"""Lattice geometry: reciprocal vectors, plane-wave vectors, uniform grids,
-image translations.
-
-Lattice vectors are the rows of ``a`` (Bohr). Whatever is an integer pattern
-(the FFT index grid, the list of image translations) is built eagerly with
-numpy from concrete inputs; what is geometry (``G = n·b``, ``r = f·a``,
-``T = n·a``) is jax and stays a differentiable function of ``a``, which is
-what the stress needs.
-
-Conventions are PySCF's, so arrays compare element for element: ``b = 2π
-(a⁻¹)ᵀ``, grid points ``(i/n1) a1 + (j/n2) a2 + (k/n3) a3`` in C order, G
-vectors in FFT order (``numpy.fft.fftfreq``) in C order.
-"""
-
 from __future__ import annotations
 
 import itertools
@@ -31,7 +17,6 @@ def volume(a):
 
 
 def fft_indices(mesh) -> np.ndarray:
-    """Integer plane-wave indices of a mesh in FFT order, ``(N, 3)``."""
     axes = [np.fft.fftfreq(int(n), 1.0 / int(n)) for n in mesh]
     return np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
 
@@ -53,8 +38,7 @@ def uniform_grid(a, mesh):
 def lattice_images(a, rcut: float) -> np.ndarray:
     """Every integer triple ``n`` with ``|n·a| <= rcut``, ``(nimg, 3)``.
 
-    ``a`` must be concrete. The bound per axis is the number of lattice
-    planes within ``rcut``: planes normal to ``b_i`` are ``2π/|b_i|`` apart.
+    ``a`` must be concrete.
     """
     a = np.asarray(a, dtype=np.float64)
     b = 2.0 * np.pi * np.linalg.inv(a).T
@@ -66,7 +50,6 @@ def lattice_images(a, rcut: float) -> np.ndarray:
 
 
 def _fft_friendly(n: int) -> int:
-    """Smallest integer ``>= n`` whose only prime factors are 2, 3, 5, 7."""
     while True:
         m = n
         for p in (2, 3, 5, 7):
@@ -80,9 +63,6 @@ def _fft_friendly(n: int) -> int:
 def mesh_for_cutoff(a, ke_cutoff: float) -> tuple[int, int, int]:
     """The smallest FFT-friendly mesh holding every plane wave with
     ``|G|^2 / 2 <= ke_cutoff`` (Hartree). ``a`` must be concrete.
-
-    A wave of index ``n_i`` along axis ``i`` has ``n_i = G·a_i / 2π``, at
-    most ``|G| |a_i| / 2π``; the mesh needs both signs and zero.
     """
     a = np.asarray(a, dtype=np.float64)
     gmax = np.sqrt(2.0 * ke_cutoff)

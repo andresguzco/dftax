@@ -9,12 +9,11 @@ import numpy as np
 from dftax import Molecule, scf_batched
 from dftax.energy.xc import PBE
 
-# A 1-D H2 bond scan: 8 geometries differing only in the bond length.
-mol = Molecule.from_xyz("H 0 0 0; H 0 0 1.4", "sto-3g")  # template atoms + basis
-lengths = jnp.linspace(1.0, 2.4, 8)                       # Bohr
+mol = Molecule.from_xyz("H 0 0 0; H 0 0 1.4", "sto-3g")
+lengths = jnp.linspace(1.0, 2.4, 8)
 coords_batch = jnp.stack([jnp.array([[0.0, 0.0, 0.0], [0.0, 0.0, L]]) for L in lengths])
 
-res = scf_batched(mol, coords_batch, PBE(), forces=True)  # batched KSResult
+res = scf_batched(mol, coords_batch, PBE(), forces=True)
 print("converged:", np.asarray(res.converged))
 print(" R (Bohr)   E (Ha)        F_z on atom 1 (Ha/Bohr)")
 for L, e, F in zip(lengths, res.e_tot, res.forces):

@@ -1,14 +1,3 @@
-"""The analytic AO gradient against ``jacfwd`` of the AO values.
-
-``eval_gto_and_grad`` returns the spatial gradient in closed form, so it is
-pinned against differentiating ``eval_gto`` rather than against a stored
-reference: a regression shows up as disagreement, not as a stale constant.
-
-The bases span the cases that differ structurally: a single-primitive minimal
-basis, a generally contracted one, a spherical one (cart2sph applied on both
-the value and the gradient), and one with g functions.
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -31,10 +20,8 @@ BASES = ["cc-pvtz"]
 
 def _points(n=64, seed=0):
     rng = np.random.default_rng(seed)
-    # A spread that straddles the nuclei (where dr = 0 exactly on an axis,
-    # the case safe_int_pow exists for) and the tail.
     pts = rng.normal(0.0, 2.5, (n, 3))
-    pts[:4] = COORDS                      # exactly on every nucleus
+    pts[:4] = COORDS
     return jnp.asarray(pts)
 
 
@@ -51,7 +38,6 @@ def test_gradients_match_jacfwd(basis_name, spherical):
 
 
 def test_shell_records_partition_the_rows():
-    """Every AO row belongs to exactly one shell, and nprim is the true one."""
     b = build_basis_data(SYMS, COORDS, "cc-pvdz")
     ang = np.asarray(b.angular)
     ex = np.asarray(b.exponents)
@@ -61,7 +47,6 @@ def test_shell_records_partition_the_rows():
         assert npr == int((ex[row0] != 0).sum())
         assert npr <= ex.shape[1]
         covered.extend(range(row0, row0 + ncomp))
-        # every row of the shell carries the same contraction
         for row in range(row0, row0 + ncomp):
             assert np.array_equal(ex[row], ex[row0])
             assert int(ang[row].sum()) == l
@@ -69,8 +54,6 @@ def test_shell_records_partition_the_rows():
 
 
 def test_second_derivatives_are_finite_on_a_nucleus():
-    """The Hessian path differentiates the AO gradient again, which needs
-    safe_int_pow to stay finite at dr = 0."""
     b = build_basis_data(SYMS, COORDS, "cc-pvdz")
 
     def f(r):

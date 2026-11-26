@@ -1,25 +1,3 @@
-"""Kohn-Sham at k-points for the Gaussian engine.
-
-The basis of each wave vector ``k`` is the Bloch sum of the atomic
-orbitals, ``φ^k_μ(r) = sum_T exp(i k·T) φ_μ(r - T)``, so every matrix is a
-lattice sum with a phase per image (:func:`~dftax.pbc.bloch.overlap_kinetic_k`)
-and complex Hermitian. With ``P^k_μν = sum_n f_nk c_μn c*_νn`` (PySCF's
-convention), the density is
-
-    ρ(r) = sum_k w_k sum_μν P^k_μν φ^k_μ(r) φ^k_ν(r)*,
-
-and the energy
-
-    E = sum_k w_k Re tr(P^k h^k) + E_H[ρ] + ∫ρ V_loc + E_xc[ρ] + E_Ewald,
-
-whose derivative with respect to the real and imaginary parts of ``P^k``
-is the Fock matrix of each ``k`` (times its weight). The grid part is
-streamed, block by block, with the Bloch values of every ``k`` formed from
-one evaluation of the images. The SCF diagonalizes each ``k``, occupies
-the bands across all of them (aufbau per ``k`` for an insulator, one Fermi
-level under smearing) and extrapolates the stacked Fock matrices by DIIS.
-"""
-
 from __future__ import annotations
 
 import time
@@ -54,9 +32,6 @@ def kmesh(n1: int, n2: int, n3: int, shift=(0, 0, 0)):
 
 
 class KGrid(eqx.Module):
-    """The grid part of a k-point cell: Hartree, local-pseudopotential and
-    XC energies of the density of the ``P^k``, streamed over blocks."""
-
     basis: BasisData
     plan: ValuePlan
     grid_coords: Float[Array, "ng 3"]
@@ -71,7 +46,6 @@ class KGrid(eqx.Module):
     xc: XCFunctional = eqx.field(static=True)
 
     def density(self, P):
-        """Density and its gradient on the grid, ``(ng,)`` and ``(ng, 3)``."""
         plan = self.plan
         nblk = plan.fun.shape[0]
         pts = _pad_points(self.grid_coords, nblk * plan.block).reshape(
@@ -81,7 +55,7 @@ class KGrid(eqx.Module):
 
         def block(f, t, m, r):
             ao, dao = block_values_k(self.basis, shifts, f, t, m, r,
-                                     self.phases)       # (nk, B, nao), (.., 3)
+                                     self.phases)
             tP = jnp.einsum("kmn,kbn->kbm", P, ao.conj())
             rho = jnp.einsum("k,kbm,kbm->b", w, ao, tP).real
             grad = 2.0 * jnp.einsum("k,kbmx,kbm->bx", w, dao, tP).real
@@ -129,16 +103,12 @@ class KPointKS(eqx.Module):
 
 
 def kcell_fields(plan, xc, kfrac, kw, coords, a) -> KPointKS:
-    """The k-point functional of a planned cell (:func:`~dftax.pbc.build.
-    plan_cell`) at atoms ``coords`` and lattice ``a``, both possibly traced:
-    the basis and projectors follow the atoms, the grid follows the lattice."""
     basis = eqx.tree_at(lambda b: b.centers, plan.basis, coords[plan.atom_idx])
     S, hcore = overlap_kinetic_k(basis, a, plan.pairs, kfrac)
     if plan.projectors is not None:
         pbasis, p_idx, H, ppairs = plan.projectors
         pbasis = eqx.tree_at(lambda b: b.centers, pbasis, coords[p_idx])
-        B = cross_overlap_k(basis, pbasis, a, ppairs, kfrac)   # (nk, nao, np)
-        # <φ^k_μ|p> = sum_T exp(i k·T) <μ|p(T)> = B^k: V_nl^k = B H B^†
+        B = cross_overlap_k(basis, pbasis, a, ppairs, kfrac)
         hcore = hcore + B @ H @ jnp.conj(jnp.swapaxes(B, -1, -2))
     v_loc = local_potential(coords, a, plan.mesh, *plan.local)[plan.order] \
         * plan.valid
@@ -168,12 +138,6 @@ def kpoint_ks(cell, xc, *, grid, kpts) -> KPointKS:
 
 
 def _frozen_density_k(C, occ):
-    """``S -> P``: the density of every k held at the SCF's own orbitals
-    ``C`` and occupations (fractional under smearing), re-orthonormalized
-    at the moving overlap to first order (``B = 1.5 - 0.5 C^H S C``, exact
-    in value and derivative at the reference, as for the molecules). The
-    orbitals come from the canonically orthogonalized space, so a near-
-    singular overlap is never inverted here."""
     Phi = jax.lax.stop_gradient(C)
     f = jax.lax.stop_gradient(jnp.asarray(occ))
 
@@ -200,17 +164,12 @@ def _energy_of_geometry_k(cell, xc, res, grid, kpts):
 
 
 def kcell_forces(cell, xc, res: "KResult", *, grid, kpts=None):
-    """Forces at a k-mesh, ``-dE/dR`` (Ha/Bohr): of the free energy under
-    smearing (the occupations frozen with the orbitals). ``kpts``: those of
-    the result by default."""
     kpts = res.kpts if kpts is None else kpts
     energy, coords0, a0 = _energy_of_geometry_k(cell, xc, res, grid, kpts)
     return -jax.jit(jax.grad(energy))(coords0, a0)
 
 
 def kcell_stress(cell, xc, res: "KResult", *, grid, kpts=None):
-    """Stress at a k-mesh, ``(1/Ω) ∂E/∂ε`` (Ha/Bohr^3); the k-points keep
-    their fractional coordinates, so they follow the strained lattice."""
     kpts = res.kpts if kpts is None else kpts
     energy, coords0, a0 = _energy_of_geometry_k(cell, xc, res, grid, kpts)
 
@@ -223,13 +182,6 @@ def kcell_stress(cell, xc, res: "KResult", *, grid, kpts=None):
 
 
 def _orthonormalizers(S, thresh=1e-8):
-    """Canonical orthonormalizers ``X^k`` (``X^H S X = 1``) of every ``k``,
-    as PySCF's ``remove_linear_dep_`` builds them: the overlap normalized to
-    a unit diagonal, its eigenvectors of eigenvalue below ``thresh`` dropped
-    (a near-linearly-dependent basis, such as a diffuse one in a
-    close-packed metal). The ``k`` keep different numbers; the shorter ones
-    are padded with zero columns, returned with a mask ``(nk, nmo)`` so the
-    padding is never occupied."""
     S = np.asarray(S)
     nk, nao = S.shape[0], S.shape[1]
     Xs = []
@@ -247,11 +199,8 @@ def _orthonormalizers(S, thresh=1e-8):
 
 
 def _fermi(eps, w, nelec, sigma, iters=100):
-    """Occupations ``2 fd((ε - μ)/σ)`` with one ``μ`` for all k, and the
-    entropy term ``σ S``."""
     eps = np.asarray(eps)
     lo, hi = eps.min() - 40 * sigma, eps.max() + 40 * sigma
-    # 1 / (1 + exp(x)) as 0.5 (1 - tanh(x / 2)): no overflow at small sigma
     fd = lambda mu: 0.5 * (1.0 - np.tanh(0.5 * (eps - mu) / sigma))
     count = lambda mu: np.sum(w[:, None] * 2.0 * fd(mu))
     for _ in range(iters):
@@ -270,17 +219,17 @@ class KResult(NamedTuple):
     ``eps``, occupations ``occ`` and orbitals ``C`` of every k, the Fermi
     level ``mu`` under smearing, and the k-points it was solved at."""
 
-    e_tot: float          # the free energy E - TS under smearing, else E
-    energy: float         # E (internal)
-    ts: float             # the entropy term σ S (0 without smearing)
-    P: jax.Array          # (nk, nao, nao)
-    eps: jax.Array        # (nk, nmo)
-    occ: jax.Array        # (nk, nmo)
-    C: jax.Array          # (nk, nao, nmo) orbitals (zero columns: dropped)
+    e_tot: float
+    energy: float
+    ts: float
+    P: jax.Array
+    eps: jax.Array
+    occ: jax.Array
+    C: jax.Array
     mu: float | None
     converged: bool
     n_iter: int
-    kpts: tuple | None = None   # (kfrac, weights) of the solve
+    kpts: tuple | None = None
 
 
 @eqx.filter_jit
@@ -300,8 +249,6 @@ def scf_k(ks: KPointKS, *, smearing=None, e_tol=1e-10,
     :class:`KPointKS`."""
     smearing = getattr(smearing, "sigma", smearing) or None
     X, keep = _orthonormalizers(ks.S, lindep)
-    # dropped directions get an energy far above every band, so they stay
-    # empty (their orbitals are zero vectors)
     shift = jnp.asarray(np.where(keep > 0, 0.0, 1e6))
     w = np.asarray(ks.kweights)
     nk, nmo = X.shape[0], X.shape[2]
@@ -322,7 +269,7 @@ def scf_k(ks: KPointKS, *, smearing=None, e_tol=1e-10,
     def density(C, occ):
         return jnp.einsum("kmi,ki,kni->kmn", C, jnp.asarray(occ), C.conj())
 
-    eps, C = diagonalize(ks.hcore)                     # core guess
+    eps, C = diagonalize(ks.hcore)
     occ, ts, mu = occupy(eps)
     P = density(C, occ)
     Fs, errs = [], []
@@ -331,7 +278,6 @@ def scf_k(ks: KPointKS, *, smearing=None, e_tol=1e-10,
         t0 = time.perf_counter()
         e, F = _energy_and_fock(ks, P)
         e = float(e)
-        # commutator in the orthonormal basis: X^H (F P S - S P F) X
         FPS = F @ P @ ks.S
         err = jnp.conj(jnp.swapaxes(X, -1, -2)) @ (
             FPS - jnp.conj(jnp.swapaxes(FPS, -1, -2))) @ X

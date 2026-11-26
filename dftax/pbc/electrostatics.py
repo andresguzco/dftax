@@ -1,16 +1,3 @@
-"""Electrostatics on the uniform grid: the Hartree energy of a density and
-the local pseudopotential, both through the FFT.
-
-A density sampled on the uniform grid of a mesh has Fourier components
-``ρ(G) = sum_r ρ(r) exp(-i G·r)`` (the unnormalized forward FFT), and
-
-    E_H = Ω / (2 N^2) sum_{G≠0} 4π |ρ(G)|^2 / G^2 .
-
-The ``G = 0`` term is left out: in a neutral cell its divergence cancels
-against the ions' (Ewald) and the local pseudopotential's, and the finite
-remainder is carried by :func:`dftax.pbc.gth.vloc_G`.
-"""
-
 from __future__ import annotations
 
 import jax
@@ -41,9 +28,7 @@ def local_potential(coords, a, mesh, zion, rloc, cloc):
     """Local pseudopotential of all atoms on the uniform grid, already times
     the quadrature weight: ``(Ω/N) V_loc(r)``, ``(N,)``.
 
-    Its energy with a grid density is then just ``sum_r ρ(r) v(r)``. The
-    atoms' structure factors are accumulated one atom at a time, so the peak
-    is one grid-sized complex array whatever the number of atoms.
+    Its energy with a grid density is ``sum_r ρ(r) v(r)``.
     """
     mesh = tuple(int(n) for n in mesh)
     G = gvectors(a, mesh)

@@ -1,10 +1,3 @@
-"""meta-GGA support: tau plumbing and the r2SCAN functional.
-
-Oracles: pointwise against libxc (mgga_x_r2scan / mgga_c_r2scan), full SCF
-against PySCF RKS/UKS on matched grids, and internal equality between the
-materialized and streamed XC paths.
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -25,7 +18,6 @@ def _points(n=25, seed=3):
     gb = rng.normal(0, 0.4, (n, 3))
     gna = np.linalg.norm(ga, axis=1)
     gnb = np.linalg.norm(gb, axis=1)
-    # tau: von Weizsaecker floor plus slack so alpha spans all three branches
     tau_a = gna**2 / (8 * rho_a) + rng.uniform(0.0, 3.0, n) * rho_a ** (5 / 3)
     tau_b = gnb**2 / (8 * rho_b) + rng.uniform(0.0, 3.0, n) * rho_b ** (5 / 3)
     return rho_a, rho_b, ga, gb, tau_a, tau_b
@@ -112,7 +104,6 @@ def test_r2scan_streamed_xc_matches_materialized():
 
 
 def test_r2scan_forces_match_finite_difference():
-    """The tau path must differentiate cleanly through the moving grid."""
     from dftax import becke, forces
 
     xc = R2SCAN()

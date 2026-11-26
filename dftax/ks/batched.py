@@ -1,31 +1,3 @@
-"""Batched Kohn-Sham over a stack of geometries (same atoms + basis, varying coords).
-
-``vmap`` the per-geometry pipeline so a whole batch of conformations is evaluated in
-one call, useful for ML datasets. All shapes are static across the batch (same atoms,
-same basis); only the nuclear coordinates vary, so the only per-geometry array is
-``centers = coords[atom_index]`` on a shared basis template.
-
-The per-geometry solve is built from the on-device primitives (a raw
-:class:`~dftax.ks.energy.System` + the spin-stacked ``_scf_solve``), bypassing the
-:func:`~dftax.ks.scf.scf` wrapper whose ``float()``/``bool()`` host conversions
-cannot be vmapped. A fixed-shape symmetric (Löwdin) orthonormalizer is used so the
-orbital dimension is uniform across the batch; this assumes a well-conditioned basis
-(no severe linear dependence), which is the conformer-dataset regime this path
-targets. Exact-ERI path only.
-
-With ``forces=True`` each element also returns the analytic Pulay-free force tensor.
-Forces are *not* taken by differentiating through the SCF (the ``while_loop`` solve is
-not reverse-differentiable); instead, within the same vmap, the converged orbitals
-parametrize a fixed-density energy whose explicit geometry derivative is the force
-(envelope theorem / stationary-point identity; see :mod:`dftax.ks.forces`).
-
-Orbital-sized outputs (``P``/``mo_coeff``/``mo_energy``, O(B·nspin·nao²) device
-memory) are opt-in via ``return_orbitals=True``; energies/forces-only runs never
-retain them batch-wide. With ``mesh=`` the *batch axis* is sharded across a device
-mesh (data parallelism over conformers): each device runs its own slice's solves,
-with independent per-device convergence loops and no collectives.
-"""
-
 from __future__ import annotations
 
 import dataclasses
@@ -50,29 +22,34 @@ from dftax.utils.vmap import vmap as _chunked_vmap
 
 
 def _lowdin(S, eps: float = 1e-9):
-    """Symmetric (Löwdin) orthonormalizer ``X = S^{-1/2}``, fixed ``(nao, nao)`` shape
-    so it vmaps cleanly (unlike the canonical orthonormalizer, which drops near-null
-    directions and so has a data-dependent column count). Eigenvalues are clipped for
-    safety; assumes the basis is not severely linearly dependent."""
     s, U = jnp.linalg.eigh(S)
     return (U * (1.0 / jnp.sqrt(jnp.clip(s, eps)))) @ U.T
 
 
 @dataclass
 class BatchedResult:
-    """Per-geometry results of a batched KS solve (leading axis = batch ``B``).
+    """Results of :func:`scf_batched`, one entry per geometry along the
+    leading axis ``B``.
 
-    A distinct type from the single-solve :class:`~dftax.ks.scf.KSResult`, so
-    consumers written against per-geometry scalars (``forces``,
-    ``if res.converged``) reject a batch loudly instead of mis-slicing it.
-    Orbital fields are ``None`` unless the run asked for them
-    (``return_orbitals=True``).
+    Attributes:
+        e_tot: total energies (Ha), ``(B,)``.
+        e_elec: electronic energies (Ha), ``(B,)``.
+        converged: whether each solve converged, ``(B,)``.
+        n_iter: iterations of each solve, ``(B,)``.
+        nocc: occupied orbitals per spin channel.
+        forces: forces (Ha/Bohr), ``(B, natom, 3)``, with ``forces=True``.
+        mo_energy: orbital energies, ``(B, nspin, nmo)``, with
+            ``return_orbitals=True``.
+        mo_coeff: orbital coefficients, ``(B, nspin, nao, nmo)``, with
+            ``return_orbitals=True``.
+        P: density matrices, ``(B, nspin, nao, nao)``, with
+            ``return_orbitals=True``.
     """
 
     e_tot: Float[Array, "B"]
     e_elec: Float[Array, "B"]
-    converged: Array                       # (B,) bool
-    n_iter: Array                          # (B,) int
+    converged: Array
+    n_iter: Array
     nocc: tuple[int, ...]
     forces: Float[Array, "B n_atom 3"] | None = None
     mo_energy: Float[Array, "B nspin nmo"] | None = None
@@ -93,25 +70,39 @@ def scf_batched(
     diis_space: int = 8, level_shift: float = 0.0,
     guess=None,
 ) -> BatchedResult:
-    """KS SCF over a batch of geometries ``coords_batch`` of shape
-    ``(B, n_atom, 3)`` (Bohr). ``mol`` supplies the (fixed) atoms + basis; only
-    the coordinates vary. ``spin`` follows the :class:`~dftax.ks.energy.KS`
-    rule (None → infer from ``mol``; explicit → polarized channels).
+    """SCF over many geometries of the same molecule in one compiled call.
 
-    With ``forces=True`` the result carries the analytic force tensor
-    ``(B, n_atom, 3)``; with ``return_orbitals=True`` it also carries
-    ``P``/``mo_coeff``/``mo_energy`` (O(B·nspin·nao²) memory, off by
-    default). ``mesh=`` shards the batch axis across a device mesh.
+    Args:
+        mol (Molecule): the molecule; gives the atoms, basis, charge and spin.
+        coords_batch (Array): nuclear coordinates (Bohr), ``(B, natom, 3)``.
+        xc (XCFunctional): the exchange-correlation functional.
+        spin: as for :class:`~dftax.ks.energy.KS`.
+        grid: a :func:`~dftax.grid.becke` spec (rebuilt per geometry).
+        coulomb: :func:`~dftax.ks.terms.df` (the default) or plain
+            :func:`~dftax.ks.terms.exact`; ``screen`` is not supported.
+        dispersion (D3BJSpec | D4Spec | None): a :func:`~dftax.energy.d3.d3bj` or
+            :func:`~dftax.energy.d4.d4` spec.
+        forces: also compute the forces.
+        return_orbitals: also return the orbitals and densities
+            (``O(B·nao²)`` memory).
+        mesh: a :func:`~dftax.ks.shard.mesh` spec to divide the batch over
+            devices.
+        max_iter: as for :func:`~dftax.ks.scf.scf`.
+        e_tol: as for :func:`~dftax.ks.scf.scf`.
+        d_tol: as for :func:`~dftax.ks.scf.scf`.
+        diis_space: as for :func:`~dftax.ks.scf.scf`.
+        level_shift: as for :func:`~dftax.ks.scf.scf`.
+        guess (GuessSpec | None): a guess spec from :mod:`dftax.ks.guess`; density arrays are
+            not accepted.
 
-    ``guess`` is a spec from :mod:`dftax.ks.guess` (``core``/``sad``/``minao``/
-    ``sap``); it is resolved once (SAD/MinAO atomic densities are
-    geometry-independent) and applied per geometry inside the solve.
+    Returns:
+        A :class:`BatchedResult`.
 
-    ``coulomb`` follows the KS default (density fitting): the auxiliary basis
-    is built once as a template and re-centered per geometry. Value-based
-    knobs are rejected here (Schwarz ``screen`` needs concrete integrals, but
-    the per-geometry build is traced), and batched ``forces=True`` with a
-    *streamed* hybrid RI-K is rejected (its vjp has no geometry gradients).
+    Raises:
+        ValueError: ``grid`` is not a :func:`~dftax.grid.becke` spec,
+            ``exact`` with ``screen`` or ``stream``, or ``forces=True`` with a
+            hybrid on the streamed density-fitting backend.
+        TypeError: ``guess`` is not a spec.
     """
     grid = becke() if grid is None else grid
     if not isinstance(grid, Becke):
@@ -132,15 +123,10 @@ def scf_batched(
             "scf_batched takes a guess spec (core/sad/minao/sap), not a "
             "density array; per-geometry densities would need the batch axis."
         )
-    # Resolved once, eagerly: SAD/MinAO blocks are geometry-independent, and
-    # the SAP tables are applied traced per geometry inside `single`.
     resolved_guess = resolve_guess_or_default(
         guess, symbols, template, jnp.asarray(mol.atom_coords()),
     )
 
-    # Coulomb backend: DF default (matching KS); the aux basis is a template
-    # re-centered per geometry, and the "auto" memory policy is resolved
-    # eagerly (shapes are static across the batch).
     if coulomb is None:
         coulomb = df()
     aux_t = None
@@ -152,7 +138,7 @@ def scf_batched(
         else template.centers.shape[0]
     )
     if isinstance(coulomb, DFSpec):
-        if coulomb.screen == "auto":       # batched geometries never screen
+        if coulomb.screen == "auto":
             coulomb = dataclasses.replace(coulomb, screen=None)
         if coulomb.screen is not None:
             raise ValueError(
@@ -183,7 +169,6 @@ def scf_batched(
                 "streamed path contracts cartesian auxiliary elements."
             )
         if df_chunk is None and coulomb.spherical is not False:
-            # materialized path: spherical aux (SPD metric), matching KS
             aux_t, a_idx = build_basis_data(
                 symbols, mol.atom_coords(), coulomb.auxbasis,
                 return_atom_index=True, spherical=True,
@@ -200,8 +185,6 @@ def scf_batched(
             "value-based and streaming adds nothing under the traced rebuild."
         )
 
-    # Resolve the "auto" XC streaming policy eagerly (the per-geometry grid is
-    # built traced inside `_build`, but its size is static per spec).
     nao_final = (
         template.cart2sph.shape[1]
         if template.cart2sph is not None
@@ -257,12 +240,6 @@ def scf_batched(
         return out
 
     if forces and aux_t is not None:
-        # The eri3c-rebuild VJP inside the force gradient materializes a
-        # per-geometry Hermite table of O(GiB); under a plain vmap those
-        # tables coexist batch-wide (31.6 GiB at batch=16 water/sto-3g on
-        # A100). lax.map one geometry at a time bounds the peak at the
-        # serial-forces footprint; the SCF solves it serializes are a small
-        # fraction of the force-gradient cost.
         vmapped = _chunked_vmap(single, chunk_size=1)
     else:
         vmapped = jax.vmap(single)
@@ -270,9 +247,6 @@ def scf_batched(
     if devices is None:
         out = vmapped(coords_batch)
     else:
-        # Data parallelism over conformers: pad the batch to the mesh, give
-        # each device its slice, and let per-device while_loops converge
-        # independently (no cross-device sync per iteration).
         import numpy as np
         from jax import shard_map
 
@@ -291,9 +265,6 @@ def scf_batched(
             cb = jnp.concatenate([cb, jnp.tile(cb[-1:], (n_pad, 1, 1))])
         jmesh = jax.sharding.Mesh(np.asarray(devices), ("batch",))
         bspec = jax.sharding.PartitionSpec("batch")
-        # check_vma=False: pure data parallelism (no collectives); the
-        # varying-axis analysis balks at scan carries whose init is mesh-
-        # invariant (constants) while the loop makes them per-shard values.
         out = shard_map(
             vmapped, mesh=jmesh, in_specs=(bspec,),
             out_specs=jax.tree.map(lambda _: bspec, jax.eval_shape(vmapped, cb)),

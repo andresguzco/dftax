@@ -38,7 +38,6 @@ import numpy as np
 
 OUT = Path(__file__).resolve().parents[1] / "dftax" / "energy" / "data" / "d4.npz"
 
-# Published D4(BJ) parameters (s6, a1, s8, a2) per method.
 DAMPING = {
     "pbe":       (1.0, 0.38574991, 0.95948085, 4.80688534),
     "pbe0":      (1.0, 0.40085597, 1.20065498, 5.02928789),
@@ -53,7 +52,7 @@ DAMPING = {
     "wb97":      (1.0, 0.76666802, 6.55792598, 8.36027334),
 }
 
-NELEM = 104   # direct atomic-number indexing, row 0 unused
+NELEM = 104
 
 
 def main() -> int:
@@ -61,13 +60,13 @@ def main() -> int:
 
     dd = dict(dtype=torch.float64)
 
-    zmax = 86  # tad-dftd4 references cover H..Rn
+    zmax = 86
     zs = torch.arange(1, zmax + 1)
 
     from tad_dftd4.model import D4Model
 
     m = D4Model(zs, **dd)
-    rc6_small = m.rc6.numpy()                       # (86, 86, 7, 7)
+    rc6_small = m.rc6.numpy()
     rc6 = np.zeros((NELEM, NELEM, 7, 7))
     rc6[1:zmax + 1, 1:zmax + 1] = rc6_small
 
@@ -76,14 +75,14 @@ def main() -> int:
 
     def by_z(tbl):
         a = tbl.to(torch.float64).numpy() if isinstance(tbl, torch.Tensor) else np.asarray(tbl)
-        a = a[:NELEM]                       # some tables extrapolate past Z=103
+        a = a[:NELEM]
         out = np.zeros((NELEM,) + a.shape[1:])
         out[: a.shape[0]] = a
         return out
 
-    refcovcn = by_z(d4ref.refcovcn)                 # (nelem, 7)
-    refc = by_z(d4ref.refc)                         # (nelem, 7) ints
-    refq = by_z(clsq)                               # (nelem, 7)
+    refcovcn = by_z(d4ref.refcovcn)
+    refc = by_z(d4ref.refc)
+    refq = by_z(clsq)
 
     from tad_dftd4 import data
 
@@ -116,7 +115,6 @@ def main() -> int:
     print(f"wrote {OUT}: " + " ".join(f"{k}{v.shape}" for k, v in tables.items()
                                       if isinstance(v, np.ndarray) and v.ndim))
 
-    # Reference values for tests/unit/test_d4.py.
     from tad_dftd4.disp import dftd4
     from tad_dftd4.damping import Param
     from tad_multicharge.model import eeq as eeq_mod
@@ -155,8 +153,6 @@ def main() -> int:
 
 
 def damping_only() -> int:
-    """``--damping``: only the damping table, ``methods``/``params`` of the vendored file rewritten from DAMPING and
-    every other table kept bit for bit (NumPy alone: no torch, no tad packages)."""
     with np.load(OUT) as t:
         tables = {k: t[k] for k in t.files}
     tables["methods"] = np.array(sorted(DAMPING))

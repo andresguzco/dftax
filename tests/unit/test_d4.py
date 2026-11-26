@@ -1,11 +1,3 @@
-"""JAX-native DFT-D4 dispersion.
-
-Reference energies and EEQ charges below were generated with tad-dftd4 0.8.0
-(s9 = 1, i.e. including the ATM term) by ``scripts/gen_d4_data.py``, the same
-tool the vendored tables come from; the implementation matched them to
-machine precision at port time (EEQ to 5e-14, energies to ~1e-18).
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -30,7 +22,7 @@ ETHANOL_XYZ = np.array([[-1.67619, 0.31561, -0.03213],
                         [1.28893, -1.92565, -1.76888],
                         [4.32570, 0.05669, 0.34016]])
 
-# EEQ partial charges from tad-multicharge (neutral systems).
+# tad-multicharge EEQ charges, from scripts/gen_d4_data.py.
 EEQ_REFS = {
     "water": [-5.269497818333e-01, 2.634748909166e-01, 2.634748909166e-01],
     "ethanol": [-2.098669683032e-01, -5.103006970319e-02, -4.873167304903e-01,
@@ -38,7 +30,7 @@ EEQ_REFS = {
                 9.885332852628e-02, 9.591178794707e-02, 2.439813770103e-01],
 }
 
-# (method, system) -> E_disp in Ha, from tad-dftd4 0.8.0 with s9 = 1.
+# tad-dftd4 0.8.0 with s9 = 1, from scripts/gen_d4_data.py.
 REFS = {
     ("pbe", "water"): -2.052019652165950e-04,
     ("pbe", "ethanol"): -3.672905741646890e-03,
@@ -61,7 +53,7 @@ def _sys(system):
 def test_eeq_charges_vs_tad_multicharge(system):
     z, xyz = _sys(system)
     q = np.asarray(eeq_charges(xyz, z))
-    assert abs(float(q.sum())) < 1e-12                # charge conservation
+    assert abs(float(q.sum())) < 1e-12
     assert np.abs(q - np.asarray(EEQ_REFS[system])).max() < 1e-12
 
 
@@ -87,8 +79,6 @@ def test_d4_forces_match_finite_difference():
 
 
 def test_d4_charge_dependence():
-    """The EEQ/zeta pipeline responds to the molecular charge: a cation has
-    fewer electrons, smaller polarizabilities, and less dispersion."""
     p = _d4_params("pbe")
     e_neutral = float(d4_energy(WATER_XYZ, WATER_Z, p, total_charge=0.0))
     e_cation = float(d4_energy(WATER_XYZ, WATER_Z, p, total_charge=1.0))
@@ -97,7 +87,6 @@ def test_d4_charge_dependence():
 
 @pytest.mark.float64
 def test_d4_through_ks_energy():
-    """dispersion=d4() rides along the KS total energy like d3bj()."""
     mol = Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043",
                             "sto-3g")
     grid = jnp.zeros((8, 3)), jnp.zeros((8,))
@@ -126,7 +115,6 @@ def test_lc_damping_is_the_published_set(method):
 @pytest.mark.float64
 @pytest.mark.parametrize("xc,method", [(WB97(), "wb97"), (LCBLYP(), "lc-blyp")])
 def test_d4_resolves_lc_functionals_by_name(xc, method):
-    """dispersion=d4() takes the long-range-corrected functionals' own sets."""
     mol = Molecule.from_xyz("O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043",
                             "sto-3g")
     grid = jnp.zeros((8, 3)), jnp.zeros((8,))

@@ -1,5 +1,3 @@
-"""Exchange-correlation functionals for KS-DFT."""
-
 import abc
 import math
 
@@ -19,13 +17,10 @@ VectorFeature = Float[Array, "i s"] | Float[Array, "i"]
 
 
 def _has_spin(density) -> bool:
-    """Return True if density appears spin-polarized (last axis size 2)."""
     return jnp.atleast_1d(density).shape[-1] == 2
 
 
 class DensityFunctional(eqx.Module):
-    """Base class for exchange-correlation density functionals."""
-
     name: eqx.AbstractClassVar[str]
     xc_type: eqx.AbstractClassVar[str]
 
@@ -35,25 +30,11 @@ class DensityFunctional(eqx.Module):
 
 
 class XCFunctional(DensityFunctional):
-    """Composite functional combining exchange and correlation components.
-
-    ``hf_coeff`` is the fraction of exact (Hartree-Fock) exchange; it is 0 for
-    pure DFT functionals and non-zero for hybrids (e.g. 0.20 for B3LYP). The
-    ``__call__`` method returns only the density-local part of ε_xc. The HF K
-    contribution is computed in ``EnergyFunctional`` when ``hf_coeff != 0``.
-    """
-
     exchange: eqx.AbstractClassVar[DensityFunctional]
     correlation: eqx.AbstractClassVar[DensityFunctional]
     hf_coeff: ClassVar[float] = 0.0
-    # Range-separated hybrids: the exact-exchange split is
-    # K_hf = hf_coeff·K + hf_coeff_lr·K_lr(omega), with K_lr built from
-    # erf(ω·r₁₂)/r₁₂ integrals (see dftax.ks.terms). Both are 0 for global
-    # hybrids and pure functionals.
     hf_coeff_lr: ClassVar[float] = 0.0
     omega: ClassVar[float] = 0.0
-    # Nonlocal (VV10) correlation parameters; 0 means none. A functional
-    # declaring nlc_b adds the VV10 double-grid term (see energy/vv10.py).
     nlc_b: ClassVar[float] = 0.0
     nlc_c: ClassVar[float] = 0.0
 
@@ -62,8 +43,6 @@ class XCFunctional(DensityFunctional):
 
 
 class LDAExchange(DensityFunctional):
-    """Local density approximation (LDA) exchange energy density."""
-
     name: ClassVar[str] = "LDA"
     xc_type: ClassVar[str] = "LDA"
 
@@ -74,8 +53,6 @@ class LDAExchange(DensityFunctional):
 
     def __call__(self, density: ScalarFeature) -> Scalar:
         if _has_spin(density):
-            # Spin-scaling relation: E_x[n↑,n↓] = ½(E_x[2n↑] + E_x[2n↓]); the
-            # per-electron density mixes the two channels by their populations.
             n_up, n_dn = jnp.unstack(density, axis=-1)
             n_tot = jnp.clip(n_up + n_dn, 1e-30)
             return (n_up / n_tot) * self._unpolarized(2 * n_up) + (
@@ -85,26 +62,15 @@ class LDAExchange(DensityFunctional):
 
 
 class PBEExchange(DensityFunctional):
-    """PBE GGA exchange energy density."""
-
     name: ClassVar[str] = "PBE"
     xc_type: ClassVar[str] = "GGA"
 
     kappa: ClassVar[float] = 0.804
-    # μ = β·π²/3 with β = 0.06672455060314922 (the PBE/PW92 β, cf. PBECorrelation.beta);
-    # this is libxc's exact MU_PBE. The earlier 0.21951 truncation (rel. err 2.3e-5) was
-    # the *sole* source of the documented ~1e-5 Ha PBE/PBE0 gap vs libxc; full precision
-    # restores machine-precision agreement (verified on water: 1.5e-5 → 2e-11 Ha).
     mu: ClassVar[float] = 0.2195149727645171
 
     def _unpolarized(self, density: ScalarFeature, grad_density: VectorFeature) -> Scalar:
-        """Exchange for spin-unpolarized densities."""
-
-        # eps = jnp.finfo(density.dtype).eps
         grad_n_norm = jnp.linalg.norm(grad_density + 1e-30, axis=-1)
 
-        # +1e-30 floor (as in LDAExchange) keeps kF and its ρ→0 derivative finite;
-        # ρ^{1/3}'s gradient is otherwise -inf at exactly ρ=0.
         kF = (3 * jnp.pi**2 * density + 1e-30) ** (1 / 3)
         s = grad_n_norm / jnp.clip(2 * kF * density, 1e-30)
         eps_x_unif = -3 * kF / (4 * jnp.pi)
@@ -113,8 +79,6 @@ class PBEExchange(DensityFunctional):
         return eps_x_unif * f
 
     def __call__(self, density: ScalarFeature, grad_density: VectorFeature) -> Scalar:
-        """Exchange for spin-unpolarized or spin-polarized densities."""
-
         if _has_spin(density):
             if density.shape != (2,):
                 raise ValueError("Density must have shape (..., 2) for spin-polarized case.")
@@ -139,8 +103,6 @@ class PBEExchange(DensityFunctional):
 
 
 class PBECorrelation(DensityFunctional):
-    """PBE correlation energy density with PW92 base."""
-
     name: ClassVar[str] = "PBE"
     xc_type: ClassVar[str] = "GGA"
 
@@ -148,22 +110,15 @@ class PBECorrelation(DensityFunctional):
     beta: ClassVar[float] = 0.06672455060314922
     fz20: ClassVar[float] = 1.709920934161365617563962776245
 
-    # --- Constants ---
-    # PW92 Modified Parameters
-    # Rows: [Para, Ferro, Alpha] | Cols: [A, alpha1, beta1, beta2, beta3, beta4]
-    # numpy, not jnp: an import-time jnp.array would start an XLA backend
-    # (and freeze the dtype at whatever x64 setting the importer had).
     pw_params: ClassVar[Float[Array, "3 6"]] = np.array(
         [
-            [0.0310907, 0.21370, 7.5957, 3.5876, 1.6382, 0.49294],  # Paramagnetic
-            [0.01554535, 0.20548, 14.1189, 6.1977, 3.3662, 0.62517],  # Ferromagnetic
-            [0.0168869, 0.11125, 10.357, 3.6231, 0.88026, 0.49671],  # Alpha
+            [0.0310907, 0.21370, 7.5957, 3.5876, 1.6382, 0.49294],
+            [0.01554535, 0.20548, 14.1189, 6.1977, 3.3662, 0.62517],
+            [0.0168869, 0.11125, 10.357, 3.6231, 0.88026, 0.49671],
         ]
     )
 
     def _pw92_correlation(self, rs, zeta):
-        """PW92 LDA correlation used as PBE baseline."""
-
         A, a1, b1, b2, b3, b4 = jnp.unstack(self.pw_params, axis=1)
 
         rs_sqrt = jnp.sqrt(rs)
@@ -175,40 +130,30 @@ class PBECorrelation(DensityFunctional):
         return g1 + (zeta**4) * f_z * (g2 - g1 + g3 / self.fz20) - f_z * g3 / self.fz20
 
     def _pbe_correction(self, eps_pw, phi, t):
-        """Calculate the PBE gradient correction term (H)."""
-        # A = beta / [ gamma * (exp( -eps_pw / (gamma * phi^3) ) - 1) ]
-        # Note: eps_pw is negative, so -eps_pw is positive.
         gamma_phi3 = self.gamma * (phi**3)
 
-        # Use expm1 for stability when exponent is small (low density limit)
         denom_A = self.gamma * jnp.expm1(-eps_pw / gamma_phi3)
         A = self.beta / denom_A.clip(1e-20)
 
         t2, t4 = t**2, t**4
         f1 = t2 + A * t4
 
-        # H term structure: gamma * phi^3 * log(1 + beta/gamma * f1 / (1 + A*f1))
         denom_f2 = self.gamma * (1.0 + A * f1)
         fraction = (self.beta * f1) / denom_f2.clip(1e-20)
 
         return gamma_phi3 * jnp.log1p(fraction)
 
     def _pbe_inputs(self, density, grad_density):
-        """Compute reduced density variables for PBE correlation."""
-
         if _has_spin(density):
 
             rho_up, rho_dn = jnp.clip(density, 1e-20)
             rho_tot = rho_up + rho_dn
 
-            # Zeta: Clip inside (-1, 1) to prevent log divergences in derivatives
             zeta = (rho_up - rho_dn) / rho_tot
             zeta = jnp.clip(zeta, -1.0 + 1e-7, 1.0 - 1e-7)
 
-            # Wigner-Seitz radius: rs = (3 / (4*pi*n))^(1/3)
             rs = (3 / (4 * jnp.pi * rho_tot) + 1e-20) ** (1 / 3)
 
-            # Phi (Spin scaling)
             phi = ((1.0 + zeta) ** (2 / 3) + (1.0 - zeta) ** (2 / 3)) / 2
             phi = jnp.clip(phi, 1e-20)
 
@@ -222,7 +167,6 @@ class PBECorrelation(DensityFunctional):
         kf = (3 * jnp.pi**2 * rho_tot + 1e-20) ** (1 / 3)
         ks = jnp.sqrt(4 * kf / jnp.pi)
 
-        # t = |grad n| / (2 * phi * ks * n)
         grad_norm = jnp.sqrt(jnp.sum(grad_density**2, axis=-1) + 1e-30)
         denom_t = 2 * phi * ks * rho_tot
         t = grad_norm / denom_t.clip(1e-20)
@@ -230,8 +174,6 @@ class PBECorrelation(DensityFunctional):
         return rs, zeta, phi, t
 
     def __call__(self, density: ScalarFeature, grad_density: VectorFeature) -> Scalar:
-        """Calculate PBE correlation energy density."""
-
         rs, zeta, phi, t = self._pbe_inputs(density, grad_density)
         eps_pw = self._pw92_correlation(rs, zeta)
         H = self._pbe_correction(eps_pw, phi, t)
@@ -248,21 +190,7 @@ class PBE(XCFunctional):
     correlation: ClassVar[DensityFunctional] = PBECorrelation()
 
 
-# ---------------------------------------------------------------------------
-#  B88 exchange  (Becke, Phys. Rev. A 38, 3098 (1988))
-# ---------------------------------------------------------------------------
-
-
 class B88Exchange(DensityFunctional):
-    """Becke 1988 GGA exchange.
-
-    Per spin channel:
-        ε_x^{B88,σ}(ρ_σ, |∇ρ_σ|) =
-            -C_σ ρ_σ^{1/3}
-            - β ρ_σ^{1/3} x_σ^2 / (1 + 6 β x_σ sinh^{-1}(x_σ))
-    with x_σ = |∇ρ_σ| / ρ_σ^{4/3}, β = 0.0042, C_σ = (3/4)(6/π)^{1/3}.
-    """
-
     name: ClassVar[str] = "B88"
     xc_type: ClassVar[str] = "GGA"
 
@@ -291,22 +219,10 @@ class B88Exchange(DensityFunctional):
             eps_dn = self._per_spin(n_dn, gn_dn)
             return (n_up / n_tot) * eps_up + (n_dn / n_tot) * eps_dn
         grad_norm = jnp.linalg.norm(grad_density + 1e-30, axis=-1)
-        # Closed shell: ρ_σ = ρ/2, |∇ρ_σ| = |∇ρ|/2
         return self._per_spin(density / 2, grad_norm / 2)
 
 
-# ---------------------------------------------------------------------------
-#  VWN5 correlation  (Vosko-Wilk-Nusair, Can. J. Phys. 58, 1200 (1980), fit V)
-# ---------------------------------------------------------------------------
-
-
 def _vwn5_branch(x, A, b, c, x0):
-    """VWN5 branch function (paramagnetic, ferromagnetic, or spin stiffness).
-
-    ε_c = A [ ln(x²/X(x)) + 2b/Q · arctan(Q/(2x+b))
-              - b x₀/X(x₀) · ( ln((x-x₀)²/X(x)) + 2(b+2x₀)/Q · arctan(Q/(2x+b)) ) ]
-    with X(x) = x² + b x + c, Q = sqrt(4c - b²), x = √r_s.
-    """
     X_x = x * x + b * x + c
     X_x0 = x0 * x0 + b * x0 + c
     Q = jnp.sqrt(4.0 * c - b * b)
@@ -322,28 +238,22 @@ def _vwn5_branch(x, A, b, c, x0):
 
 
 class VWN5Correlation(DensityFunctional):
-    """VWN5 LDA correlation (parameterization V from VWN 1980)."""
-
     name: ClassVar[str] = "VWN5"
     xc_type: ClassVar[str] = "LDA"
 
-    # Paramagnetic parameters (in Hartree).
     A_p: ClassVar[float] = 0.0310907
     b_p: ClassVar[float] = 3.72744
     c_p: ClassVar[float] = 12.9352
     x0_p: ClassVar[float] = -0.10498
-    # Ferromagnetic
     A_f: ClassVar[float] = 0.01554535
     b_f: ClassVar[float] = 7.06042
     c_f: ClassVar[float] = 18.0578
     x0_f: ClassVar[float] = -0.32500
-    # Spin stiffness (alpha_c)
-    A_a: ClassVar[float] = -1.0 / (6.0 * math.pi ** 2)  # = -0.01688685
+    A_a: ClassVar[float] = -1.0 / (6.0 * math.pi ** 2)
     b_a: ClassVar[float] = 1.13107
     c_a: ClassVar[float] = 13.0045
     x0_a: ClassVar[float] = -0.0047584
 
-    # Spin interpolation
     fz20: ClassVar[float] = 1.709920934161365617563962776245
 
     def _unpolarized(self, density: ScalarFeature) -> Scalar:
@@ -375,22 +285,13 @@ class VWN5Correlation(DensityFunctional):
 
 
 class VWN_RPACorrelation(DensityFunctional):
-    """VWN_RPA (parameterization III / RPA) LDA correlation.
-
-    Same closed form as VWN5 but with different paramagnetic parameters.
-    This is what libxc calls ``vwn_rpa`` (aka VWN3) and is the correlation
-    component of Gaussian/libxc's default ``b3lyp`` functional.
-    """
-
     name: ClassVar[str] = "VWN_RPA"
     xc_type: ClassVar[str] = "LDA"
 
-    # Paramagnetic (VWN RPA, table 5 parameters).
     A_p: ClassVar[float] = 0.0310907
     b_p: ClassVar[float] = 13.0720
     c_p: ClassVar[float] = 42.7198
     x0_p: ClassVar[float] = -0.409286
-    # Ferromagnetic (VWN RPA)
     A_f: ClassVar[float] = 0.01554535
     b_f: ClassVar[float] = 20.1231
     c_f: ClassVar[float] = 101.578
@@ -404,9 +305,6 @@ class VWN_RPACorrelation(DensityFunctional):
 
     def __call__(self, density: ScalarFeature, *args) -> Scalar:
         if _has_spin(density):
-            # VWN3 (RPA) spin interpolation: ε_p + (ε_f − ε_p) f(ζ). Unlike VWN5,
-            # the RPA form uses the simple para→ferro interpolation with no
-            # spin-stiffness term (matches libxc LDA_C_VWN_RPA, B3LYP's correlation).
             n_up, n_dn = jnp.unstack(density, axis=-1)
             n_tot = jnp.clip(n_up + n_dn, 1e-20)
             zeta = jnp.clip((n_up - n_dn) / n_tot, -1.0 + 1e-7, 1.0 - 1e-7)
@@ -420,26 +318,7 @@ class VWN_RPACorrelation(DensityFunctional):
         return self._unpolarized(density)
 
 
-# ---------------------------------------------------------------------------
-#  LYP correlation  (Lee, Yang, Parr, PRB 37, 785 (1988); Miehlich form)
-# ---------------------------------------------------------------------------
-
-
 class LYPCorrelation(DensityFunctional):
-    """LYP GGA correlation energy density.
-
-    Closed-shell expression (ρ_↑ = ρ_↓ = ρ/2) from Miehlich et al. (1989):
-
-        ε_c^LYP = -a · g(ρ)
-                 - a·b·ω(ρ) · [ 2^{11/3} C_F · (ρ/2)^{8/3}/ρ
-                                + (1/36) · (47 - 7 δ) · γ/ρ
-                                - (5/4) · (γ_↑↑ + γ_↓↓) · (1/ρ)   (γ_σσ = |∇ρ_σ|² = γ/4)
-                                - ... ]
-
-    The exact algebraic form has been re-derived for ρ_↑ = ρ_↓ = ρ/2 and
-    validated against ``pyscf.dft.libxc.eval_xc(',LYP', ...)``.
-    """
-
     name: ClassVar[str] = "LYP"
     xc_type: ClassVar[str] = "GGA"
 
@@ -447,22 +326,10 @@ class LYPCorrelation(DensityFunctional):
     b: ClassVar[float] = 0.132
     c: ClassVar[float] = 0.2533
     d: ClassVar[float] = 0.349
-    # Thomas-Fermi kinetic coefficient: C_F = (3/10)(3π²)^(2/3)
     C_F: ClassVar[float] = 0.3 * (3.0 * math.pi ** 2) ** (2 / 3)
 
     @staticmethod
     def _closed_shell(rho: ScalarFeature, gamma: ScalarFeature) -> Scalar:
-        """Closed-shell LYP energy density per electron.
-
-        Derived for ρ_↑ = ρ_↓ = ρ/2 by substituting into the Miehlich 1989 form
-        of LYP (|∇ρ_σ|² = γ/4, ρ_σ = ρ/2). After collecting terms:
-
-            ε_c^LYP = -a·g - a·b·ω·ρ · ( C_F · ρ^{8/3}  -  γ·(3 + 7δ)/72 )
-
-        g = 1/(1 + d ρ^{-1/3})
-        ω = e^{-c ρ^{-1/3}} · g · ρ^{-11/3}
-        δ = c ρ^{-1/3} + d ρ^{-1/3} · g
-        """
         a, b, c, d = LYPCorrelation.a, LYPCorrelation.b, LYPCorrelation.c, LYPCorrelation.d
         C_F = LYPCorrelation.C_F
 
@@ -479,11 +346,6 @@ class LYPCorrelation(DensityFunctional):
 
     @staticmethod
     def _open_shell(n_up, n_dn, gaa, gbb, gab) -> Scalar:
-        """Open-shell LYP energy density per electron (Miehlich et al. 1989).
-
-        γ_σσ' = ∇ρ_σ·∇ρ_σ'; |∇ρ|² = γ_aa + 2γ_ab + γ_bb. Validated against
-        ``pyscf.dft.libxc.eval_xc('GGA_C_LYP', …, spin=1)`` to machine precision.
-        """
         a, b, c, d = LYPCorrelation.a, LYPCorrelation.b, LYPCorrelation.c, LYPCorrelation.d
         C_F = LYPCorrelation.C_F
         ra = jnp.clip(n_up, 1e-20)
@@ -511,18 +373,13 @@ class LYPCorrelation(DensityFunctional):
     def __call__(self, density: ScalarFeature, grad_density: VectorFeature) -> Scalar:
         if _has_spin(density):
             n_up, n_dn = jnp.unstack(density, axis=-1)
-            ga, gb = grad_density[:, 0], grad_density[:, 1]     # ∇ρ_a, ∇ρ_b
+            ga, gb = grad_density[:, 0], grad_density[:, 1]
             gaa = jnp.sum(ga * ga)
             gbb = jnp.sum(gb * gb)
             gab = jnp.sum(ga * gb)
             return self._open_shell(n_up, n_dn, gaa, gbb, gab)
         grad_norm_sq = jnp.sum(grad_density ** 2, axis=-1)
         return self._closed_shell(density, grad_norm_sq)
-
-
-# ---------------------------------------------------------------------------
-#  B3LYP  (Becke 1993 three-parameter exchange-correlation)
-# ---------------------------------------------------------------------------
 
 
 class B3LYP(XCFunctional):
@@ -536,13 +393,11 @@ class B3LYP(XCFunctional):
     xc_type: ClassVar[str] = "GGA"
     hf_coeff: ClassVar[float] = 0.20
 
-    ax: ClassVar[float] = 0.08   # Slater exchange mix
-    bx: ClassVar[float] = 0.72   # B88 exchange mix
-    ac: ClassVar[float] = 0.19   # VWN_RPA correlation mix
-    bc: ClassVar[float] = 0.81   # LYP correlation mix
+    ax: ClassVar[float] = 0.08
+    bx: ClassVar[float] = 0.72
+    ac: ClassVar[float] = 0.19
+    bc: ClassVar[float] = 0.81
 
-    # Stored as ClassVar so XCFunctional's interface is satisfied but only used
-    # via the weighted __call__ below.
     exchange: ClassVar[DensityFunctional] = B88Exchange()
     correlation: ClassVar[DensityFunctional] = LYPCorrelation()
 
@@ -562,11 +417,6 @@ class B3LYP(XCFunctional):
             + self.ac * eps_vwn
             + self.bc * eps_lyp
         )
-
-
-# ---------------------------------------------------------------------------
-#  LDA (Slater exchange + VWN5 correlation, "SVWN5") and PBE0 hybrid
-# ---------------------------------------------------------------------------
 
 
 class LDA(XCFunctional):
@@ -596,23 +446,7 @@ class PBE0(XCFunctional):
         )
 
 
-# ---------------------------------------------------------------------------
-#  Range-separated hybrids: erf attenuation, PW92, SR-B88 (ITYH), B97 series
-# ---------------------------------------------------------------------------
-
-
 def _erf_attenuation(a: Scalar) -> Scalar:
-    """Short-range fraction ``F(a)`` of an erfc-attenuated exchange hole.
-
-    ``F(a) = 1 - (8/3)·a·[√π·erf(1/2a) - 3a + 4a³ + (2a - 4a³)·e^{-1/(4a²)}]``
-    (Gill/Adamson; the common kernel of SR-LDA exchange and the ITYH SR-GGA
-    scheme). The direct form loses ~a⁶ digits to cancellation as a grows, so
-    beyond ``a = 8`` the asymptote ``F → 1/(36a²)`` takes over (relative
-    switch error ~1e-4 there, in a region reached only by masked ρ→0 points).
-    Both branches are evaluated clamped to their own region so the unused
-    branch cannot inject NaNs through autodiff (the boys.py double-``where``
-    pattern).
-    """
     a = jnp.clip(a, 1e-10)
     a_small = jnp.minimum(a, 8.0)
     direct = 1.0 - (8.0 / 3.0) * a_small * (
@@ -627,14 +461,6 @@ def _erf_attenuation(a: Scalar) -> Scalar:
 
 
 class PW92Correlation(DensityFunctional):
-    """Perdew-Wang 1992 LSDA correlation (the B97 family's LSDA backbone).
-
-    ``ε_c(r_s, ζ) = ε_0 - α_c·f(ζ)/f''(0)·(1-ζ⁴) + (ε_1-ε_0)·f(ζ)·ζ⁴`` with
-    the three G-function fits of PW92 (the parameters fit −α_c, hence the
-    sign). Validated against ``libxc LDA_C_PW`` to ~4e-10 (libxc carries one
-    more digit on the A constants).
-    """
-
     name: ClassVar[str] = "PW92"
     xc_type: ClassVar[str] = "LDA"
 
@@ -644,15 +470,11 @@ class PW92Correlation(DensityFunctional):
         den = 2.0 * A * (b1 * srs + b2 * rs + b3 * rs * srs + b4 * rs * rs)
         return -2.0 * A * (1.0 + a1 * rs) * jnp.log1p(1.0 / jnp.clip(den, 1e-30))
 
-    # The published PW92 A constants, and libxc's "modified" set carrying one
-    # more digit (lda_c_pw_modified_params); the B97M-V family is defined on
-    # the modified backbone, the B97 GGA family on the original.
     A_ORIG: ClassVar[tuple] = (0.031091, 0.015545, 0.016887)
     A_MOD: ClassVar[tuple] = (0.0310907, 0.01554535, 0.0168869)
 
     @staticmethod
     def eps(rho_a: Scalar, rho_b: Scalar, a: tuple | None = None) -> Scalar:
-        """ε_c per electron for one (ρ_α, ρ_β) point."""
         A0, A1, A2 = PW92Correlation.A_ORIG if a is None else a
         ra = jnp.clip(rho_a, 0.0)
         rb = jnp.clip(rho_b, 0.0)
@@ -676,14 +498,6 @@ class PW92Correlation(DensityFunctional):
 
 
 class ITYHB88Exchange(DensityFunctional):
-    """Short-range B88 exchange via the ITYH scheme at ω = 0.33 (CAM-B3LYP).
-
-    Per spin: ``ε_x^{sr} = ε_x^{B88}·F(a_σ)`` with the GGA-adapted momentum
-    ``a_σ = ω·√K_σ / (6√π·ρ_σ^{1/3})``, ``K_σ = -2·ε_x^{B88}/ρ_σ^{1/3}``
-    (Iikura-Tsuneda-Yanai-Hirao 2001). Matches ``libxc GGA_X_ITYH`` at
-    ω = 0.33 to machine precision.
-    """
-
     name: ClassVar[str] = "ITYH-B88"
     xc_type: ClassVar[str] = "GGA"
     omega: ClassVar[float] = 0.33
@@ -691,7 +505,7 @@ class ITYHB88Exchange(DensityFunctional):
     @classmethod
     def _per_spin(cls, rho_s, grad_norm_s):
         rho_s = jnp.clip(rho_s, 1e-20)
-        eps = B88Exchange._per_spin(rho_s, grad_norm_s)      # < 0
+        eps = B88Exchange._per_spin(rho_s, grad_norm_s)
         K = jnp.clip(-2.0 * eps / rho_s ** (1.0 / 3.0), 1e-20)
         a = cls.omega * jnp.sqrt(K) / (6.0 * jnp.sqrt(jnp.pi) * rho_s ** (1.0 / 3.0))
         return eps * _erf_attenuation(a)
@@ -760,15 +574,6 @@ class LCBLYP(XCFunctional):
 
 
 class _B97Pieces:
-    """Shared machinery for the wB97X power series (Chai-Head-Gordon 2008).
-
-    Every piece is an *energy density* per spin assembled from
-    ``u = γ·s²/(1+γ·s²)`` enhancement series over the SR-LDA exchange and the
-    Stoll-partitioned PW92 correlation. The series coefficients below were
-    recovered from ``libxc HYB_GGA_XC_WB97X`` by exact linear fit
-    (residual ~1e-10) and equal the published wB97X parameters.
-    """
-
     GAMMA_X: ClassVar[float] = 0.004
     GAMMA_SS: ClassVar[float] = 0.2
     GAMMA_AB: ClassVar[float] = 0.006
@@ -788,7 +593,6 @@ class _B97Pieces:
 
     @staticmethod
     def ex_sr_lda_density(rho_s, omega):
-        """SR-LDA exchange energy *density* of one spin channel."""
         rho_s = jnp.clip(rho_s, 1e-20)
         kF = (6.0 * jnp.pi**2 * rho_s) ** (1.0 / 3.0)
         C_sigma = (3.0 / 4.0) * (6.0 / jnp.pi) ** (1.0 / 3.0)
@@ -816,13 +620,11 @@ class WB97X(XCFunctional):
     CSS: ClassVar[tuple] = (1.0, -4.33879, 18.2308, -31.7430, 17.2901)
     CAB: ClassVar[tuple] = (1.0, 2.37031, -11.3995, 6.58405, -3.78132)
 
-    # Interface stubs (assembly happens in the weighted __call__ below).
     exchange: ClassVar[DensityFunctional] = LDAExchange()
     correlation: ClassVar[DensityFunctional] = PW92Correlation()
 
     @classmethod
     def _energy_density(cls, rho_a, rho_b, gn_a, gn_b):
-        """Total XC energy density from per-spin (ρ, |∇ρ|)."""
         P = _B97Pieces
         rho_a = jnp.clip(rho_a, 1e-20)
         rho_b = jnp.clip(rho_b, 1e-20)
@@ -835,8 +637,6 @@ class WB97X(XCFunctional):
             P.u(s2b, P.GAMMA_X), cls.CX
         )
 
-        # Stoll partition of PW92: e_c^{σσ} = e_c(ρ_σ, 0); the αβ part is the
-        # remainder. Energy densities (ρ·ε).
         ec_aa = rho_a * PW92Correlation.eps(rho_a, jnp.zeros_like(rho_a))
         ec_bb = rho_b * PW92Correlation.eps(rho_b, jnp.zeros_like(rho_b))
         ec_tot = (rho_a + rho_b) * PW92Correlation.eps(rho_a, rho_b)
@@ -922,20 +722,17 @@ class WB97MV(XCFunctional):
     nlc_b: ClassVar[float] = 6.0
     nlc_c: ClassVar[float] = 0.01
 
-    # (coefficient, w power, u power); libxc par_wb97m_v order.
     CX: ClassVar[tuple] = ((0.85, 0, 0), (1.007, 0, 1), (0.259, 1, 0))
     CSS: ClassVar[tuple] = ((0.443, 0, 0), (-1.437, 0, 4), (-4.535, 1, 0),
                             (-3.39, 2, 0), (4.278, 4, 3))
     COS: ClassVar[tuple] = ((1.0, 0, 0), (1.358, 1, 0), (2.924, 2, 0),
                             (-8.812, 2, 1), (-1.39, 6, 0), (9.142, 6, 1))
 
-    # Interface stubs (assembly happens in the weighted __call__ below).
     exchange: ClassVar[DensityFunctional] = LDAExchange()
     correlation: ClassVar[DensityFunctional] = PW92Correlation()
 
     @staticmethod
     def _wg(ts):
-        """``w = (τ^unif − τ)/(τ^unif + τ)`` from the reduced ``t = τ_σ/ρ_σ^{5/3}``."""
         return (_K_FACTOR_C - ts) / (_K_FACTOR_C + ts)
 
     @staticmethod
@@ -947,7 +744,6 @@ class WB97MV(XCFunctional):
 
     @classmethod
     def _energy_density(cls, rho_a, rho_b, gn_a, gn_b, tau_a, tau_b):
-        """Total XC energy density from per-spin (ρ, |∇ρ|, τ)."""
         P = _B97Pieces
         rho_a = jnp.clip(rho_a, 1e-20)
         rho_b = jnp.clip(rho_b, 1e-20)
@@ -963,9 +759,6 @@ class WB97MV(XCFunctional):
             w_b, P.u(s2b, P.GAMMA_X), cls.CX
         )
 
-        # Stoll partition of PW92 (energy densities ρ·ε) on the *modified*
-        # constants: libxc's b97mv defines the B97M-V family on
-        # lda_c_pw_modified_params (the GGA B97s use the original set).
         AM = PW92Correlation.A_MOD
         ec_aa = rho_a * PW92Correlation.eps(rho_a, jnp.zeros_like(rho_a), AM)
         ec_bb = rho_b * PW92Correlation.eps(rho_b, jnp.zeros_like(rho_b), AM)
@@ -976,8 +769,6 @@ class WB97MV(XCFunctional):
             w_a, P.u(s2a, P.GAMMA_SS), cls.CSS
         ) + ec_bb * cls._series2(w_b, P.u(s2b, P.GAMMA_SS), cls.CSS)
 
-        # Opposite spin: p-weighted average of the channels' w, mean-square
-        # gradient variable (libxc b97mv_wx_os / sqrt((x0²+x1²)/2)).
         p_a = ts_a / (_K_FACTOR_C + ts_a)
         p_b = ts_b / (_K_FACTOR_C + ts_b)
         w_os = (p_a * w_b + p_b * w_a) / jnp.clip(p_a + p_b, 1e-30)
@@ -1003,15 +794,6 @@ class WB97MV(XCFunctional):
         return e_dens / jnp.clip(density, 1e-20)
 
 
-# ---------------------------------------------------------------------------
-#  r2SCAN meta-GGA (Furness, Kaplan, Ning, Perdew, Sun, JPCL 11, 8208 (2020))
-# ---------------------------------------------------------------------------
-#
-# Ported from the libxc maple sources (mgga_x_r2scan.mpl / mgga_c_r2scan.mpl
-# and their SCAN/rSCAN includes); every branch validated against libxc via
-# PySCF to machine precision (exchange ~4e-16, correlation ~1e-16, closed and
-# spin-polarized). Note r2SCAN uses the *modified* PW92 constants.
-
 _R2S_ETA = 0.001
 _R2S_DP2 = 0.361
 _R2S_K1 = 0.065
@@ -1019,12 +801,11 @@ _R2S_H0X = 1.174
 _R2S_A1 = 4.9479
 _R2S_C1X, _R2S_C2X, _R2S_DXP = 0.667, 0.8, 1.24
 _R2S_C1C, _R2S_C2C, _R2S_DCP = 0.64, 1.5, 0.7
-# rSCAN switching polynomials, highest order first (c7 ... c0).
 _R2S_FX = (-0.023185843322, 0.234528941479, -0.887998041597, 1.451297044490,
            -0.663086601049, -0.4445555, -0.667, 1.0)
 _R2S_FC = (-0.051848879792, 0.516884468372, -1.915710236206, 3.061560252175,
            -1.535685604549, -0.4352, -0.64, 1.0)
-_R2S_GAMMA = 0.031090690869654895  # (1 - ln 2)/pi^2
+_R2S_GAMMA = 0.031090690869654895
 _R2S_B1C, _R2S_B2C, _R2S_B3C = 0.0285764, 0.0889, 0.125541
 _R2S_CHI_INF = 0.12802585262625815
 _R2S_G_CNST = 2.363
@@ -1035,12 +816,6 @@ _MU_GE = 10.0 / 81.0
 
 
 def _r2scan_f_alpha(a, ff, c1, c2, d):
-    """r2SCAN interpolation: exp (a<=0), 7th-order poly (0<a<=2.5), decay.
-
-    Each branch is evaluated clamped to its own region (the boys.py
-    double-``where`` pattern), so autodiff never sees the singular a -> 1
-    of the unused exponential branches.
-    """
     a_neg = jnp.minimum(a, 0.0)
     neg = jnp.exp(-c1 * a_neg / (1.0 - a_neg))
     small = jnp.polyval(jnp.asarray(ff), jnp.clip(a, 0.0, 2.5))
@@ -1050,8 +825,6 @@ def _r2scan_f_alpha(a, ff, c1, c2, d):
 
 
 class R2SCANExchange(DensityFunctional):
-    """r2SCAN exchange (spin-scaled per channel)."""
-
     name: ClassVar[str] = "r2SCAN-X"
     xc_type: ClassVar[str] = "MGGA"
 
@@ -1064,7 +837,6 @@ class R2SCANExchange(DensityFunctional):
         alpha = (ts - xs * xs / 8.0) / (_K_FACTOR_C + _R2S_ETA * xs * xs / 8.0)
 
         Cn = 20.0 / 27.0 + _R2S_ETA * 5.0 / 3.0
-        # C2 = -sum_i i*c_i * (1 - h0x) over the switching polynomial.
         idx = jnp.arange(1, 9)
         C2 = -jnp.sum(idx * jnp.asarray(_R2S_FX)[8 - idx]) * (1.0 - _R2S_H0X)
         y = (Cn * C2 * jnp.exp(-(p * p) / _R2S_DP2**4) + _MU_GE) * p
@@ -1094,8 +866,6 @@ class R2SCANExchange(DensityFunctional):
 
 
 class R2SCANCorrelation(DensityFunctional):
-    """r2SCAN correlation (built on the modified-PW92 LSDA)."""
-
     name: ClassVar[str] = "r2SCAN-C"
     xc_type: ClassVar[str] = "MGGA"
 
@@ -1150,8 +920,6 @@ class R2SCANCorrelation(DensityFunctional):
         beta = 0.066724550603149220 * (1.0 + 0.1 * rs) / (1.0 + 0.1778 * rs)
         y = beta * t * t / (_R2S_GAMMA * jnp.clip(w1, 1e-30))
 
-        # Single-water-regime correction Delta-y (eq S34); the rs-derivatives
-        # of the two LSDA limits come from autodiff.
         idx = jnp.arange(1, 8)
         dfc2 = jnp.sum(idx * jnp.asarray(_R2S_FC)[7 - idx])
         dz = ((1.0 + zeta) ** (5.0 / 3.0) + (1.0 - zeta) ** (5.0 / 3.0)) / 2.0
@@ -1186,7 +954,6 @@ class R2SCANCorrelation(DensityFunctional):
         ts1 = jnp.clip(tau_b, 0.0) / jnp.clip(rho_b, 1e-20) ** (5.0 / 3.0)
 
         def t_total(a, b):
-            # (ts0 (1+z)^{5/3} + ts1 (1-z)^{5/3}) / 2^{5/3}: tau/rho^{5/3}
             return (
                 (1.0 + zeta) ** (5.0 / 3.0) * a
                 + (1.0 - zeta) ** (5.0 / 3.0) * b
@@ -1225,10 +992,6 @@ class R2SCAN(XCFunctional):
             density, grad_density, tau
         )
 
-
-# ---------------------------------------------------------------------------
-# String registry: functional("wb97x-v") instead of importing the class
-# ---------------------------------------------------------------------------
 
 _FUNCTIONALS: dict[str, type[XCFunctional]] = {
     "lda": LDA, "svwn": LDA, "svwn5": LDA,

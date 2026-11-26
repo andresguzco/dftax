@@ -1,11 +1,3 @@
-"""Range-separated hybrids: attenuated integrals, CAM-B3LYP, wB97X, and the
-long-range-corrected wB97 and LC-BLYP.
-
-Layered oracles: the erf-attenuated ERIs against PySCF ``with_range_coulomb``
-(machine precision), the functional forms pointwise against libxc, and the
-full SCF against PySCF RKS/UKS on matched grids.
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -21,10 +13,6 @@ from dftax.integrals.eri4c import eri4c_matrix
 WATER = "O 0 0 0; H 0.7586 0 0.5043; H 0.7586 0 -0.5043"
 AUX = "def2-universal-jkfit"
 
-
-# ---------------------------------------------------------------------------
-# Attenuated integrals
-# ---------------------------------------------------------------------------
 
 @pytest.mark.pyscf
 def test_lr_eri4c_vs_pyscf_range_coulomb():
@@ -49,10 +37,6 @@ def test_lr_eri2c_vs_pyscf_range_coulomb():
         ref = mol.intor("int2c2e")
     assert np.abs(ours - ref).max() < 1e-11
 
-
-# ---------------------------------------------------------------------------
-# Functional forms (pointwise libxc oracles)
-# ---------------------------------------------------------------------------
 
 def _random_points(n=30, seed=2):
     rng = np.random.default_rng(seed)
@@ -112,8 +96,6 @@ def test_rsh_functionals_pointwise_vs_libxc(xc_obj, code):
 @pytest.mark.parametrize("xc_obj,code", [(WB97(), "hyb_gga_xc_wb97"),
                                          (LCBLYP(), "hyb_gga_xc_lc_blyp")])
 def test_lc_potentials_vs_libxc(xc_obj, code):
-    """v_ρ = ∂(ρε)/∂ρ and v_σ = ∂(ρε)/∂σ (σ = |∇ρ|²) by autodiff, closed
-    shell, against libxc."""
     from pyscf.dft import libxc
 
     rho, _, ga, _ = _random_points()
@@ -122,7 +104,7 @@ def test_lc_potentials_vs_libxc(xc_obj, code):
     e = lambda r, g: r * xc_obj(r, g)
     r, g = jnp.asarray(rho), jnp.asarray(ga)
     vr = jax.vmap(jax.grad(e, 0))(r, g)
-    vg = jax.vmap(jax.grad(e, 1))(r, g)                     # = 2 v_σ ∇ρ
+    vg = jax.vmap(jax.grad(e, 1))(r, g)
     vs = jnp.sum(vg * g, -1) / (2.0 * jnp.sum(g * g, -1))
     np.testing.assert_allclose(np.asarray(vr), vrho, rtol=1e-8, atol=1e-10)
     np.testing.assert_allclose(np.asarray(vs), vsigma, rtol=1e-8, atol=1e-10)
@@ -135,9 +117,6 @@ def test_lc_functionals_are_long_range_only():
         assert (xc.hf_coeff, xc.hf_coeff_lr, xc.omega) == (0.0, 1.0, omega)
     assert ITYHB88Exchange.omega == LCBLYP.omega
 
-# ---------------------------------------------------------------------------
-# Full SCF vs PySCF
-# ---------------------------------------------------------------------------
 
 @pytest.mark.pyscf
 @pytest.mark.parametrize("xc_obj,code", [(CAMB3LYP(), "camb3lyp"),
@@ -174,10 +153,6 @@ def test_rsh_uks_vs_pyscf():
     assert abs(res.e_tot - e_ref) < 5e-5
 
 
-# ---------------------------------------------------------------------------
-# Backend guards and DF consistency
-# ---------------------------------------------------------------------------
-
 def test_rsh_df_matches_exact_within_ri_error():
     mol = Molecule.from_xyz(WATER, "sto-3g")
     e_ex = scf(KS(mol, CAMB3LYP(), coulomb=exact())).e_tot
@@ -186,9 +161,6 @@ def test_rsh_df_matches_exact_within_ri_error():
 
 
 def test_rsh_rejects_streamed_exact():
-    # exact(stream=True) has no attenuated variant (a materialized alternative
-    # always exists at exact()-viable sizes); the streamed DF backend now
-    # supports RSH (see test_rsh_streamed_df_matches_materialized).
     mol = Molecule.from_xyz(WATER, "sto-3g")
     with pytest.raises(NotImplementedError, match="materialized"):
         KS(mol, CAMB3LYP(), coulomb=exact(stream=True))
@@ -196,10 +168,6 @@ def test_rsh_rejects_streamed_exact():
 
 @pytest.mark.float64
 def test_rsh_streamed_df_matches_materialized():
-    """Streamed long-range RI-K (attenuated 3-center recomputed on the fly
-    against the attenuated metric) matches the materialized attenuated
-    tensors: fixed-density two-electron energy to 1e-8, full CAM-B3LYP SCF to
-    the stopping tolerance. Both sides share the cartesian fit space."""
     mol = Molecule.from_xyz(WATER, "sto-3g")
     ks_mat = KS(mol, CAMB3LYP(), coulomb=df(AUX, spherical=False))
     res = scf(ks_mat)

@@ -1,10 +1,3 @@
-"""JAX-native D3(BJ) dispersion.
-
-Reference energies below were generated with tad-dftd3 0.6.0 (two-body,
-s9 = 0) by ``scripts/gen_d3_data.py``, the same tool the vendored tables come
-from; the implementation matched them to ~1e-16 at port time.
-"""
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -29,7 +22,7 @@ ETHANOL_XYZ = np.array([[-1.67619, 0.31561, -0.03213],
                         [1.28893, -1.92565, -1.76888],
                         [4.32570, 0.05669, 0.34016]])
 
-# (method, system) -> E_disp in Ha, from tad-dftd3 0.6.0.
+# tad-dftd3 0.6.0, two-body (s9 = 0), from scripts/gen_d3_data.py.
 REFS = {
     ("pbe", "water"): -3.583231066504e-04,
     ("pbe", "ethanol"): -4.263085396578e-03,
@@ -72,13 +65,12 @@ def test_ks_dispersion_shifts_total_by_e_disp():
     assert abs(float(ksd.e_disp) - REFS[("pbe", "water")]) < 1e-12
     r0, rd = scf(ks0), scf(ksd)
     assert abs((rd.e_tot - r0.e_tot) - REFS[("pbe", "water")]) < 1e-10
-    assert abs(rd.e_elec - r0.e_elec) < 1e-10       # e_elec excludes dispersion
+    assert abs(rd.e_elec - r0.e_elec) < 1e-10
 
 
 def test_method_resolution_and_errors():
     assert "pbe" in available_d3_methods()
     mol = Molecule(["O", "H", "H"], WATER_XYZ, "sto-3g")
-    # explicit method overrides the functional name
     ks = KS(mol, PBE(), coulomb=exact(), dispersion=d3bj("b3lyp"))
     assert abs(float(ks.e_disp) - REFS[("b3lyp", "water")]) < 1e-12
     from dftax.energy.xc import LDA
@@ -111,12 +103,7 @@ def test_forces_include_dispersion_gradient():
     assert abs(F[1, 2] - fd) < 1e-5
 
 
-# ATM three-body references: tad-dftd3 0.6.0 dispersion_atm with s9=1 and
-# rs9 = 4/3 in float64. tad's own signature default is a float32 tensor
-# (1.3333...) upcast at runtime, shifting its answer by ~5e-7 relative;
-# the published D3 rs9 is exactly 4/3, so the references pin the exact-
-# float64 evaluation, which this implementation matches to machine
-# precision. The term is independent of the BJ damping parameters.
+# tad-dftd3 0.6.0 dispersion_atm, s9 = 1, rs9 = 4/3 in float64.
 ATM_REFS = {
     "water": 1.788760012928768e-10,
     "ethanol": 2.710664747091920e-06,
@@ -129,7 +116,7 @@ def test_d3_atm_energy_vs_tad_dftd3(system):
 
     z, xyz = (WATER_Z, WATER_XYZ) if system == "water" else (ETHANOL_Z, ETHANOL_XYZ)
     e = float(d3_atm_energy(xyz, z))
-    assert e > 0.0                                    # ATM is repulsive
+    assert e > 0.0
     assert abs(e - ATM_REFS[system]) < 1e-14
 
 
@@ -158,6 +145,5 @@ def test_d3bj_atm_knob_adds_repulsive_term():
 
 
 def test_lc_wpbe_damping_is_the_published_set():
-    """simple-dftd3 assets/parameters.toml @ 84cb7cdd, [parameter.lcwpbe]
-    d3.bj (doi 10.1039/c0cp02984j): (s6, a1, s8, a2)."""
+    # simple-dftd3 parameters.toml @ 84cb7cdd, [parameter.lcwpbe] d3.bj (doi 10.1039/c0cp02984j)
     assert _d3_params("lc-wpbe") == (1.0, 0.3919, 1.8541, 5.0897)

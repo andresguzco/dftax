@@ -27,7 +27,6 @@ import numpy as np
 
 OUT = Path(__file__).resolve().parents[1] / "dftax" / "energy" / "data" / "d3bj.npz"
 
-# Published D3(BJ) parameters (s6, a1, s8, a2) per method (Grimme group tables).
 DAMPING = {
     "pbe":      (1.0, 0.4289, 0.7875, 4.4407),
     "pbe0":     (1.0, 0.4145, 1.2177, 4.8593),
@@ -49,21 +48,15 @@ def main() -> int:
     from tad_dftd3.data import R4R2
 
     ref = Reference(dtype=torch.float64)
-    c6 = ref.c6.numpy()                       # (104, 104, 7, 7)
-    cn = ref.cn.numpy()                       # (104, 7); -1 marks unused slots
+    c6 = ref.c6.numpy()
+    cn = ref.cn.numpy()
 
-    # sqrt(Q) table (R4R2() already returns sqrt-scaled values; see its doc).
     r4r2 = R4R2(dtype=torch.float64).numpy()
 
-    # D3 covalent radii (used by the CN counting function). tad-dftd3 routes
-    # these through tad_mctc; take exactly what its ncoord uses.
     from tad_mctc.data.radii import COV_D3
 
     rcov = COV_D3(dtype=torch.float64).numpy()
 
-    # Pairwise van-der-Waals radii: the ATM three-body damping radii
-    # (srvdw = rs9 * vdw in tad-dftd3's dispersion_atm; the driver gathers
-    # radii.VDW_PAIRWISE[zi, zj]).
     from tad_mctc.data.radii import VDW_PAIRWISE
 
     vdw = VDW_PAIRWISE(dtype=torch.float64).numpy()
@@ -77,7 +70,6 @@ def main() -> int:
     print(f"wrote {OUT}: c6{c6.shape} cn{cn.shape} r4r2{r4r2.shape} "
           f"rcov{rcov.shape} vdw{vdw.shape}")
 
-    # Reference energies for tests (two-body D3(BJ), no ATM: s9=0).
     systems = {
         "water": (
             torch.tensor([8, 1, 1]),
@@ -113,8 +105,6 @@ def main() -> int:
 
 
 def damping_only() -> int:
-    """``--damping``: only the damping table, ``methods``/``params`` of the vendored file rewritten from DAMPING and
-    every other table kept bit for bit (NumPy alone: no torch, no tad packages)."""
     with np.load(OUT) as t:
         tables = {k: t[k] for k in t.files}
     tables["methods"] = np.array(sorted(DAMPING))

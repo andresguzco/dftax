@@ -4,7 +4,7 @@ import pytest
 from pyscf import dft, gto
 
 from dftax.energy.xc import LDA
-from dftax import KS, exact, scf
+from dftax import KS, Molecule, becke, exact, fermi, scf
 
 
 @pytest.mark.pyscf
@@ -21,6 +21,7 @@ def test_rks_level_shift_invariant(water_mol):
     r1 = scf(ks, level_shift=0.5)
     assert r0.converged and r1.converged
     assert abs(r0.e_tot - r1.e_tot) < 1e-9, f"shift changed E: {r0.e_tot} vs {r1.e_tot}"
+    assert float(jnp.max(jnp.abs(r0.mo_energy - r1.mo_energy))) < 1e-5
 
 
 @pytest.mark.pyscf
@@ -42,3 +43,11 @@ def test_uks_level_shift_invariant():
     r1 = scf(ks, level_shift=0.5)
     assert r0.converged and r1.converged
     assert abs(r0.e_tot - r1.e_tot) < 1e-9, f"shift changed E: {r0.e_tot} vs {r1.e_tot}"
+    assert float(jnp.max(jnp.abs(r0.mo_energy - r1.mo_energy))) < 1e-5
+
+
+def test_level_shift_with_smearing_is_rejected():
+    mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.74", "sto-3g")
+    ks = KS(mol, LDA(), grid=becke(20, 50), coulomb=exact())
+    with pytest.raises(ValueError, match="smearing"):
+        scf(ks, smearing=fermi(), level_shift=0.2)

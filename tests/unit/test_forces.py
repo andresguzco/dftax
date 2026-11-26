@@ -307,3 +307,16 @@ class TestDensityFittingForces:
         with pytest.raises(NotImplementedError, match="smeared"):
             forces(mol, PBE0(), res, grid=becke(NR, LEB),
                    coulomb=df("sto-3g", chunk=6))
+
+    def test_streamed_df_forces_where_screening_switches_on(self, monkeypatch):
+        import dftax.ks.terms as terms
+
+        xc = LDA()
+        mol = Molecule.from_xyz("H 0 0 0; H 0 0 0.85", "sto-3g")
+        res = scf(KS(mol, xc, grid=becke(NR, LEB), coulomb=df(self.AUX)),
+                  e_tol=1e-10, d_tol=1e-8)
+        Zs = (res.mo_coeff[0][:, :1],)
+        F0 = forces(mol, xc, Zs, grid=becke(NR, LEB), coulomb=df(self.AUX, chunk=4))
+        monkeypatch.setattr(terms, "DF_SCREEN_AUTO_MIN_ATOMS", 1)
+        F1 = forces(mol, xc, Zs, grid=becke(NR, LEB), coulomb=df(self.AUX, chunk=4))
+        assert float(jnp.max(jnp.abs(F1 - F0))) < 1e-8

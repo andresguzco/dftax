@@ -174,7 +174,9 @@ def scf_batched(
                 return_atom_index=True, spherical=True,
             )
             aux_idx = jnp.asarray(a_idx)
-        if forces and df_chunk is not None and float(xc.hf_coeff) != 0.0:
+        if forces and df_chunk is not None and (
+                float(xc.hf_coeff) != 0.0
+                or float(getattr(xc, "hf_coeff_lr", 0.0)) != 0.0):
             raise ValueError(
                 "batched forces with a streamed hybrid RI-K have no geometry "
                 "gradients; use df(chunk=None) or exact()."
@@ -206,7 +208,7 @@ def scf_batched(
         spec = coulomb
         if aux_t is not None:
             aux_b = eqx.tree_at(lambda b: b.centers, aux_t, coords[aux_idx])
-            spec = df(aux_b, chunk=df_chunk)
+            spec = df(aux_b, chunk=df_chunk, screen=None)
         return KS(
             System(basis=basis, coords=coords, charges=charges,
                    nelec=nelec, spin=sys_spin),

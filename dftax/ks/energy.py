@@ -318,6 +318,11 @@ def _build_integrals_shared(basis, coords, charges, grid_coords, aux_basis,
     return (S, T + V, ao, dao, e_nn, None, int3c, None, None, int3c_lr, None)
 
 
+def _traced(*trees):
+    return any(isinstance(x, jax.core.Tracer)
+               for x in jax.tree_util.tree_leaves(trees))
+
+
 _FUSED_BUILDS: dict = {}
 _FUSED_POOL = None
 _SEEN: set = set()
@@ -542,7 +547,7 @@ class KS(eqx.Module):
         whiten = False
         if is_df:
             whitenable = (spec.chunk is None and not shard_df
-                          and not isinstance(coords, jax.core.Tracer))
+                          and not _traced(coords, basis, aux_basis))
             whiten = whitenable if spec.whiten is None else spec.whiten
             if whiten and not whitenable:
                 raise ValueError(
@@ -592,7 +597,7 @@ class KS(eqx.Module):
             else None
         )
         bucketed = (os.environ.get("DFTAX_BUCKETED", "1") != "0" and whiten
-                    and devices is None)
+                    and devices is None and not _traced(charges, grid_coords))
         fused_args = (
             basis, coords, charges, grid_coords, aux_basis,
             devices is None and grid_chunk is None,

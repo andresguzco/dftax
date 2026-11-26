@@ -103,8 +103,18 @@ def extract_basis_data(mol: "object") -> BasisData:
 
     Returns:
         Its :class:`BasisData`, spherical when ``mol.cart`` is false.
+
+    Raises:
+        NotImplementedError: ``mol`` has effective core potentials, which
+            dftax does not support.
     """
     from pyscf import gto as pyscf_gto
+
+    if len(getattr(mol, "_ecpbas", ())) > 0:
+        raise NotImplementedError(
+            "the molecule uses effective core potentials; dftax has no core "
+            "potentials, so its atoms would run with the wrong Hamiltonian."
+        )
 
     atom_coords = mol.atom_coords()
     max_prim = max(mol.bas_nprim(i) for i in range(mol.nbas))

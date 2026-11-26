@@ -17,7 +17,7 @@ from dftax.ks.energy import KS, System
 from dftax.ks.scf import scf
 from dftax.ks.forces import forces
 from dftax.ks.terms import DFSpec, ExactSpec, exact
-from dftax.system.molecule import Molecule
+from dftax.system.molecule import ANGSTROM_TO_BOHR, Molecule
 
 AU_TO_DEBYE = 2.5417464519
 AMU_TO_ME = 1822.888486209
@@ -275,7 +275,7 @@ def ir_spectrum(mol, xc, *, step: float = 1e-3, origin=(0.0, 0.0, 0.0),
     g = _becke_spec(grid)
     H, dmu = _fd_force_dipole_derivs(mol, xc, step, origin, g, scf_kw, coulomb=coulomb)
     freq, V, m3 = _harmonic(H, mol)
-    dmu_dQ = dmu @ (V / np.sqrt(m3)[:, None])
+    dmu_dQ = dmu @ (V / np.sqrt(m3 / AMU_TO_ME)[:, None])
     intens = IR_AU_TO_KM_MOL * np.sum(dmu_dQ ** 2, axis=0)
     return IRSpectrum(frequencies=jnp.asarray(freq), intensities=jnp.asarray(intens))
 
@@ -284,8 +284,8 @@ def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
                    origin=(0.0, 0.0, 0.0), grid: Becke | None = None,
                    coulomb: ExactSpec | DFSpec | None = None,
                    **scf_kw) -> RamanSpectrum:
-    """Harmonic Raman activities (Å⁴/amu, up to the usual constant) from the
-    polarizability derivatives ``dα/dQ``. Expensive: a polarizability (field FD)
+    """Harmonic Raman activities (Å⁴/amu) from the polarizability
+    derivatives ``dα/dQ``. Expensive: a polarizability (field FD)
     at every ±Cartesian displacement (``O(N)`` Hessians' worth of work)."""
     coords0 = np.asarray(mol.atom_coords())
     N = len(coords0); n = 3 * N
@@ -306,7 +306,7 @@ def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
                 grid=g, coulomb=coulomb, **scf_kw))
             dalpha[3 * a + k] = (ap - am) / (2.0 * step)
 
-    L = V / np.sqrt(m3)[:, None]
+    L = V / np.sqrt(m3 / AMU_TO_ME)[:, None]
     dadq = np.einsum("cij,ck->kij", dalpha, L)
     abar = np.trace(dadq, axis1=1, axis2=2) / 3.0
     g2 = 0.5 * (
@@ -315,7 +315,7 @@ def raman_spectrum(mol, xc, *, step: float = 1e-2, field: float = 2e-3,
         + (dadq[:, 2, 2] - dadq[:, 0, 0]) ** 2
         + 6.0 * (dadq[:, 0, 1] ** 2 + dadq[:, 1, 2] ** 2 + dadq[:, 0, 2] ** 2)
     )
-    activity = 45.0 * abar ** 2 + 7.0 * g2
+    activity = (45.0 * abar ** 2 + 7.0 * g2) / ANGSTROM_TO_BOHR ** 4
     return RamanSpectrum(frequencies=jnp.asarray(freq), activities=jnp.asarray(activity))
 
 

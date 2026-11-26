@@ -175,6 +175,16 @@ class TestResponse:
                        for a in range(len(ch0))])
         assert np.max(np.abs(dEdZ - fd)) < 1e-5
 
+    def test_alchemical_df_in_a_fresh_process(self, monkeypatch):
+        import dftax.ks.energy as energy
+
+        monkeypatch.setattr(energy, "_FUSED_BUILDS", {})
+        monkeypatch.setattr(energy, "_SEEN", set())
+        mol = Molecule.from_xyz(WATER, "sto-3g")
+        d = np.asarray(alchemical_deriv(
+            mol, PBE(), grid=becke(35, 50), coulomb=df(), **TOL))
+        assert d.shape == (3,) and np.all(np.isfinite(d))
+
 
 @pytest.mark.float64
 class TestAnalyticHessian:
@@ -295,3 +305,42 @@ class TestVibrationalSpectra:
         assert np.all(np.isfinite(act))
         assert np.all(act > -1e-10)
         assert act.max() > 0
+
+    @pytest.mark.slow
+    def test_ir_intensity_of_a_diatomic(self):
+        from dftax.ks.properties import IR_AU_TO_KM_MOL, _atomic_masses
+        from dftax.system.molecule import ANGSTROM_TO_BOHR
+
+        g, r, h = becke(35, 50), 0.92, 1e-3
+        ir = ir_spectrum(Molecule.from_xyz(f"H 0 0 0; F 0 0 {r}", "sto-3g"),
+                         PBE(), grid=g, **TOL)
+        mu = [float(dipole(Molecule.from_xyz(f"H 0 0 0; F 0 0 {r + s}", "sto-3g"),
+                           PBE(), grid=g, **TOL)[2]) for s in (h, -h)]
+        dmu = (mu[0] - mu[1]) / (2 * h * ANGSTROM_TO_BOHR)
+        m = _atomic_masses(["H", "F"])
+        expected = IR_AU_TO_KM_MOL * dmu ** 2 * (m[0] + m[1]) / (m[0] * m[1])
+        stretch = int(np.argmax(np.asarray(ir.frequencies)))
+        assert abs(float(ir.intensities[stretch]) / expected - 1.0) < 1e-3
+
+    @pytest.mark.slow
+    def test_raman_activity_of_a_diatomic(self):
+        from dftax.ks.properties import _atomic_masses
+        from dftax.system.molecule import ANGSTROM_TO_BOHR
+
+        g, r = becke(20, 50), 0.74
+        h = 1e-2 / ANGSTROM_TO_BOHR
+        rs = raman_spectrum(Molecule.from_xyz(f"H 0 0 0; H 0 0 {r}", "sto-3g"),
+                            PBE(), grid=g, **TOL)
+        a = [np.asarray(polarizability(
+            Molecule.from_xyz(f"H 0 0 0; H 0 0 {r + s}", "sto-3g"),
+            PBE(), grid=g, **TOL)) for s in (h, -h)]
+        m = _atomic_masses(["H", "H"])
+        dq = (a[0] - a[1]) / (2 * h * ANGSTROM_TO_BOHR) / np.sqrt(
+            m[0] * m[1] / (m[0] + m[1]))
+        abar = np.trace(dq) / 3.0
+        g2 = 0.5 * ((dq[0, 0] - dq[1, 1]) ** 2 + (dq[1, 1] - dq[2, 2]) ** 2
+                    + (dq[2, 2] - dq[0, 0]) ** 2
+                    + 6.0 * (dq[0, 1] ** 2 + dq[1, 2] ** 2 + dq[0, 2] ** 2))
+        expected = (45.0 * abar ** 2 + 7.0 * g2) / ANGSTROM_TO_BOHR ** 4
+        stretch = int(np.argmax(np.asarray(rs.frequencies)))
+        assert abs(float(rs.activities[stretch]) / expected - 1.0) < 2e-3

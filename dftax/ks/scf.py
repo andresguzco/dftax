@@ -288,6 +288,8 @@ def _scf_solve(ks: KS, X, P0, max_iter, e_tol, d_tol, m, verbose, level_shift,
                             smear_sigma)
     else:
         ts = jnp.asarray(0.0, dtype=e_prev.dtype)
+        occ = jnp.zeros_like(eps).at[:, :nmax].set(f)
+        eps = eps - level_shift * (1.0 - inv_w * occ)
     return e_prev - ts, P, C, eps, converged, it, ts
 
 
@@ -346,8 +348,9 @@ def scf(
         diis_space: number of previous iterations DIIS extrapolates over.
         lindep_thresh: overlap eigenvalues below this are dropped from the
             orthonormal basis (removes linear dependencies).
-        level_shift: shift (Ha) added to the virtual orbital energies; damps
-            oscillations at the cost of slower convergence.
+        level_shift: shift (Ha) added to the virtual orbital energies during
+            the iterations; damps oscillations at the cost of slower
+            convergence. The returned ``mo_energy`` are unshifted.
         guess: initial density: :func:`~dftax.ks.guess.core`,
             :func:`~dftax.ks.guess.sad`, :func:`~dftax.ks.guess.minao`,
             :func:`~dftax.ks.guess.sap`, or a ``(nspin, nao, nao)`` density.
@@ -367,6 +370,7 @@ def scf(
         NotImplementedError: ``smearing`` with a hybrid on the streamed
             density-fitting backend (use ``coulomb=df(chunk=None)``), or
             ``guess``, ``accel`` or ``level_shift`` with k-points.
+        ValueError: ``smearing`` with ``level_shift``.
 
     Example:
         ```python
@@ -384,6 +388,11 @@ def scf(
             return scf_k(ks, smearing=smearing, e_tol=e_tol, d_tol=d_tol,
                          max_iter=max_iter, diis_space=diis_space,
                          verbose=verbose)
+    if smearing is not None and level_shift:
+        raise ValueError(
+            "level_shift cannot be combined with smearing: the shift would set "
+            "the fractional occupations from shifted orbital energies."
+        )
     _reject_smeared_frozen_exchange(ks, smearing)
     X = canonical_orthonormalizer(ks.S, lindep_thresh)
     P0 = density_from_guess(ks, guess, X)

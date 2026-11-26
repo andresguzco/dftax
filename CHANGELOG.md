@@ -4,7 +4,7 @@ All notable changes to dftax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to adhere
 to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.11.0] - 2026-11-26
 
 ### Added
 - **wB97 and LC-BLYP** (`WB97()`, `LCBLYP()`; `functional("wb97")`,

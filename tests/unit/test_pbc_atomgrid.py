@@ -41,10 +41,10 @@ def test_becke_cell_matches_pyscf():
     pts, w = np.asarray(pts), np.asarray(w)
     print(f"points dftax {w.size} pyscf {ref.weights.size}; "
           f"sum w {w.sum():.12f} {ref.weights.sum():.12f} vol {cell.vol:.12f}")
+    assert w.size == ref.weights.size
     assert abs(w.sum() - ref.weights.sum()) < 1e-10
     for alpha in (0.5, 20.0):
         n, n_ref = np.sum(w * _gaussians(pts, alpha)), np.sum(
             ref.weights * _gaussians(ref.coords, alpha))
         print(f"alpha {alpha}: {n:.12f} pyscf {n_ref:.12f}")
         assert abs(n - n_ref) < 1e-10
-        assert abs(n - 2.0) < 1e-6

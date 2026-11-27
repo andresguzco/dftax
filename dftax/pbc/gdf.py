@@ -274,6 +274,7 @@ def _pair_args(basis, shifts, c):
             basis.coefficients[cols][:, :, :c.npb])
 
 
+@eqx.filter_jit
 def gdf_tensors(basis: BasisData, aux: BasisData, a, plan: GDFPlan,
                 chunk: int = 32):
     a = jnp.asarray(a)
@@ -375,6 +376,9 @@ def gdf_tensors(basis: BasisData, aux: BasisData, a, plan: GDFPlan,
     return j3c, j2c
 
 
-def gdf_coulomb(j3c, j2c, D):
+def gdf_coulomb(j3c, j2c, D, lindep: float = 1e-10):
+    w, v = jnp.linalg.eigh(j2c)
+    keep = w > jnp.where(w.min() > 0.0, 0.0, lindep)
+    inv = jnp.where(keep, 1.0 / jnp.where(keep, w, 1.0), 0.0)
     d = jnp.einsum("mnp,mn->p", j3c, D)
-    return jnp.einsum("mnp,p->mn", j3c, jnp.linalg.solve(j2c, d))
+    return jnp.einsum("mnp,p->mn", j3c, v @ (inv * (v.T @ d)))

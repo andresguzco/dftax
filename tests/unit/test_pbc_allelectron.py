@@ -63,8 +63,12 @@ def _density(n):
 
 
 @pytest.mark.pyscf
-@pytest.mark.parametrize("name", ["sto-3g", pytest.param("pob-tzvp", marks=pytest.mark.slow)])
-def test_gdf_coulomb_matches_pyscf(name):
+@pytest.mark.parametrize("name,auxname", [
+    ("sto-3g", "sto-3g"),
+    pytest.param("sto-3g", AUX, marks=pytest.mark.slow),
+    pytest.param("pob-tzvp", AUX, marks=pytest.mark.slow),
+])
+def test_gdf_coulomb_matches_pyscf(name, auxname):
     import basis_set_exchange as bse
     from pyscf.pbc import df, gto
 
@@ -73,13 +77,16 @@ def test_gdf_coulomb_matches_pyscf(name):
     cell = _pyscf_cell(name)
     mydf = df.GDF(cell)
     mydf.auxbasis = {"C": gto.basis.parse(
-        bse.get_basis(AUX, elements=["C"], fmt="nwchem", header=False))}
+        bse.get_basis(auxname, elements=["C"], fmt="nwchem", header=False))}
     D = _density(cell.nao)
     ref = np.asarray(mydf.get_jk(D, with_k=False)[0]).reshape(cell.nao, cell.nao)
     b = _basis(name)
-    x = build_basis_data(["C", "C"], COORDS, AUX, spherical=True)
-    J = np.asarray(gdf_coulomb(*gdf_tensors(b, x, A, plan_gdf(b, x, A, COORDS)), D))
-    print(f"{name}: max |J| {np.abs(ref).max():.3f}, max |dJ| {np.abs(J - ref).max():.2e}")
+    x = build_basis_data(["C", "C"], COORDS, auxname, spherical=True)
+    j3c, j2c = gdf_tensors(b, x, A, plan_gdf(b, x, A, COORDS))
+    J = np.asarray(gdf_coulomb(j3c, j2c, D))
+    w = np.linalg.eigvalsh(np.asarray(j2c))
+    print(f"{name}/{auxname}: metric eig {w[0]:.2e}..{w[-1]:.2e}, "
+          f"max |J| {np.abs(ref).max():.3f}, max |dJ| {np.abs(J - ref).max():.2e}")
     assert np.abs(J - ref).max() < 1e-9 * max(1.0, np.abs(ref).max())
 
 
@@ -87,7 +94,7 @@ def test_gdf_coulomb_is_independent_of_omega():
     from dftax.pbc.gdf import gdf_coulomb, gdf_tensors, plan_gdf
 
     b = _basis("sto-3g")
-    x = build_basis_data(["C", "C"], COORDS, AUX, spherical=True)
+    x = build_basis_data(["C", "C"], COORDS, "sto-3g", spherical=True)
     D = _density(b.cart2sph.shape[1] if b.cart2sph is not None else b.centers.shape[0])
     J1, J2 = (np.asarray(gdf_coulomb(*gdf_tensors(b, x, A, plan_gdf(b, x, A, COORDS, omega=w)),
                                      D)) for w in (0.8, 1.2))

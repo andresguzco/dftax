@@ -36,8 +36,54 @@ class AuxPairClass(eqx.Module):
     np2: int = eqx.field(static=True)
 
 
+class SplitMap(eqx.Module):
+    rows: Array
+    perm: Array
+    mask: Array
+    angular: Array
+    n_src: int = eqx.field(static=True)
+
+
+def _split_map(basis: BasisData, smooth: float) -> SplitMap:
+    ls, row0, ncomp, _, _, _ = _shell_table(basis)
+    ex = np.asarray(basis.exponents)
+    co = np.asarray(basis.coefficients)
+    ang = np.asarray(basis.angular)
+    nprim = ex.shape[1]
+    rows, perm, mask = [], [], []
+    for r, n in zip(row0, ncomp):
+        e = ex[r]
+        live = (e > 0) & (np.abs(co[r:r + n]).max(0) > 0)
+        for part in (live & (e > smooth), live & (e <= smooth)):
+            idx = np.nonzero(part)[0]
+            if idx.size == 0:
+                continue
+            p = np.zeros(nprim, dtype=np.int32)
+            p[:idx.size] = idx
+            m = np.zeros(nprim)
+            m[:idx.size] = 1.0
+            for k in range(n):
+                rows.append(r + k)
+                perm.append(p)
+                mask.append(m)
+    rows = np.asarray(rows)
+    return SplitMap(rows=jnp.asarray(rows, dtype=jnp.int32),
+                    perm=jnp.asarray(np.asarray(perm)),
+                    mask=jnp.asarray(np.asarray(mask)),
+                    angular=jnp.asarray(ang[rows]), n_src=int(ex.shape[0]))
+
+
+def _apply_split(basis: BasisData, sm: SplitMap) -> BasisData:
+    ex = jnp.take_along_axis(basis.exponents[sm.rows], sm.perm, axis=1) * sm.mask
+    co = jnp.take_along_axis(basis.coefficients[sm.rows], sm.perm, axis=1) * sm.mask
+    return BasisData(centers=basis.centers[sm.rows], exponents=ex, coefficients=co,
+                     angular=sm.angular, cart2sph=None, max_l=basis.max_l)
+
+
 class GDFPlan(eqx.Module):
     pairs: PairPlan
+    smap: SplitMap
+    xmap: SplitMap
     near: tuple
     groups: tuple
     aux_pairs: tuple
@@ -70,6 +116,8 @@ def plan_gdf(basis: BasisData, aux: BasisData, a, coords, omega: float = 1.0,
              smooth: float = 1.0, precision: float = 1e-12) -> GDFPlan:
     a = np.asarray(a, dtype=np.float64)
     coords = np.asarray(coords, dtype=np.float64).reshape(-1, 3)
+    smap, xmap = _split_map(basis, smooth), _split_map(aux, smooth)
+    basis, aux = _apply_split(basis, smap), _apply_split(aux, xmap)
     pairs = plan_pairs(basis, a, precision)
     ls, row0, ncomp, cen, exps, cmax = _shell_table(basis)
     lx, rowx, ncx, cenx, expx, cmx = _shell_table(aux)
@@ -158,7 +206,7 @@ def plan_gdf(basis: BasisData, aux: BasisData, a, coords, omega: float = 1.0,
     g = lattice_images(b, gmax)
     g = g[np.any(g != 0, axis=1)]
     return GDFPlan(
-        pairs=pairs, near=tuple(near), groups=tuple(groups),
+        pairs=pairs, smap=smap, xmap=xmap, near=tuple(near), groups=tuple(groups),
         aux_pairs=tuple(aux_pairs),
         pair_compact=jnp.asarray(pair_compact, dtype=jnp.float64),
         aux_compact=jnp.asarray(aux_compact, dtype=jnp.float64),
@@ -229,6 +277,8 @@ def _pair_args(basis, shifts, c):
 def gdf_tensors(basis: BasisData, aux: BasisData, a, plan: GDFPlan,
                 chunk: int = 32):
     a = jnp.asarray(a)
+    c2s, x2s = basis.cart2sph, aux.cart2sph
+    basis, aux = _apply_split(basis, plan.smap), _apply_split(aux, plan.xmap)
     omega = plan.omega
     pp = plan.pairs
     cell_volume = volume(a)
@@ -313,12 +363,15 @@ def gdf_tensors(basis: BasisData, aux: BasisData, a, plan: GDFPlan,
     g02 = jnp.pi / (omega * omega * cell_volume) * q[:, None] * q[None, :]
     j2c = cc2 * (j2c_sr - g02 + lr2) + (1.0 - cc2) * full2
 
-    if basis.cart2sph is not None:
-        c2s = basis.cart2sph
+    Ra = jax.nn.one_hot(plan.smap.rows, plan.smap.n_src, dtype=j3c.dtype)
+    Rx = jax.nn.one_hot(plan.xmap.rows, plan.xmap.n_src, dtype=j3c.dtype)
+    j3c = jnp.einsum("am,abp,bn,pq->mnq", Ra, j3c, Ra, Rx)
+    j2c = Rx.T @ j2c @ Rx
+    if c2s is not None:
         j3c = jnp.einsum("mi,mnp,nj->ijp", c2s, j3c, c2s)
-    if aux.cart2sph is not None:
-        j3c = j3c @ aux.cart2sph
-        j2c = aux.cart2sph.T @ j2c @ aux.cart2sph
+    if x2s is not None:
+        j3c = j3c @ x2s
+        j2c = x2s.T @ j2c @ x2s
     return j3c, j2c
 
 

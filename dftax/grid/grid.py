@@ -194,6 +194,19 @@ def _atom_shell_blocks(
     return tuple(blocks)
 
 
+@lru_cache(maxsize=None)
+def _atomic_grid(
+    Z: int, n_radial: int | str, n_ang: int | str, prune: str | None,
+    r_max: float | None, radial: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    pts, wts = [], []
+    for r, wr, order in _atom_shell_blocks(Z, n_radial, n_ang, prune, r_max, radial):
+        ang_pts, ang_w = lebedev_grid(order)
+        pts.append((r[:, None, None] * ang_pts[None, :, :]).reshape(-1, 3))
+        wts.append((wr[:, None] * (4.0 * np.pi * ang_w)[None, :]).reshape(-1))
+    return np.concatenate(pts), np.concatenate(wts)
+
+
 def becke_grid_size(
     symbols: list[str],
     n_radial: int | str = "pyscf",
@@ -250,14 +263,8 @@ def becke_grid(
 
     rel, wq = {}, {}
     for Z in dict.fromkeys(Zs):
-        pts, wts = [], []
-        for r, wr, order in _atom_shell_blocks(
-            Z, n_radial, lebedev, prune, r_max, radial
-        ):
-            ang_pts, ang_w = lebedev_grid(order)
-            pts.append((r[:, None, None] * ang_pts[None, :, :]).reshape(-1, 3))
-            wts.append((wr[:, None] * (4.0 * np.pi * ang_w)[None, :]).reshape(-1))
-        rel[Z], wq[Z] = jnp.asarray(np.concatenate(pts)), np.concatenate(wts)
+        pts, wts = _atomic_grid(Z, n_radial, lebedev, prune, r_max, radial)
+        rel[Z], wq[Z] = jnp.asarray(pts), wts
 
     points = jnp.concatenate(
         [coords[A][None, :] + rel[Z] for A, Z in enumerate(Zs)], axis=0

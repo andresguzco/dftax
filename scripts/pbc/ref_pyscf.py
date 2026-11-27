@@ -9,6 +9,15 @@ grid), so with the same basis, pseudopotential and mesh the two must agree
 in absolute energy. The mesh PySCF picks from its own precision estimate is
 written out with the result: the dftax side is then run at exactly that mesh.
 
+All-electron references (the oracle of the all-electron Gaussian engine):
+
+    python scripts/pbc/ref_pyscf.py c2 --basis pob-tzvp --pseudo none \
+        --auxbasis def2-universal-jkfit --becke 75 302 --kmesh 4 4 4 \
+        --out scripts/pbc/reference/c2_ae_lda_k444.json
+
+Basis sets other than PySCF's GTH ones are read from basis-set-exchange,
+as dftax reads them, so both codes see the same exponents and coefficients.
+
 Runs on a CPU node of the allocation. Forces and stress need a non-hybrid
 LDA or GGA (PySCF's ``krks`` gradient and ``krks_stress``).
 """
@@ -27,6 +36,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from systems import systems  # noqa: E402
 
 
+def _basis(name, symbols):
+    if name.lower().startswith("gth-"):
+        return name
+    import basis_set_exchange as bse
+    from pyscf import gto
+
+    return {s: gto.basis.parse(bse.get_basis(name, elements=[s], fmt="nwchem",
+                                             header=False))
+            for s in sorted(set(symbols))}
+
+
 def run(args) -> dict:
     import pyscf
     from pyscf.pbc import dft, gto
@@ -41,8 +61,10 @@ def run(args) -> dict:
     cell.atom = spec.pyscf_atom()
     cell.a = spec.a
     cell.unit = "A"
-    cell.basis = args.basis
-    cell.pseudo = args.pseudo
+    cell.basis = _basis(args.basis, spec.symbols)
+    cell.pseudo = None if args.pseudo == "none" else args.pseudo
+    if args.precision is not None:
+        cell.precision = args.precision
     cell.spin = 0
     cell.verbose = 4
     if args.mesh is not None:
@@ -50,6 +72,13 @@ def run(args) -> dict:
     cell.build()
 
     mf = dft.KRKS(cell, cell.make_kpts(list(args.kmesh)))
+    if args.auxbasis:
+        mf = mf.density_fit(auxbasis=_basis(args.auxbasis, spec.symbols))
+    if args.becke:
+        from pyscf.pbc.dft import gen_grid
+
+        mf.grids = gen_grid.BeckeGrids(cell)
+        mf.grids.atom_grid = tuple(args.becke)
     mf.xc = args.xc
     mf.conv_tol = args.conv_tol
     if args.conv_tol_grad is not None:
@@ -74,6 +103,9 @@ def run(args) -> dict:
         "rattle": args.rattle,
         "basis": args.basis,
         "pseudo": args.pseudo,
+        "auxbasis": args.auxbasis,
+        "becke": None if args.becke is None else list(args.becke),
+        "ngrids": int(np.asarray(mf.grids.weights).size),
         "xc": args.xc,
         "kmesh": list(args.kmesh),
         "smearing": args.smearing,
@@ -122,6 +154,15 @@ def main():
     p.add_argument("--basis", default="gth-dzvp")
     p.add_argument("--pseudo", default="gth-pade")
     p.add_argument("--xc", default="lda,vwn")
+    p.add_argument("--auxbasis", default=None,
+                   help="Gaussian density fitting with this auxiliary basis "
+                        "(default: PySCF's FFT density fitting)")
+    p.add_argument("--becke", type=int, nargs=2, default=None,
+                   metavar=("NRAD", "NANG"),
+                   help="atom-centered Becke grids (radial, Lebedev points) "
+                        "instead of the uniform grid")
+    p.add_argument("--precision", type=float, default=None,
+                   help="PySCF cell.precision (lattice-sum cutoffs)")
     p.add_argument("--mesh", type=int, nargs=3, default=None)
     p.add_argument("--kmesh", type=int, nargs=3, default=(1, 1, 1))
     p.add_argument("--smearing", type=float, default=0.0,

@@ -4,6 +4,8 @@ Three materials, each with a small cell for tests and a medium one as the
 baseline:
 
     si2, si8, si64          diamond silicon (covalent semiconductor)
+    c2, c8                  diamond carbon (all-electron gates)
+    lif2                    rocksalt LiF (ionic insulator, all-electron gates)
     quartz9, quartz72       alpha-quartz SiO2 (oxide insulator, hexagonal)
     al1, al4, al32          fcc aluminium (metal)
 
@@ -22,6 +24,8 @@ import numpy as np
 ANGSTROM_TO_BOHR = 1.0 / 0.529177210903
 
 A_SI = 5.431
+A_C = 3.567
+A_LIF = 4.026
 A_AL = 4.050
 A_QUARTZ, C_QUARTZ = 4.916, 5.4054
 U_SI = 0.4697
@@ -78,6 +82,23 @@ def si8() -> CellSpec:
     return CellSpec("si8", ("Si",) * 8, A_SI * np.eye(3), frac)
 
 
+def c2() -> CellSpec:
+    a = 0.5 * A_C * np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
+    return CellSpec("c2", ("C", "C"), a,
+                    np.array([[0.0, 0.0, 0.0], [0.25, 0.25, 0.25]]))
+
+
+def c8() -> CellSpec:
+    fcc = np.array([[0, 0, 0], [0, 0.5, 0.5], [0.5, 0, 0.5], [0.5, 0.5, 0]])
+    return CellSpec("c8", ("C",) * 8, A_C * np.eye(3), np.concatenate([fcc, fcc + 0.25]))
+
+
+def lif2() -> CellSpec:
+    a = 0.5 * A_LIF * np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
+    return CellSpec("lif2", ("Li", "F"), a,
+                    np.array([[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]))
+
+
 def al1() -> CellSpec:
     a = 0.5 * A_AL * np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
     return CellSpec("al1", ("Al",), a, np.zeros((1, 3)))
@@ -126,6 +147,9 @@ def systems() -> dict[str, CellSpec]:
         "si2": si2(),
         "si8": si8(),
         "si64": si8().repeat((2, 2, 2), "si64"),
+        "c2": c2(),
+        "c8": c8(),
+        "lif2": lif2(),
         "quartz9": quartz9(),
         "quartz72": quartz9().repeat((2, 2, 2), "quartz72"),
         "al1": al1(),

@@ -1,0 +1,49 @@
+{
+ "code": "pyscf 2.15.1",
+ "system": "c2",
+ "natom": 2,
+ "volume_factor": 1.0,
+ "rattle": 0.0,
+ "basis": "pob-tzvp",
+ "pseudo": "none",
+ "auxbasis": "def2-universal-jkfit",
+ "becke": [
+  75,
+  302
+ ],
+ "ngrids": 26425,
+ "xc": "lda,vwn",
+ "kmesh": [
+  4,
+  4,
+  4
+ ],
+ "smearing": 0.0,
+ "conv_tol": 1e-10,
+ "conv_tol_grad": 1e-08,
+ "lindep": null,
+ "mesh": [
+  2113,
+  2113,
+  2113
+ ],
+ "ke_cutoff": null,
+ "rcut": 18.95540035235344,
+ "precision": 1e-10,
+ "nao": 36,
+ "nelectron": 12,
+ "converged": true,
+ "e_tot": -75.5863822644429,
+ "summary": {
+  "nuc": -28.76942739904072,
+  "e1": -51.319345519940356,
+  "e2": 4.502390654538175,
+  "coul": 14.751388973229904,
+  "exc": -10.24899831869173,
+  "gap": 4.434022287215477
+ },
+ "seconds_scf": 81.25820342078805,
+ "vbm": 0.49234902443527734,
+ "cbm": 0.6552963393554556,
+ "gap": 0.16294731492017828
+}

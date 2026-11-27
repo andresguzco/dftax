@@ -211,7 +211,8 @@ def plan_gdf(basis: BasisData, aux: BasisData, a, coords, omega: float = 1.0,
         pair_compact=jnp.asarray(pair_compact, dtype=jnp.float64),
         aux_compact=jnp.asarray(aux_compact, dtype=jnp.float64),
         gvec=jnp.asarray(g, dtype=jnp.float64),
-        aux_shells=tuple((int(l), int(r), int(n)) for l, r, n in zip(lx, rowx, ncx)),
+        aux_shells=tuple((int(l), int(r), int(n), tuple(map(tuple, ang_x[r:r + n].tolist())))
+                         for l, r, n in zip(lx, rowx, ncx)),
         omega=float(omega))
 
 
@@ -244,12 +245,11 @@ def _make_ft_pair_kernel(la, lb, anga, angb):
 
 
 def _aux_ft(aux: BasisData, shells, G):
-    ang = np.asarray(aux.angular)
     G2 = jnp.sum(G * G, axis=1)
     out = []
-    for l, r, n in shells:
+    for l, r, n, ang in shells:
         mt = max(l + 1, 2)
-        ia = ang[r:r + n]
+        ia = np.asarray(ang)
         pw = [jnp.stack([(-1j * G[:, x]) ** t for t in range(mt)]) for x in range(3)]
         e = aux.exponents[r]
         safe = jnp.where(e == 0.0, 1.0, e)

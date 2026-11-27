@@ -52,3 +52,44 @@ def test_nuclear_attraction_is_independent_of_omega():
         b, A, COORDS, CHARGES, plan_nuclear(b, A, COORDS, omega=w))) for w in (0.4, 0.8))
     print(f"max |V(0.4) - V(0.8)| {np.abs(v1 - v2).max():.2e}")
     assert np.abs(v1 - v2).max() < 1e-10
+
+
+AUX = "def2-universal-jkfit"
+
+
+def _density(n):
+    d = np.random.default_rng(0).standard_normal((n, n))
+    return d + d.T
+
+
+@pytest.mark.pyscf
+@pytest.mark.parametrize("name", ["sto-3g", pytest.param("pob-tzvp", marks=pytest.mark.slow)])
+def test_gdf_coulomb_matches_pyscf(name):
+    import basis_set_exchange as bse
+    from pyscf.pbc import df, gto
+
+    from dftax.pbc.gdf import gdf_coulomb, gdf_tensors, plan_gdf
+
+    cell = _pyscf_cell(name)
+    mydf = df.GDF(cell)
+    mydf.auxbasis = {"C": gto.basis.parse(
+        bse.get_basis(AUX, elements=["C"], fmt="nwchem", header=False))}
+    D = _density(cell.nao)
+    ref = np.asarray(mydf.get_jk(D, with_k=False)[0]).reshape(cell.nao, cell.nao)
+    b = _basis(name)
+    x = build_basis_data(["C", "C"], COORDS, AUX, spherical=True)
+    J = np.asarray(gdf_coulomb(*gdf_tensors(b, x, A, plan_gdf(b, x, A, COORDS)), D))
+    print(f"{name}: max |J| {np.abs(ref).max():.3f}, max |dJ| {np.abs(J - ref).max():.2e}")
+    assert np.abs(J - ref).max() < 1e-9 * max(1.0, np.abs(ref).max())
+
+
+def test_gdf_coulomb_is_independent_of_omega():
+    from dftax.pbc.gdf import gdf_coulomb, gdf_tensors, plan_gdf
+
+    b = _basis("sto-3g")
+    x = build_basis_data(["C", "C"], COORDS, AUX, spherical=True)
+    D = _density(b.cart2sph.shape[1] if b.cart2sph is not None else b.centers.shape[0])
+    J1, J2 = (np.asarray(gdf_coulomb(*gdf_tensors(b, x, A, plan_gdf(b, x, A, COORDS, omega=w)),
+                                     D)) for w in (0.8, 1.2))
+    print(f"max |J(0.8) - J(1.2)| {np.abs(J1 - J2).max():.2e}")
+    assert np.abs(J1 - J2).max() < 1e-10 * max(1.0, np.abs(J1).max())
